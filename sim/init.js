@@ -28,6 +28,7 @@ export function makeAgent(kind, node, graph) {
     path: [],   // remaining [{to, link, layer}]
     hp: 1, maxHp: 1, damage: 0,
     hasRadio: false, helpless: false, panicked: false, stayPut: false, garrison: false,
+    worker: false, captain: false, fleeSteps: 0,
     downed: false, reviveAt: -1, // self-revive schedule (sim seconds)
     squad: -1,
     flamer: false, fuel: 0,
@@ -162,7 +163,23 @@ export function initRun(seed, rng, P) {
       a.hp = a.maxHp = P.combat.civilian.hp;
       a.helpless = helpless;
       a.stayPut = stayPut;
-      a.hasRadio = stayPut || (!helpless && rng.chance(P.npc.radio.civilian));
+      // ~20% are still working the ship (engineers, medics, techs) and move
+      // with purpose; the rest shelter in place (user note)
+      a.worker = !helpless && !stayPut && rng.chance(P.civilian.workerFraction);
+      a.hasRadio = stayPut || a.worker || (!helpless && rng.chance(P.npc.radio.civilian));
+      agents.push(a);
+    }
+
+    // the captain and a few officers command from the bridge and never leave
+    // it (user note). The captain carries a sidearm, so he fights if reached.
+    const bridge = graph.byId.get('bridge');
+    for (let i = 0; i < P.marineDoctrine.bridgeOfficers; i++) {
+      const cap = i === 0;
+      const a = makeAgent(cap ? FACTION.ARMED : FACTION.CIVILIAN, bridge, graph);
+      a.hp = a.maxHp = cap ? P.combat.armed.hp : P.combat.civilian.hp;
+      a.stayPut = true;
+      a.captain = cap;
+      a.hasRadio = true;
       agents.push(a);
     }
   }

@@ -61,67 +61,103 @@ function updateCivilian(sim, a, dt) {
     }
   }
 
+  // flood in the SAME node = immediate danger, react even from HIDE
+  const floodHere = sim.floodStrengthAt(a.node) > 0;
+
   switch (a.state) {
     case STATE.IDLE:
     case STATE.HIDE:
+      // A calm civilian stays put. They move only when they actually SEE the
+      // Flood (or a panic sweeps the room) — no idle wandering (user note).
       if (threat > 0) {
-        a.state = STATE.ALERT; a.alertTimer = 0.4;
-        if (sim.rng.chance(0.35)) a.panicked = true;
+        a.state = STATE.ALERT; a.alertTimer = floodHere ? 0 : 0.3;
+        if (sim.rng.chance(floodHere ? 0.9 : 0.4)) a.panicked = true;
         maybeDistressCall(sim, a, P.radio.civilianCallReliability);
-      } else if (a.state === STATE.IDLE && closeTrouble(sim, a) && sim.rng.chance(0.5 * dt)) {
-        // spooked by nearby trouble: most people shelter in place, they
-        // don't sprint down the corridor for no reason (user note)
-        if (sim.rng.chance(P.civilian.shelterBias) || a.stayPut) a.state = STATE.HIDE;
-        else { a.state = STATE.FLEE; a.hideTimer = 0; }
+      } else if (a.panicked && !a.move) {
+        // a panicked bystander bolts even without a direct sighting
+        a.state = STATE.FLEE; a.hideTimer = 0; a.fleeSteps = 0;
+      } else if (a.worker && !a.move && !a.path.length && sim.rng.chance(P.civilian.workMoveChancePerSec * dt)) {
+        // the ~20% still working the ship move with purpose between their
+        // station and the systems that need tending (user note). They flee
+        // like anyone else the moment they see the Flood.
+        workerRelocate(sim, a);
       }
       break;
     case STATE.ALERT:
       a.alertTimer -= dt;
       if (a.alertTimer <= 0) {
-        // officers and other stay-put civilians hold their compartment; they
-        // cower rather than run (user note: deck-1 officers who don't leave)
+        // stay-put officers hold their compartment and cower; everyone else
+        // runs from what they've seen
         a.state = a.stayPut ? STATE.COWER : STATE.FLEE;
-        a.hideTimer = 0;
+        a.hideTimer = 0; a.fleeSteps = 0;
       }
       break;
     case STATE.FLEE: {
       if (!a.move && !a.path.length) {
         const next = fleeStep(sim, a);
         if (next === -1) { a.state = STATE.COWER; break; }
-        if (next !== null) sim.setPath(a, [next]);
+        if (next !== null) { sim.setPath(a, [next]); a.fleeSteps = (a.fleeSteps || 0) + 1; }
       }
-      if (threat === 0 && !a.move) {
+      // once clear of any visible Flood, stop running and go to ground —
+      // don't keep trotting around the ship (this is what made them wander
+      // in and out of danger). A short settle, then a sticky HIDE.
+      if (threat === 0 && !a.move && !a.path.length) {
         a.hideTimer += dt;
-        if (a.hideTimer > 8 && !a.panicked) {
-          // duck into the nearest room and hide
-          const room = nearestRoom(sim, a.node);
-          if (room === a.node) a.state = STATE.HIDE;
-          else if (room !== -1 && !a.path.length) sim.setPathTo(a, room, ['std'], humanPass);
-        }
+        if (a.hideTimer > 1.5 || a.fleeSteps >= 3) { a.state = STATE.HIDE; a.panicked = a.panicked && sim.rng.chance(0.3); }
       } else a.hideTimer = 0;
       break;
     }
     case STATE.COWER:
-      if (threat === 0) a.state = STATE.FLEE;
+      // pinned with no safe exit: keep screaming, bolt only if a way opens
+      if (floodHere) maybeDistressCall(sim, a, P.radio.civilianCallReliability);
+      if (threat === 0) a.state = STATE.HIDE;
+      else if (!floodHere && fleeStep(sim, a) !== -1) { a.state = STATE.FLEE; a.fleeSteps = 0; }
+      break;
+    case STATE.MOVE:
+      // a worker in transit still reacts the instant it sees the Flood
+      if (threat > 0) {
+        a.path = []; a.state = STATE.ALERT; a.alertTimer = floodHere ? 0 : 0.3;
+        if (sim.rng.chance(floodHere ? 0.9 : 0.4)) a.panicked = true;
+        maybeDistressCall(sim, a, P.radio.civilianCallReliability);
+      } else if (!a.move && !a.path.length) a.state = STATE.IDLE; // arrived
       break;
   }
 }
 
-// pick the neighbor that minimizes flood influence; unreliable when panicked
-function fleeStep(sim, a) {
-  const opts = [];
-  for (const { to } of sim.graph.neighbors(a.node, ['std'], humanPass)) {
-    if (sim.graph.node(to).deck !== undefined) opts.push(to);
+// A working civilian walks to a system that needs tending, or back to a
+// habitable space, staying clear of anywhere it currently sees the Flood.
+function workerRelocate(sim, a) {
+  if (!a._workNodes) {
+    a._workNodes = sim.graph.nodes
+      .filter((n) => ['systems', 'power', 'engineering', 'medbay', 'armed', 'quarters', 'soft', 'command'].some((r) => n.roles.includes(r)))
+      .map((n) => n.idx);
   }
-  if (!opts.length) return -1;
-  if (a.panicked || sim.rng.chance(0.25)) return sim.rng.pick(opts); // §5.1 unreliable flight
+  const dest = sim.rng.pick(a._workNodes);
+  if (dest === a.node) return;
+  if (sim.floodStrengthAt(dest) > 0) return; // don't stroll into a den
+  const path = sim.graph.path(a.node, dest, ['std'], humanPass);
+  // avoid routing through a compartment that currently holds the Flood
+  if (path && !path.some((s) => sim.floodStrengthAt(s.to) > 0)) {
+    a.path = path;
+    a.state = STATE.MOVE;
+  }
+}
+
+// Step to the safest neighbor, NEVER toward a node that has Flood in it.
+// Returns -1 when every exit is into the Flood or blocked (→ cower).
+function fleeStep(sim, a) {
+  const safe = [];
+  for (const { to } of sim.graph.neighbors(a.node, ['std'], humanPass)) {
+    if (sim.floodStrengthAt(to) > 0) continue; // never flee into the Flood
+    safe.push(to);
+  }
+  if (!safe.length) return -1;
+  if (a.panicked && sim.rng.chance(0.4)) return sim.rng.pick(safe); // blind panic
   let best = null, bestScore = Infinity;
-  for (const to of opts) {
-    const score = sim.influence.floodStr[to] * 4 + sim.floodStrengthAt(to) * 10 + sim.rng.range(0, 0.3);
+  for (const to of safe) {
+    const score = sim.influence.floodStr[to] * 4 + sim.rng.range(0, 0.3);
     if (score < bestScore) { bestScore = score; best = to; }
   }
-  const here = sim.influence.floodStr[a.node] * 4 + sim.floodStrengthAt(a.node) * 10;
-  if (bestScore >= here + 1) return -1; // everywhere is worse: cower
   return best;
 }
 

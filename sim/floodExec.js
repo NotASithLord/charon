@@ -53,6 +53,25 @@ export function updateFloodTick(sim, dt) {
       }
     }
 
+    // OPPORTUNISTIC INFECTION: a live human standing in a form's own node is
+    // a free conversion and a silenced witness — take them immediately,
+    // whatever the form was told to do, unless guns are present (that's a
+    // fight for combat.js, not a grab). This is what stops a civilian from
+    // strolling through a den of carriers and forms untouched (user note).
+    if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0
+      && a.task?.kind !== TASK.SEAT && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
+      const here = sim.occupants(a.node);
+      const guns = here.some((h) => h.hp > 0 && !h.dead &&
+        (h.faction === FACTION.MARINE || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT)));
+      if (!guns) {
+        const prey = here.find((h) => h.hp > 0 && !h.dead &&
+          (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED));
+        if (prey && a.task?.targetId !== prey.id) {
+          hive.assign(a, { kind: TASK.GRAB, targetId: prey.id });
+        }
+      }
+    }
+
     const t = a.task;
     if (!t) continue;
     switch (t.kind) {
@@ -79,14 +98,18 @@ export function updateFloodTick(sim, dt) {
         if (!target || target.dead || target.hp <= 0) { a.task = null; break; }
         const believed = hive.beliefs.get(t.targetId);
         const goal = sim.visibleNodes(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
-        if (a.node === target.node && !a.move) {
-          // conversion attempt: only sticks if the target is overwhelmed —
-          // shooters in the node stomp infection forms in combat resolution
+        if (a.node === target.node) {
+          // it's latched on: pin the victim so they can't run, and take them.
+          // An unarmed civilian is converted almost instantly (user note);
+          // an armed target takes a little longer. Marines/armed-in-a-fight
+          // are still resolved by combat.js (a grab there gets the form
+          // stomped), so this only sticks against the overwhelmed.
           a.state = STATE.GRABBING;
+          a.move = null; a.path = [];
+          if (sim.P.combat.grabPins) target.held = sim.tickCount;
           a.grabTimer += dt;
-          if (a.grabTimer >= sim.P.combat.infectionGrabSec) {
-            convertHuman(sim, a, target);
-          }
+          const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
+          if (a.grabTimer >= need) convertHuman(sim, a, target);
         } else {
           a.state = STATE.MOVE; a.grabTimer = 0;
           moveToward(sim, a, goal, hive.safeInfectionPath.bind(hive));

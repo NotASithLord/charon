@@ -95,17 +95,21 @@ export const PARAMS = {
     // coin-flip whether they kill it clean or trade one, 3 win clean, 1 loses.
     combatForm: { hp: 63, dps: 20, hpJitter: 0.18 }, // spawn hp varies ±18% -> real 50/50 at 2v1
     carrierHp: 40,
-    infectionGrabSec: 1.2,     // time to convert an overwhelmed target
+    infectionGrabSec: 1.2,     // time to convert an armed/overwhelmed target
+    civilianGrabSec: 1.0,      // an unarmed civilian is taken almost instantly
+    grabPins: true,            // a grabbed target is held in place (can't flee)
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
   },
   marineDoctrine: {
     firstSweepDelaySec: 18,    // muster time before the crash sweep launches (§5.3)
     commandGarrison: 3,        // permanent marines holding the command deck (never move)
-    officers: 4,               // officer civilians who stay put on the command deck
+    officers: 4,               // officer civilians who stay put in Officer Country
+    bridgeOfficers: 3,         // captain + officers who never leave the bridge
   },
   civilian: {
     fleeHearingHops: 1,        // only bolt from trouble this close (was ship-wide)
-    shelterBias: 0.85,         // chance a spooked civ shelters in place vs. runs
+    workerFraction: 0.2,       // fraction still working the ship — they move with purpose
+    workMoveChancePerSec: 0.12,// how often an idle worker relocates to a task
   },
   speed: { // edge-traversal multipliers (1.0 = base edge time)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.2,

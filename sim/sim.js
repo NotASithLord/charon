@@ -286,6 +286,8 @@ export class Sim {
     const g = this.graph;
     for (const a of this.agents) {
       if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) continue;
+      // a human currently in a Flood form's grip can't move (§ grabPins)
+      if (a.held === this.tickCount) { a.move = null; continue; }
       if (a.state === STATE.FIGHT || a.state === STATE.GRABBING || a.state === STATE.COWER || a.state === STATE.AMBUSHING) {
         if (!a.move) { this._parkDrift(a, dt); continue; }
       }
