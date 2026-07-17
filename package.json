@@ -1,0 +1,13 @@
+{
+  "name": "halo-charon-poc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Halo Charon POC — simulation core + VAT rendering validation harness",
+  "scripts": {
+    "serve": "python3 -m http.server 8000",
+    "headless": "node sim/headless.js",
+    "determinism": "node sim/determinism-check.js",
+    "commands": "node sim/command-check.js"
+  }
+}

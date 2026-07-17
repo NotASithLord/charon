@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halo Charon — POC</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #07090c; color: #c8d2e0; min-height: 100vh;
+    font: 15px/1.6 "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    display: flex; align-items: center; justify-content: center;
+  }
+  main { max-width: 640px; padding: 40px 24px; }
+  h1 { color: #7fd1a0; letter-spacing: 2px; font-size: 22px; }
+  p.tag { color: #6a7686; margin: 8px 0 28px; }
+  a.card {
+    display: block; border: 1px solid #263140; border-radius: 8px;
+    padding: 16px 18px; margin: 12px 0; color: inherit; text-decoration: none;
+    background: #0c1015;
+  }
+  a.card:hover { background: #131a24; border-color: #3d6a9c; }
+  a.card b { color: #e8eef7; }
+  a.card span { color: #6a7686; font-size: 13px; display: block; margin-top: 4px; }
+  footer { color: #38424f; font-size: 12px; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HALO CHARON // POC</h1>
+  <p class="tag">a dark, drifting warship, a hundred people who do not yet know they are losing,
+  and an enemy that begins outnumbered and outgunned and is smarter than anything hunting it.</p>
+
+  <a class="card" href="./sim/">
+    <b>1 · Sim harness</b>
+    <span>the full ship simulation, watched top-down: hive AI, marine sweeps, distress calls,
+    the carrier economy. Deterministic seed replay, live master dials. Canvas 2D — runs anywhere.</span>
+  </a>
+  <a class="card" href="./vat/">
+    <b>2 · VAT rendering harness</b>
+    <span>150+ animated characters via vertex-animation textures, 3 LOD tiers, ≤4 draw calls.
+    Runs the §1 gate capture at 50/100/150/200 instances. Requires WebGPU.</span>
+  </a>
+  <a class="card" href="./fused/">
+    <b>3 · Fused (build step 9)</b>
+    <span>the VAT renderer pointed at the live sim agent buffer — the shared boundary, proven.
+    Requires WebGPU.</span>
+  </a>
+
+  <footer>serve statically (`npm run serve`) · headless: `node sim/headless.js &lt;seed&gt; &lt;minutes&gt;` ·
+  determinism: `npm run determinism`</footer>
+</main>
+</body>
+</html>

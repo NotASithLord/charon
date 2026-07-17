@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halo Charon — Sim Harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #07090c; color: #c8d2e0;
+    font: 13px/1.45 "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 12px; background: #0c1015; border-bottom: 1px solid #1c2430;
+  }
+  header h1 { font-size: 14px; color: #7fd1a0; letter-spacing: 1px; margin-right: 8px; }
+  header .muted { color: #4a5568; font-size: 11px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #canvasWrap { flex: 1; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #side {
+    width: 320px; border-left: 1px solid #1c2430; background: #0c1015;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #stats { padding: 10px 12px; border-bottom: 1px solid #1c2430; }
+  #stats .row { display: flex; justify-content: space-between; padding: 1px 0; }
+  #stats .row b { color: #e8eef7; font-weight: 600; }
+  #stats .sep { border-top: 1px dashed #1c2430; margin: 5px 0; }
+  #cmd { padding: 8px 12px; border-bottom: 1px solid #1c2430; background: #0a0d11; }
+  #cmd .cmdhdr { color: #6a7686; font-size: 11px; margin-bottom: 6px; }
+  #cmd .cmdrow { display: flex; gap: 5px; margin-bottom: 5px; align-items: center; flex-wrap: wrap; }
+  #cmd select, #cmd button { font-size: 11px; padding: 3px 6px; }
+  #cmd .muted { color: #4a5568; font-size: 10px; }
+  #log { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 11.5px; }
+  #log .ev-command { color: #e0b060; }
+  #log .ev { padding: 1px 0; color: #8a97a8; }
+  #log .t { color: #4a5568; }
+  #log .ev-hive, #log .ev-carrier { color: #7fd1a0; }
+  #log .ev-rampage { color: #ff6a4d; font-weight: 700; }
+  #log .ev-convert { color: #b15fd9; }
+  #log .ev-radio { color: #6aa4f0; }
+  #log .ev-combat { color: #d0a24a; }
+  #log .ev-ambush, #log .ev-bait { color: #ffd23f; }
+  #log .ev-end { color: #fff; font-weight: 700; }
+  button, input, select {
+    background: #131a24; color: #c8d2e0; border: 1px solid #263140;
+    border-radius: 4px; padding: 4px 9px; font: inherit; font-size: 12px;
+  }
+  button:hover { background: #1a2432; cursor: pointer; }
+  button.active { background: #23405c; border-color: #3d6a9c; }
+  input[type=range] { padding: 0; width: 90px; }
+  label.chk { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #8a97a8; }
+  .dials {
+    display: flex; gap: 14px; padding: 6px 12px; background: #0a0d11;
+    border-bottom: 1px solid #1c2430; font-size: 11px; flex-wrap: wrap; align-items: center;
+  }
+  .dial { display: flex; align-items: center; gap: 6px; }
+  .dial span.val { color: #7fd1a0; min-width: 34px; }
+  .dial span.name { color: #6a7686; }
+  #deckBtns button { padding: 3px 7px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>HALO CHARON // SIM</h1>
+    <label>seed <input id="seed" size="10" value="charon-1"></label>
+    <button id="restart">restart ▶</button>
+    <button id="pause">pause ⏸</button>
+    <button id="step">step round ⏭</button>
+    <label>speed <input id="speed" type="range" min="-2" max="3" step="0.5" value="0"> <span id="speedVal">1×</span></label>
+    <span id="deckBtns">
+      deck
+      <button data-deck="0" class="active">all</button><button data-deck="1">1</button><button data-deck="2">2</button><button data-deck="3">3</button><button data-deck="4">4</button><button data-deck="5">5</button>
+    </span>
+    <span>
+      <label class="chk"><input type="checkbox" id="ovInfluence" checked>influence</label>
+      <label class="chk"><input type="checkbox" id="ovShafts" checked>shafts</label>
+      <label class="chk"><input type="checkbox" id="ovVents" checked>vents</label>
+      <label class="chk"><input type="checkbox" id="ovCalls" checked>calls</label>
+      <label class="chk"><input type="checkbox" id="ovTracker">tracker</label>
+      <label class="chk"><input type="checkbox" id="ovBeliefs">hive beliefs</label>
+      <label class="chk"><input type="checkbox" id="ovLabels" checked>labels</label>
+    </span>
+    <span class="muted">white=civ yellow=armed blue=marine green=infection red=combat purple=carrier gray=corpse · hollow=downed black=burned</span>
+  </header>
+  <div class="dials">
+    <b style="color:#6a7686">MASTER DIALS</b>
+    <span class="dial"><span class="name">belief decay λ</span><input id="dialLambda" type="range" min="0.02" max="0.4" step="0.01" value="0.1"><span class="val" id="dialLambdaV">0.10</span></span>
+    <span class="dial"><span class="name">prediction q</span><input id="dialQ" type="range" min="0" max="1" step="0.05" value="0.7"><span class="val" id="dialQV">0.70</span></span>
+    <span class="dial"><span class="name">marine radio</span><input id="dialRadio" type="range" min="0.2" max="1" step="0.05" value="0.75"><span class="val" id="dialRadioV">0.75</span></span>
+    <span class="muted">(live — no restart needed; seed replay only exact if dials untouched)</span>
+  </div>
+  <main>
+    <div id="left"><div id="canvasWrap"><canvas id="canvas"></canvas></div></div>
+    <div id="side">
+      <div id="stats"></div>
+      <div id="cmd">
+        <div class="cmdhdr">TACTICAL COMMAND <span class="muted">(companion §0 — orders enter the tick-stamped queue)</span></div>
+        <div class="cmdrow">
+          <select id="cmdSquad" title="squad"></select>
+          <select id="cmdType">
+            <option value="MOVE_TO">MOVE_TO</option>
+            <option value="GUARD">GUARD</option>
+            <option value="PATROL">PATROL (deck)</option>
+            <option value="SET_CALL_POLICY">CALLS: ignore</option>
+            <option value="RELEASE">RELEASE</option>
+          </select>
+          <select id="cmdNode"></select>
+          <button id="cmdIssue">issue ▸</button>
+        </div>
+        <div class="cmdrow">
+          <select id="cmdDoor"></select>
+          <button id="cmdSeal">seal</button>
+          <button id="cmdOpen">open</button>
+          <span class="muted">click a node dropdown then Designate: <button id="cmdBurn">burn ▸</button></span>
+        </div>
+      </div>
+      <div id="log"></div>
+    </div>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

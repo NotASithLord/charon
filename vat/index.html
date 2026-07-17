@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halo Charon — VAT Harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #06080b; color: #c8d2e0; height: 100vh; overflow: hidden;
+    font: 13px/1.45 "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; background: #0c1015; border-bottom: 1px solid #1c2430;
+  }
+  h1 { font-size: 14px; color: #d1a97f; letter-spacing: 1px; }
+  button { background: #131a24; color: #c8d2e0; border: 1px solid #263140; border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: #1a2432; }
+  button.active { background: #23405c; border-color: #3d6a9c; }
+  main { flex: 1; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hud {
+    position: absolute; top: 10px; left: 10px; background: rgba(8, 11, 15, 0.85);
+    border: 1px solid #1c2430; border-radius: 6px; padding: 10px 12px; font-size: 12px;
+    min-width: 230px;
+  }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; padding: 1px 0; }
+  #hud b { color: #e8eef7; }
+  #capturePanel {
+    position: absolute; top: 10px; right: 10px; background: rgba(8, 11, 15, 0.9);
+    border: 1px solid #1c2430; border-radius: 6px; padding: 10px 12px; font-size: 12px;
+    max-width: 380px; display: none;
+  }
+  #capturePanel table { border-collapse: collapse; margin-top: 6px; }
+  #capturePanel td, #capturePanel th { border: 1px solid #263140; padding: 3px 8px; text-align: right; }
+  #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #ff8866; font-size: 15px; padding: 40px; text-align: center; }
+  .gate-pass { color: #7fd1a0; } .gate-fail { color: #ff6a4d; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>HALO CHARON // VAT HARNESS</h1>
+    <span>instances:</span>
+    <button data-n="50">50</button>
+    <button data-n="100">100</button>
+    <button data-n="150" class="active">150</button>
+    <button data-n="200">200</button>
+    <button data-n="300">300</button>
+    <button id="orbit" class="active">orbit cam</button>
+    <button id="capture">▶ run capture (gate §1)</button>
+    <span style="color:#4a5568;font-size:11px">gate: stable frame budget + &lt;2GB @ 150+ instances on M2 Air</span>
+  </header>
+  <main>
+    <canvas id="canvas"></canvas>
+    <div id="hud"></div>
+    <div id="capturePanel"></div>
+    <div id="err"></div>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
