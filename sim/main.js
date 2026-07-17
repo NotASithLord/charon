@@ -94,6 +94,10 @@ document.getElementById('speed').addEventListener('input', (e) => {
   document.getElementById('speedVal').textContent = speed >= 1 ? `${speed}×` : `${speed.toFixed(2)}×`;
 });
 document.getElementById('seed').addEventListener('keydown', (e) => { if (e.key === 'Enter') restart(); });
+document.getElementById('legendToggle').addEventListener('click', (e) => {
+  const hidden = document.getElementById('legend').classList.toggle('hidden');
+  e.target.classList.toggle('active', !hidden);
+});
 
 for (const d of document.querySelectorAll('#deckBtns button')) {
   d.addEventListener('click', () => {

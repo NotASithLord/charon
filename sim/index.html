@@ -22,6 +22,32 @@
   #left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   #canvasWrap { flex: 1; position: relative; min-height: 0; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #legend {
+    position: absolute; left: 10px; bottom: 10px; z-index: 5;
+    background: rgba(8, 11, 15, 0.9); border: 1px solid #1c2430; border-radius: 6px;
+    padding: 8px 11px; font-size: 10.5px; line-height: 1.5; max-width: 250px;
+    color: #9aa7b8; pointer-events: none;
+  }
+  #legend.hidden { display: none; }
+  #legend .lgTitle { color: #4a5568; font-size: 9px; letter-spacing: 0.6px; margin: 6px 0 2px; }
+  #legend .lgTitle:first-child { margin-top: 0; }
+  #legend .lgGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  #legend .lgGrid span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  #legend .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  #legend .dot.hollow { background: transparent; border: 1.4px solid; }
+  #legend .dot.ring { background: transparent; border: 1.4px solid; }
+  #legend .sq { width: 7px; height: 7px; flex: 0 0 auto; }
+  #legend .ln { width: 16px; height: 0; flex: 0 0 auto; border-top-width: 2px; border-top-style: solid; }
+  #legend .ln.solid { border-color: #3a4a61; }
+  #legend .ln.shaft { border-top-width: 3px; border-color: #7a6a2f; border-top-style: dashed; }
+  #legend .ln.vent { border-top-width: 1px; border-color: #2f6b46; border-top-style: dotted; }
+  #legend .ln.vent.grey { border-color: #2a2f36; }
+  #legend .mk { width: 8px; height: 8px; flex: 0 0 auto; }
+  #legend .mk.lock { background: #c0392b; }
+  #legend .mk.amb { width: 7px; height: 7px; background: #ffd23f; transform: rotate(45deg); }
+  #legend .mk.breach { border-radius: 50%; border: 2px solid #ff5533; }
+  #legend .mk.ring { border-radius: 50%; background: transparent; border: 1.4px solid; }
+  #legend .mk.ring.red { border-color: #f05a3c; }
   #side {
     width: 320px; border-left: 1px solid #1c2430; background: #0c1015;
     display: flex; flex-direction: column; min-height: 0;
@@ -85,7 +111,7 @@
       <label class="chk"><input type="checkbox" id="ovBeliefs">hive beliefs</label>
       <label class="chk"><input type="checkbox" id="ovLabels" checked>labels</label>
     </span>
-    <span class="muted">white=civ yellow=armed blue=marine green=infection red=combat purple=carrier gray=corpse · hollow=downed black=burned</span>
+    <button id="legendToggle" class="active">legend</button>
   </header>
   <div class="dials">
     <b style="color:#6a7686">MASTER DIALS</b>
@@ -95,7 +121,46 @@
     <span class="muted">(live — no restart needed; seed replay only exact if dials untouched)</span>
   </div>
   <main>
-    <div id="left"><div id="canvasWrap"><canvas id="canvas"></canvas></div></div>
+    <div id="left"><div id="canvasWrap"><canvas id="canvas"></canvas>
+      <div id="legend">
+        <div class="lgTitle">AGENTS</div>
+        <div class="lgGrid">
+          <span><i class="dot" style="background:#f2f2f2"></i>civilian</span>
+          <span><i class="dot" style="background:#e8c840"></i>armed crew</span>
+          <span><i class="dot" style="background:#4d8ef0"></i>marine</span>
+          <span><i class="dot" style="background:#51ff6a"></i>infection form</span>
+          <span><i class="dot" style="background:#c0392b"></i>combat form</span>
+          <span><i class="dot" style="background:#b15fd9"></i>carrier</span>
+          <span><i class="dot" style="background:#777"></i>corpse</span>
+        </div>
+        <div class="lgTitle">STATE MARKERS</div>
+        <div class="lgGrid">
+          <span><i class="dot hollow" style="border-color:#c0392b"></i>downed (revivable)</span>
+          <span><i class="dot" style="background:#111;border:1px solid #333"></i>burned (dead economy)</span>
+          <span><i class="dot ring" style="border-color:#aaffbb"></i>infection exposed in vent</span>
+          <span><i class="dot ring" style="border-color:#ffd23f"></i>lying in ambush</span>
+          <span><i class="sq" style="background:#ff7733"></i>flamethrower</span>
+          <span><i class="sq" style="background:#fff"></i>panicked</span>
+        </div>
+        <div class="lgTitle">SHIP</div>
+        <div class="lgGrid">
+          <span><i class="ln solid"></i>hatch / corridor</span>
+          <span><i class="ln shaft"></i>maintenance shaft</span>
+          <span><i class="ln vent"></i>vent (infection only)</span>
+          <span><i class="ln vent grey"></i>blocked vent</span>
+          <span><i class="mk lock"></i>locked door</span>
+          <span><i class="mk amb"></i>ambush corner</span>
+          <span><i class="mk breach"></i>breach node</span>
+          <span><i class="mk ring red"></i>distress call</span>
+        </div>
+        <div class="lgTitle">NODE HEATMAP (influence)</div>
+        <div class="lgGrid">
+          <span><i class="dot" style="background:#2a6bd8"></i>human-controlled</span>
+          <span><i class="dot" style="background:#3fae4a"></i>flood-controlled</span>
+          <span><i class="dot" style="background:#161b23;border:1px solid #3d3d4d"></i>unpowered (dimmed)</span>
+        </div>
+      </div>
+    </div></div>
     <div id="side">
       <div id="stats"></div>
       <div id="cmd">
