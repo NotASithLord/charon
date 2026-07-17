@@ -108,7 +108,7 @@ for (const d of document.querySelectorAll('#deckBtns button')) {
 }
 const ov = (id, key) => document.getElementById(id).addEventListener('change', (e) => { viz.overlays[key] = e.target.checked; });
 ov('ovInfluence', 'influence'); ov('ovShafts', 'shafts'); ov('ovVents', 'vents');
-ov('ovCalls', 'calls'); ov('ovTracker', 'tracker'); ov('ovBeliefs', 'beliefs'); ov('ovLabels', 'labels');
+ov('ovCalls', 'calls'); ov('ovTracker', 'tracker'); ov('ovBeliefs', 'beliefs'); ov('ovLabels', 'labels'); ov('ovConns', 'conns');
 for (const id of ['dialLambda', 'dialQ', 'dialRadio']) {
   document.getElementById(id).addEventListener('input', applyDials);
 }

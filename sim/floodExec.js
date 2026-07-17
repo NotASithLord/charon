@@ -206,7 +206,10 @@ function moveToward(sim, a, node, pathFn = null) {
 
 export function spawnCombatForm(sim, node) {
   const f = makeAgent(FACTION.COMBAT, node, sim.graph);
-  f.hp = f.maxHp = sim.P.combat.combatForm.hp;
+  const cf = sim.P.combat.combatForm;
+  // ±hpJitter so 2-marine fights are a genuine coin-flip, not a fixed result
+  const j = 1 + sim.rng.range(-cf.hpJitter, cf.hpJitter);
+  f.hp = f.maxHp = cf.hp * j;
   sim.spawn(f);
   return f;
 }

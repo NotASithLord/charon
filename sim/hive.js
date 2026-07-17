@@ -52,7 +52,7 @@ export class Hive {
     const barracks = sim.graph.byId.get('barracks');
     for (const a of sim.agents) {
       if (a.dead) continue;
-      if (a.faction === FACTION.CIVILIAN && a.helpless) this.beliefs.set(a.id, { node: a.node, t: 0, conf: 0.9, static: true });
+      if (a.faction === FACTION.CIVILIAN && (a.helpless || a.stayPut)) this.beliefs.set(a.id, { node: a.node, t: 0, conf: 0.9, static: true });
       else if (a.faction === FACTION.CIVILIAN) this.beliefs.set(a.id, { node: a.node, t: 0, conf: 0.3 });
       else if (a.faction === FACTION.ARMED) this.beliefs.set(a.id, { node: a.node, t: 0, conf: 0.25 });
       else if (a.faction === FACTION.MARINE) this.beliefs.set(a.id, { node: a.node, t: 0, conf: a.node === barracks ? 0.8 : 0.2 });
@@ -104,7 +104,7 @@ export class Hive {
           if (!isLivingHuman(h) || seen.has(h.id)) continue;
           seen.add(h.id);
           const old = this.beliefs.get(h.id);
-          this.beliefs.set(h.id, { node: h.node, t: sim.t, conf: 1, static: old?.static && h.helpless });
+          this.beliefs.set(h.id, { node: h.node, t: sim.t, conf: 1, static: old?.static && (h.helpless || h.stayPut) });
         }
       }
     }
@@ -338,6 +338,50 @@ export class Hive {
     return best;
   }
 
+  // Score every plausible den node near the breach (out of the sweep's
+  // sightline, quiet, defensible, ideally sitting on carrier food).
+  denCandidates(maxHops = 3) {
+    const sim = this.sim, g = sim.graph;
+    const bodies0 = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CORPSE && a.damage < 100);
+    const bodyAt = new Set(bodies0.map((b) => b.node));
+    const sweepLOS = new Set(sim.visibleNodes(g.breachNode));
+    const out = [];
+    for (const n of g.nodes) {
+      const d = g.hops(g.breachNode, n.idx, ['std', 'shaft'], this.bigPass);
+      if (d === -1 || d < 1 || d > maxHops || sweepLOS.has(n.idx)) continue;
+      const route = this.stealthPath(g.breachNode, n.idx, 'big');
+      if (!route) continue;
+      let score = -this.localThreat(n.idx) * 3 - this.routeRisk(route) * 2.5;
+      if (n.roles.includes('maintenance')) score += 1;
+      if (n.roles.includes('cargo') || n.roles.includes('corpse_cache')) score += 1;
+      if (bodyAt.has(n.idx)) score += 1.2; // carrier food already on site
+      if (n.type === 'corridor' && !n.roles.includes('maintenance')) score -= 2;
+      if (n.type === 'open') score -= 2;
+      score -= this.trafficPenalty(n.idx);
+      score += Math.min(this.garrisonDist[n.idx] === -1 ? 4 : this.garrisonDist[n.idx], 4) * 0.5;
+      if (this.exitCount(n.idx) < 2) score -= 3;
+      score -= d * 0.2;
+      out.push({ node: n.idx, score });
+    }
+    out.sort((a, b) => b.score - a.score);
+    return out;
+  }
+
+  // Pick up to `count` den sites that are spread apart (>=2 hops), so the
+  // hive hedges its opening across several hiding spots instead of stacking
+  // everything in one room (user note: it over-concentrates early).
+  pickDenSites(count) {
+    const g = this.sim.graph;
+    const cand = this.denCandidates(3);
+    const chosen = [];
+    for (const c of cand) {
+      if (chosen.length >= count) break;
+      if (chosen.every((s) => g.hops(s, c.node, ['std', 'shaft'], this.bigPass) >= 2)) chosen.push(c.node);
+    }
+    if (!chosen.length && cand.length) chosen.push(cand[0].node);
+    return chosen;
+  }
+
   // --- §6.7/§13.5 the opening: a timed smash-and-grab ---
   openingMove(infection, combat, bodies) {
     const sim = this.sim, g = sim.graph;
@@ -346,83 +390,68 @@ export class Hive {
     const timeLeft = this.sweepEtaSec === Infinity ? 999 : this.sweepEtaSec;
     const mustRun = timeLeft < margin;
 
-    // pick the carrier site once: deep, quiet, away from believed marines
-    if (this.carrierSite === -1) {
-      let best = -1, bestScore = -Infinity;
-      const bodies0 = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CORPSE && a.damage < 100);
-      const sweepLOS = new Set(sim.visibleNodes(g.breachNode)); // what the sweep will clear
-      for (const n of g.nodes) {
-        const d = g.hops(g.breachNode, n.idx, ['std', 'shaft'], this.bigPass);
-        // out of the sweep's sightline, but the pool cannot survive a march
-        // across an inhabited ship either — den LOCAL
-        if (d === -1 || d < 1 || d > 3 || sweepLOS.has(n.idx)) continue;
-        const route = this.stealthPath(g.breachNode, n.idx, 'big');
-        if (!route) continue;
-        let score = -this.localThreat(n.idx) * 3;
-        score -= this.routeRisk(route) * 2.5;      // getting there alive matters most
-        if (n.roles.includes('maintenance')) score += 1;
-        if (n.roles.includes('cargo') || n.roles.includes('corpse_cache')) score += 1;
-        if (bodies0.some((b) => b.node === n.idx)) score += 1; // carrier food on site
-        if (n.type === 'corridor' && !n.roles.includes('maintenance')) score -= 2;
-        if (n.type === 'open') score -= 2;         // big open bays are patrol thoroughfares
-        score -= this.trafficPenalty(n.idx);
-        score += Math.min(this.garrisonDist[n.idx] === -1 ? 4 : this.garrisonDist[n.idx], 4) * 0.5;
-        if (this.exitCount(n.idx) < 2) score -= 3; // dead ends are tombs
-        score -= d * 0.2;
-        if (score > bestScore) { bestScore = score; best = n.idx; }
-      }
-      this.carrierSite = best;
-      sim.log('hive', `hive stages toward ${g.node(best).name} (est. sweep in ${timeLeft === 999 ? '?' : Math.round(timeLeft)}s)`);
+    if (!this.denSites) {
+      this.denSites = this.pickDenSites(3);
+      this.carrierSite = this.denSites[0] ?? -1;
+      sim.log('hive', `hive splits toward ${this.denSites.map((n) => g.node(n).name).join(', ')} (est. sweep in ${timeLeft === 999 ? '?' : Math.round(timeLeft)}s)`);
     }
-    const site = this.carrierSite;
-    const siteBodies = bodies.filter((b) => b.node === site);
+    const dens = this.denSites;
+    const homeFor = (id) => dens[id % dens.length];
     const breachBodies = bodies.filter((b) => b.node === g.breachNode && !b.claimed);
 
-    // combat forms: haul 2 bodies to the site as carrier food, rest screen
+    // combat forms: haul breach bodies out to the dens as carrier food (one
+    // per den), the rest screen their assigned den
     let draggers = combat.filter((c) => c.task?.kind === TASK.DRAG).length;
     for (const c of combat) {
       if (c.task && c.task.kind !== TASK.GUARD) continue;
-      if (timeLeft > 20 && draggers < 2 && siteBodies.length + draggers < 2 && breachBodies.length) {
+      const home = homeFor(c.id);
+      const homeHasBody = bodies.some((b) => b.node === home);
+      if (timeLeft > 20 && draggers < dens.length && !homeHasBody && breachBodies.length) {
         const body = breachBodies.shift();
         body.claimed = true;
-        this.assign(c, { kind: TASK.DRAG, corpseId: body.id, node: site });
+        this.assign(c, { kind: TASK.DRAG, corpseId: body.id, node: home });
         draggers++;
       } else if (!c.task) {
-        this.assign(c, { kind: TASK.GUARD, node: this.scatterNode(site, c.id, 'big') });
+        this.assign(c, { kind: TASK.GUARD, node: this.scatterNode(home, c.id, 'big') });
       }
     }
 
-    // infection forms: opportunistic grabs only if completable before the
-    // sweep lands (§13.5); everything else evacuates and disperses around
-    // the site rather than piling into one room
+    // infection forms: opportunistic grabs if completable before the sweep
+    // lands (§13.5); otherwise disperse to their assigned den
     for (const f of infection) {
       if (f.task && f.task.kind !== TASK.MOVE) continue;
-      if (mustRun && !f.task?.evade) { this.assign(f, { kind: TASK.MOVE, node: this.scatterNode(site, f.id, 'infection') }); continue; }
+      const home = homeFor(f.id);
+      if (mustRun && !f.task?.evade) { this.assign(f, { kind: TASK.MOVE, node: this.scatterNode(home, f.id, 'infection') }); continue; }
       if (!f.task) {
         const grab = this.bestGrab(f, 0.6, timeLeft);
         if (grab) this.assign(f, grab);
-        else this.assign(f, { kind: TASK.MOVE, node: this.scatterNode(site, f.id, 'infection') });
+        else this.assign(f, { kind: TASK.MOVE, node: this.scatterNode(home, f.id, 'infection') });
       }
     }
 
-    // seat the first carrier the moment a body is at the site with a form —
-    // but only while the site is quiet
-    const seated = sim.agents.some((a) => !a.dead && a.faction === FACTION.CARRIER);
-    if (!seated && this.localThreat(site) < 0.6) {
-      const feed = bodies.find((b) => b.node === site);
-      const former = infection.find((f) => f.node === site && (!f.task || f.task.kind === TASK.MOVE));
-      if (feed && former) this.assign(former, { kind: TASK.SEAT, corpseId: feed.id });
+    // seat a carrier at EVERY quiet den that has a body and a spare form —
+    // the whole opening is a carrier rush (§13.4), so use the crash corpses
+    // early rather than hoarding forms (user note: bodies ignored until late)
+    for (const den of dens) {
+      if (this.localThreat(den) >= 0.6) continue;
+      const carrierHere = sim.agents.some((a) => !a.dead && a.faction === FACTION.CARRIER && a.node === den);
+      if (carrierHere) continue;
+      const feed = bodies.find((b) => b.node === den && !b.claimed);
+      const former = infection.find((f) => f.node === den && (!f.task || f.task.kind === TASK.MOVE));
+      if (feed && former) { feed.claimed = true; this.assign(former, { kind: TASK.SEAT, corpseId: feed.id }); }
     }
   }
 
-  // spread forms among a site and its passable neighbors (no deathballs)
+  // spread forms among a site and its quiet neighbors (no deathballs), but
+  // never out onto an artery — the main corridors are where the forms were
+  // getting mown down in transit
   scatterNode(site, salt, kind) {
     const g = this.sim.graph;
     const opts = [site];
-    for (const { to, link } of g.neighbors(site,
+    for (const { to } of g.neighbors(site,
       kind === 'infection' ? ['std', 'vent'] : ['std', 'shaft'],
       kind === 'infection' ? this.infectionPass : this.bigPass)) {
-      if (this.localThreat(to) < 0.6) opts.push(to);
+      if (this.localThreat(to) < 0.6 && !g.hasRole(to, 'artery') && g.node(to).type !== 'open') opts.push(to);
     }
     return opts[salt % opts.length];
   }
@@ -447,10 +476,10 @@ export class Hive {
       }
     }
 
-    // 2. carriers: seat more when bodies are cheap. FormCost 0 (§13.3) —
-    //    the poor hive's growth move — but never in a hot zone. Bodies are
-    //    abundant after the portal event; production is the whole game (§13.4).
-    const wantK = Math.min(5, 1 + Math.floor(bodies.length / 50) + Math.floor((I + C) / 10));
+    // 2. carriers: enough to snowball (§13.4 needs K>=2), scaling with the
+    //    army — NOT with body count, or the hive just builds carriers forever
+    //    and never harvests. Once production is up, forms hunt instead.
+    const wantK = Math.min(4, 2 + Math.floor((I + C) / 22));
     if (K < wantK && bodies.length > 0) {
       const site = this.pickCarrierSite(bodies);
       if (site) {
@@ -460,10 +489,13 @@ export class Hive {
       }
     }
 
-    // 3. guards on each carrier
+    // 3. guards on each carrier. Protecting the first carriers through
+    //    incubation is the whole game (§13.4), so guard HARDER when the pool
+    //    is thin — that's exactly when losing a carrier is fatal.
+    const guardsWanted = S >= 1.5 ? 2 : 1;
     for (const carrier of carriers) {
       const guards = combat.filter((c) => c.task?.kind === TASK.GUARD && c.task.node === carrier.node);
-      if (guards.length < 1 + (S < 1 ? 1 : 0)) {
+      if (guards.length < guardsWanted) {
         const free = combat.filter((c) => !c.task);
         const guard = this.nearest(free, carrier.node, ['std', 'shaft'], this.bigPass);
         if (guard) this.assign(guard, { kind: TASK.GUARD, node: carrier.node });
@@ -484,10 +516,19 @@ export class Hive {
     //    emerges from the value table, taxed by scarcity)
     const U_convert = P.hive.militaryValue - S * 1.0;
     let convertsAssigned = 0;
+    let seats = K; // carriers standing + seatings queued this round
     for (const f of infection) {
       if (f.task) continue;
-      // military first when the army is thin and currency is cheap —
-      // grabs can't touch marines (§6.5), combat forms can
+      // GROW FIRST: while below the carrier target and bodies are lying
+      // around, an idle form seats a carrier on the nearest quiet body
+      // instead of hoarding — production is the whole game (§13.4), and it
+      // means the crash corpses get used from the start, not late (user note)
+      if (seats < wantK) {
+        const body = this.nearestSeatBody(f, bodies);
+        if (body) { body.claimed = true; seats++; this.assign(f, { kind: TASK.SEAT, corpseId: body.id }); continue; }
+      }
+      // military when the army is thin and currency is cheap — grabs can't
+      // touch marines (§6.5), combat forms can
       if (C + convertsAssigned < 3 && U_convert > 0 && bodies.length > 3) {
         const body = this.nearestBody(f, bodies);
         if (body) { convertsAssigned++; this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
@@ -524,9 +565,21 @@ export class Hive {
     //    predicted path. Gated on reserve health, with a cooldown.
     if (C >= 4 && S <= 1.3 && sim.t >= this.baitCooldownUntil) this.tryBait(combat);
 
-    // idle combat forms drift home
+    // 7. spare combat forms HUNT civilians for bodies while steering clear of
+    //    marines (user note): they are the hive's body-harvesters. A combat
+    //    form kills a spotted civilian in ~1s, so a civilian that radios is
+    //    just a free corpse — the marines are coming anyway, rack up the body
+    //    and slip away; an infection form converts it later. Static, known
+    //    targets (the wounded, the officers who won't move) come first because
+    //    the hive always knows exactly where they are.
+    // hunting is a surplus activity: a fragile combat form only goes out for
+    // bodies once the economy can spare it (§13.3 — a poor hive is risk-averse).
+    // While scarce, spare forms stay home and guard the carriers.
+    const mayHunt = S <= 1.4;
     for (const c of combat) {
       if (c.task) continue;
+      const prey = mayHunt ? this.nearestHuntNode(c.node) : -1;
+      if (prey !== -1) { this.assign(c, { kind: TASK.ATTACK, node: prey }); continue; }
       const home = carriers.length ? carriers[c.id % carriers.length].node : this.carrierSite;
       if (home !== -1 && c.node !== home) this.assign(c, { kind: TASK.GUARD, node: this.scatterNode(home, c.id, 'big') });
     }
@@ -553,9 +606,17 @@ export class Hive {
       if (h.helpless) value = P.hive.values.helpless;
       else if (h.faction === FACTION.CIVILIAN) {
         value = h.hasRadio ? P.hive.values.civilianRadio : P.hive.values.civilianNoRadio;
-        if (this.believedHumanStr[b.node] > 0.4) value -= P.hive.values.distressPenalty * 0.5;
-        if (h.hasRadio && !h.calledOut) value -= P.hive.values.distressPenalty * 0.3;
+        // only weigh the distress cost if the alarm HASN'T been raised yet.
+        // Once a target has already called, the sweep is coming regardless —
+        // grabbing it is pure upside now, no penalty (user note).
+        if (!h.calledOut) {
+          if (this.believedHumanStr[b.node] > 0.4) value -= P.hive.values.distressPenalty * 0.5;
+          if (h.hasRadio) value -= P.hive.values.distressPenalty * 0.3;
+        }
       } else value = P.hive.values.armed - (this.believedHumanStr[b.node] > 0.6 ? 1.0 : 0);
+      // static, always-known targets (the wounded, the officers) are the
+      // surest conversions — the hive never loses their position (user note)
+      if (h.helpless || h.stayPut) value += 1.0;
       const risk = this.routeRisk(path);
       // U = value·conf − scarcity·formCost − riskAversion·risk − timeCost (§13.3)
       const U = value * b.conf - S * 0.35 - riskAversion * 0.25 * risk - hops * 0.06;
@@ -565,17 +626,32 @@ export class Hive {
   }
 
   pickCarrierSite(bodies) {
+    const g = this.sim.graph;
+    // existing carrier nodes — new carriers should spread AWAY from these so
+    // the infection isn't one cluster the marines can sweep out in a single
+    // pass (user note: it over-concentrates). Growth = spreading territory.
+    const carrierNodes = this.sim.agents
+      .filter((a) => !a.dead && a.faction === FACTION.CARRIER).map((a) => a.node);
     let best = null, bestScore = -Infinity;
     for (const b of bodies) {
       if (b.claimed) continue;
-      if (this.sim.graph.burningUntil[b.node] > this.sim.t) continue;
+      if (g.burningUntil[b.node] > this.sim.t) continue;
       const threat = this.localThreat(b.node);
       if (threat > 0.6) continue; // never seat a carrier in a hot zone
-      let score = -threat * 3 + this.sim.influence.floodStr[b.node] * 0.8;
-      if (this.sim.graph.hasRole(b.node, 'corpse_cache')) score += 1;
+      let score = -threat * 3 + this.sim.influence.floodStr[b.node] * 0.5;
+      if (g.hasRole(b.node, 'corpse_cache')) score += 1;
       if (this.exitCount(b.node) < 2) score -= 2;
       score += Math.min(this.garrisonDist[b.node] === -1 ? 4 : this.garrisonDist[b.node], 4) * 0.3;
       score -= this.trafficPenalty(b.node) * 0.4;
+      // reward distance from the nearest existing carrier (spread out)
+      if (carrierNodes.length) {
+        let near = Infinity;
+        for (const cn of carrierNodes) {
+          const d = g.hops(b.node, cn, ['std', 'shaft'], this.bigPass);
+          if (d !== -1) near = Math.min(near, d);
+        }
+        if (near !== Infinity) score += Math.min(near, 5) * 0.6;
+      }
       if (score > bestScore) { bestScore = score; best = { corpse: b } }
     }
     return best;
@@ -631,6 +707,55 @@ export class Hive {
       if (b.claimed) continue;
       const d = this.sim.graph.hops(form.node, b.node, ['std', 'vent'], this.infectionPass);
       if (d !== -1 && d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+
+  // nearest unclaimed body sitting in a quiet, defensible node — a place a
+  // carrier could actually survive incubation
+  nearestSeatBody(form, bodies) {
+    let best = null, bestD = Infinity;
+    for (const b of bodies) {
+      if (b.claimed) continue;
+      if (this.localThreat(b.node) >= 0.6) continue;
+      if (this.exitCount(b.node) < 2) continue;
+      if (this.sim.graph.burningUntil[b.node] > this.sim.t) continue;
+      const d = this.sim.graph.hops(form.node, b.node, ['std', 'vent'], this.infectionPass);
+      if (d !== -1 && d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+
+  // Where a combat form goes to make bodies. Combines live belief with the
+  // hive's standing knowledge of where the crew lives (absorbed crew memory):
+  // quarters, mess, medbay and cryo are always worth checking even with no
+  // current contact — that's how it "seeks out civilians as soon as able."
+  // Marine-held nodes are avoided (hide from the guns, hunt the soft).
+  nearestHuntNode(from) {
+    const sim = this.sim, g = sim.graph;
+    // population prior per node from live beliefs...
+    const prior = new Float32Array(g.n);
+    for (const [id, b] of this.beliefs) {
+      const h = sim.byId.get(id);
+      if (!h || h.dead || h.hp <= 0 || h.faction === FACTION.MARINE) continue;
+      let w = b.conf * (h.helpless || h.stayPut ? 3 : 1); // static = surest bodies
+      prior[b.node] += w;
+    }
+    // ...plus a standing prior on crew spaces, so it hunts population centers
+    // even when every contact has gone cold
+    for (const n of g.nodes) {
+      if (n.roles.includes('quarters') || n.roles.includes('soft')) prior[n.idx] += 0.6;
+      if (n.roles.includes('helpless') || n.roles.includes('medbay') || n.roles.includes('brig')) prior[n.idx] += 1.2;
+    }
+    let best = -1, bestScore = 0.4; // need a real reason to move out
+    for (const n of g.nodes) {
+      if (prior[n.idx] <= 0) continue;
+      if (this.believedHardness[n.idx] > 0.5) continue;   // marines here — skip
+      if (this.localThreat(n.idx) > 1.0) continue;        // garrison/armory area
+      const d = g.hops(from, n.idx, ['std', 'shaft'], this.bigPass);
+      if (d === -1 || d > 7) continue;
+      const score = prior[n.idx] - d * 0.3;
+      if (score > bestScore) { bestScore = score; best = n.idx; }
     }
     return best;
   }

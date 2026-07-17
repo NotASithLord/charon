@@ -84,13 +84,28 @@ export const PARAMS = {
   },
   // Combat model (§7 support numbers, all PLACEHOLDER)
   combat: {
-    marine:   { hp: 45, dps: 18, stompPerSec: 0.4 }, // stomp = infection-form kills/s
-    armed:    { hp: 30, dps: 10, stompPerSec: 0.2 },
+    // Weighted (§7 support) so a combat form is a serious threat: 1 marine
+    // almost certainly loses, 2 trade roughly even (one marine down for the
+    // kill), 3 win reliably. See combat.js focus-fire model.
+    marine:   { hp: 45, dps: 14, stompPerSec: 0.4 }, // stomp = infection-form kills/s
+    armed:    { hp: 30, dps: 9, stompPerSec: 0.2 },
     civilian: { hp: 20 },
-    combatForm: { hp: 75, dps: 16 },
+    // Tuned so a combat form's death (2*marineDps) lands right at the moment
+    // it downs its first marine (marineHp/cfDps): with 2 marines it's a
+    // coin-flip whether they kill it clean or trade one, 3 win clean, 1 loses.
+    combatForm: { hp: 63, dps: 20, hpJitter: 0.18 }, // spawn hp varies ±18% -> real 50/50 at 2v1
     carrierHp: 40,
     infectionGrabSec: 1.2,     // time to convert an overwhelmed target
-    armedBraveryStrength: 1.2, // fights if visible flood strength below this
+    armedBraveryStrength: 0.9, // fights only if visible flood strength below this
+  },
+  marineDoctrine: {
+    firstSweepDelaySec: 18,    // muster time before the crash sweep launches (§5.3)
+    commandGarrison: 3,        // permanent marines holding the command deck (never move)
+    officers: 4,               // officer civilians who stay put on the command deck
+  },
+  civilian: {
+    fleeHearingHops: 1,        // only bolt from trouble this close (was ship-wide)
+    shelterBias: 0.85,         // chance a spooked civ shelters in place vs. runs
   },
   speed: { // edge-traversal multipliers (1.0 = base edge time)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.2,

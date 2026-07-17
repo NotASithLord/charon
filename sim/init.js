@@ -27,7 +27,7 @@ export function makeAgent(kind, node, graph) {
     move: null, // { to, link, layer, t (0..1), travelSec }
     path: [],   // remaining [{to, link, layer}]
     hp: 1, maxHp: 1, damage: 0,
-    hasRadio: false, helpless: false, panicked: false,
+    hasRadio: false, helpless: false, panicked: false, stayPut: false, garrison: false,
     downed: false, reviveAt: -1, // self-revive schedule (sim seconds)
     squad: -1,
     flamer: false, fuel: 0,
@@ -112,6 +112,21 @@ export function initRun(seed, rng, P) {
     }
   }
 
+  // permanent command-deck garrison (user note): a fixed marine detail on the
+  // bridge/CIC that never sweeps, never answers calls, never takes orders —
+  // it just holds. Not part of any squad, so it's exempt from all squad logic.
+  {
+    const posts = [graph.byId.get('bridge'), graph.byId.get('cic')];
+    for (let i = 0; i < P.marineDoctrine.commandGarrison; i++) {
+      const a = makeAgent(FACTION.MARINE, posts[i % posts.length], graph);
+      a.hp = a.maxHp = P.combat.marine.hp;
+      a.hasRadio = true;
+      a.squad = -1;
+      a.garrison = true;
+      agents.push(a);
+    }
+  }
+
   // armed humans: armory + corridors
   {
     const armory = graph.byId.get('armory');
@@ -134,15 +149,20 @@ export function initRun(seed, rng, P) {
       .map((n) => n.idx);
     const brig = graph.byId.get('brig');
     const medbay = graph.byId.get('medbay');
+    const officerPost = graph.byId.get('officer');
     for (let i = 0; i < civCount; i++) {
-      let node, helpless = false;
+      let node, helpless = false, stayPut = false;
       if (i < P.npc.brigPrisoners) { node = brig; helpless = true; }
       else if (i < P.npc.brigPrisoners + P.npc.medbayWounded) { node = medbay; helpless = true; }
-      else node = rng.pick(soft);
+      else if (i < P.npc.brigPrisoners + P.npc.medbayWounded + P.marineDoctrine.officers) {
+        // officers hold Officer Country and do not evacuate (user note)
+        node = officerPost; stayPut = true;
+      } else node = rng.pick(soft);
       const a = makeAgent(FACTION.CIVILIAN, node, graph);
       a.hp = a.maxHp = P.combat.civilian.hp;
       a.helpless = helpless;
-      a.hasRadio = !helpless && rng.chance(P.npc.radio.civilian);
+      a.stayPut = stayPut;
+      a.hasRadio = stayPut || (!helpless && rng.chance(P.npc.radio.civilian));
       agents.push(a);
     }
   }
@@ -174,7 +194,7 @@ export function initRun(seed, rng, P) {
   }
   for (let i = 0; i < P.flood.initialCombatForms; i++) {
     const a = makeAgent(FACTION.COMBAT, breach, graph);
-    a.hp = a.maxHp = P.combat.combatForm.hp;
+    a.hp = a.maxHp = P.combat.combatForm.hp * (1 + rng.range(-P.combat.combatForm.hpJitter, P.combat.combatForm.hpJitter));
     flood.push(a);
   }
   for (let i = 0; i < P.flood.breachCorpses; i++) {

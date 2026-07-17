@@ -21,7 +21,7 @@ export class Viz {
     this.ctx = canvas.getContext('2d');
     this.sim = sim;
     this.deckFilter = 0; // 0 = all decks
-    this.overlays = { influence: true, shafts: true, vents: true, calls: true, tracker: false, beliefs: false, labels: true };
+    this.overlays = { influence: true, shafts: true, vents: true, calls: true, tracker: false, beliefs: false, labels: true, conns: false };
     this.callRings = []; // {node, t0}
     this.lastCallCount = 0;
   }
@@ -39,7 +39,8 @@ export class Viz {
 
     // pick up new distress calls for ring animation
     while (this.lastCallCount < sim.calls.length) {
-      this.callRings.push({ node: sim.calls[this.lastCallCount].node, t0: sim.t });
+      const c = sim.calls[this.lastCallCount];
+      this.callRings.push({ node: c.node, t0: sim.t, byId: c.byId, faction: c.faction });
       this.lastCallCount++;
     }
 
@@ -97,7 +98,23 @@ export class Viz {
         ctx.fillStyle = '#c0392b';
         ctx.fillRect(mx - 2.5, my - 2.5, 5, 5);
       }
+      if (this.overlays.conns) this._connLabel(a, b, e.label, e.locked ? '#e06a5a' : '#5a708f');
     }
+  }
+
+  // strict connection designation drawn at the edge midpoint (user note)
+  _connLabel(a, b, text, color) {
+    if (!text) return;
+    const { ctx } = this;
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    ctx.font = '8px monospace';
+    const w = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(7,9,12,0.82)';
+    ctx.fillRect(mx - w / 2 - 2, my - 5.5, w + 4, 10);
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, mx, my + 2.5);
+    ctx.textAlign = 'left';
   }
 
   _shafts(g) {
@@ -119,6 +136,7 @@ export class Viz {
         ctx.moveTo(mx, my - 4); ctx.lineTo(mx + 4, my); ctx.lineTo(mx, my + 4); ctx.lineTo(mx - 4, my);
         ctx.closePath(); ctx.fill();
       }
+      if (this.overlays.conns) this._connLabel(a, b, s.label, '#b39a4a');
     }
   }
 
@@ -132,6 +150,7 @@ export class Viz {
       ctx.setLineDash([2, 4]);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       ctx.setLineDash([]);
+      if (this.overlays.conns) this._connLabel(a, b, v.label, v.blocked ? '#39424c' : '#3f8a5e');
     }
   }
 
@@ -176,13 +195,27 @@ export class Viz {
     const { ctx, sim } = this;
     this.callRings = this.callRings.filter((r) => sim.t - r.t0 < 6);
     for (const r of this.callRings) {
-      if (!this._visible(r.node)) continue;
-      const n = g.node(r.node);
+      // anchor the ring on the CALLER, not just the node, so it's never a
+      // ring "from no one" — most callers spotted the Flood through a doorway
+      // and are standing one room away from it (user note). A marine's report
+      // reads blue, a civilian/armed scream reads amber.
+      const caller = r.byId ? sim.byId.get(r.byId) : null;
+      let cx, cy, node;
+      if (caller && !caller.dead) { cx = caller.x; cy = caller.y; node = caller.node; }
+      else { node = r.node; const n = g.node(node); cx = n.x; cy = n.y; }
+      if (!this._visible(node)) continue;
       const age = sim.t - r.t0;
       const rad = 8 + age * 14;
-      ctx.strokeStyle = `rgba(240, 90, 60, ${Math.max(0, 0.8 - age * 0.13)})`;
+      const marine = r.faction === FACTION.MARINE;
+      const a = Math.max(0, 0.8 - age * 0.13);
+      ctx.strokeStyle = marine ? `rgba(90, 150, 240, ${a})` : `rgba(240, 150, 60, ${a})`;
       ctx.lineWidth = 1.6;
-      ctx.beginPath(); ctx.arc(n.x, n.y, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.stroke();
+      // solid pip on the caller so you can see exactly who is calling
+      if (age < 3) {
+        ctx.fillStyle = marine ? '#5a96f0' : '#f0963c';
+        ctx.beginPath(); ctx.arc(cx, cy, 3.4, 0, Math.PI * 2); ctx.fill();
+      }
     }
     // marine convergence vectors toward active distress objectives
     for (const squad of sim.squads) {

@@ -3,6 +3,7 @@
 // position interpolation.
 
 export const LAYER = { STD: 'std', SHAFT: 'shaft', VENT: 'vent' };
+const EDGE_PREFIX = { hatch: 'H', blastdoor: 'B', lift: 'L', ladder: 'K' };
 
 export class ShipGraph {
   constructor(data) {
@@ -19,15 +20,18 @@ export class ShipGraph {
     this.edges = data.edges.map((e, i) => ({
       i, a: idx(e.a), b: idx(e.b), type: e.type, lockable: e.lockable,
       locked: false, kind: LAYER.STD,
+      // strict connection designation for the map (user note): H=hatch,
+      // B=blastdoor, L=lift, K=ladder, numbered in load order
+      label: EDGE_PREFIX[e.type] + '-' + String(i + 1).padStart(2, '0'),
     }));
     this.shafts = data.maintShafts.map((e, i) => ({
       i, a: idx(e.a), b: idx(e.b), ambushCorners: e.ambushCorners,
-      kind: LAYER.SHAFT,
+      kind: LAYER.SHAFT, label: 'S-' + String(i + 1).padStart(2, '0'),
       // occupants lying in wait per end: corner key `${shaftIdx}:${endNode}`
     }));
     this.vents = data.vents.map((e, i) => ({
       i, a: idx(e.a), b: idx(e.b), breakable: e.breakable,
-      blocked: false, kind: LAYER.VENT,
+      blocked: false, kind: LAYER.VENT, label: 'V-' + String(i + 1).padStart(2, '0'),
     }));
 
     // adjacency: adj[node] = [{to, link}] where link is an edge/shaft/vent record

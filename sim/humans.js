@@ -27,6 +27,17 @@ function hearsTrouble(sim, a) {
   return sim.heardGunfire(a.node) || sim.heardScreams(a.node);
 }
 
+// Only trouble within a hop or two rattles an idle civilian into moving —
+// distant commotion elsewhere on the ship shouldn't send everyone running
+// (user note: crew running around too much before panicking).
+function closeTrouble(sim, a) {
+  for (const n of sim.nodesNear(a.node, sim.P.civilian.fleeHearingHops)) {
+    if (sim.floodStrengthAt(n) > 0) return true;
+    if (sim.tickCount - sim.gunfireTick[n] < 30) return true;
+  }
+  return false;
+}
+
 function maybeDistressCall(sim, a, reliability) {
   if (a.calledOut || !a.hasRadio) return;
   a.calledOut = true; // one attempt per agent
@@ -57,13 +68,21 @@ function updateCivilian(sim, a, dt) {
         a.state = STATE.ALERT; a.alertTimer = 0.4;
         if (sim.rng.chance(0.35)) a.panicked = true;
         maybeDistressCall(sim, a, P.radio.civilianCallReliability);
-      } else if (hearsTrouble(sim, a) && a.state === STATE.IDLE && sim.rng.chance(0.5 * dt)) {
-        a.state = STATE.FLEE; a.hideTimer = 0;
+      } else if (a.state === STATE.IDLE && closeTrouble(sim, a) && sim.rng.chance(0.5 * dt)) {
+        // spooked by nearby trouble: most people shelter in place, they
+        // don't sprint down the corridor for no reason (user note)
+        if (sim.rng.chance(P.civilian.shelterBias) || a.stayPut) a.state = STATE.HIDE;
+        else { a.state = STATE.FLEE; a.hideTimer = 0; }
       }
       break;
     case STATE.ALERT:
       a.alertTimer -= dt;
-      if (a.alertTimer <= 0) { a.state = STATE.FLEE; a.hideTimer = 0; }
+      if (a.alertTimer <= 0) {
+        // officers and other stay-put civilians hold their compartment; they
+        // cower rather than run (user note: deck-1 officers who don't leave)
+        a.state = a.stayPut ? STATE.COWER : STATE.FLEE;
+        a.hideTimer = 0;
+      }
       break;
     case STATE.FLEE: {
       if (!a.move && !a.path.length) {
@@ -139,6 +158,16 @@ function updateArmed(sim, a, dt) {
 
 // --- marines (§5.3) ---
 function updateMarineTick(sim, a, dt) {
+  // command-deck garrison: a permanent detail that never leaves the bridge/
+  // CIC (user note). It fights anything that reaches it but never sweeps,
+  // answers calls, or takes orders — a fixed strongpoint.
+  if (a.garrison) {
+    a.state = sim.floodStrengthAt(a.node) > 0 ? STATE.FIGHT : STATE.IDLE;
+    a.path = []; a.move = null;
+    if (a.state === STATE.FIGHT && a.hasRadio && sim.tickCount % 60 === 0) sim.emitCall(a);
+    return;
+  }
+
   const squad = sim.squads[a.squad];
   if (!squad || squad.broken) { updateArmed(sim, a, dt); return; }
 
@@ -251,6 +280,15 @@ export function strategicSquads(sim) {
     // engaged squads don't re-plan
     if (members.some((m) => m.state === STATE.FIGHT)) continue;
 
+    // launch the mustered crash sweep once the delay elapses (user note)
+    if (squad.pendingSweep && sim.t >= sim.P.marineDoctrine.firstSweepDelaySec) {
+      squad.pendingSweep = false;
+      squad.objective = { kind: 'breach', node: sim.graph.breachNode };
+      squad.phase1 = true;
+      sim.log('sweep', `squad ${squad.id + 1} moves out to the crash site`);
+    }
+    if (squad.pendingSweep) continue; // still mustering — hold
+
     // player command override (companion spec §2.3): a standing order sets
     // the squad's objective and suppresses autonomy until it completes or is
     // RELEASEd. Self-defense and morale still apply (handled per-tick).
@@ -328,10 +366,15 @@ export function assignFirstSweep(sim) {
     const d = sim.graph.hops(leader.node, sim.graph.breachNode, ['std'], humanPass);
     if (d !== -1 && d < bestD) { bestD = d; best = squad; }
   }
+  // The crash sweep does NOT launch instantly — the surviving crew is
+  // scattered and stunned; the nearest squad musters for firstSweepDelaySec
+  // before moving out (user note: initial response should be slower). This
+  // widens the window the hive is racing (§6.7).
   if (best) {
-    best.objective = { kind: 'breach', node: sim.graph.breachNode };
-    best.phase1 = true;
-    sim.log('sweep', `squad ${best.id + 1} dispatched to investigate the crash (${sim.graph.node(sim.graph.breachNode).name}, ${bestD} hops)`);
+    best.pendingSweep = true;
+    best.objective = { kind: 'hold', node: sim.byId.get(best.members[0]).node };
+    sim.firstSweepSquad = best.id;
+    sim.log('sweep', `squad ${best.id + 1} mustering to investigate the crash (${sim.graph.node(sim.graph.breachNode).name}, ${bestD} hops) — moving out in ~${sim.P.marineDoctrine.firstSweepDelaySec}s`);
   }
   for (const squad of sim.squads) {
     if (squad !== best) squad.objective = { kind: 'hold', node: sim.byId.get(squad.members[0]).node };

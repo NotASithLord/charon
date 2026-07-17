@@ -118,7 +118,7 @@ export class Sim {
   }
 
   emitCall(agent) {
-    const call = { id: this.callSeq++, node: agent.node, t: this.t, faction: agent.faction, rolled: new Set() };
+    const call = { id: this.callSeq++, node: agent.node, t: this.t, faction: agent.faction, byId: agent.id, rolled: new Set() };
     this.calls.push(call);
     this.stats.distressCalls++;
     this.floodKnown = true;
