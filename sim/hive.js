@@ -461,19 +461,29 @@ export class Hive {
     const sim = this.sim, g = sim.graph, P = sim.P;
     const riskAversion = P.hive.riskBase * S;
 
-    // 1. rampage check per region (§13.9): local superiority AND a reserve
+    // 1. AGGRESSION IS LOCAL (user note): each region decides hide-vs-rampage
+    //    on its OWN situation, independent of the global pool. A pocket of
+    //    forms standing over undefended civilians goes loud even while the
+    //    hive is scarce elsewhere; a pocket with marines in it hides even
+    //    while the hive is rich. A region rampages iff it has local
+    //    superiority over the humans there, enough local mass to matter, and
+    //    no real marine presence to punish it (that's an evade zone instead).
     const rampaging = new Set();
-    if (S <= P.rampage.scarcityCap) {
-      for (const n of g.nodes) {
-        const region = g.nodesWithin(n.idx, 1, ['std'], () => true);
-        let fs = 0, hs = 0;
-        for (const r of region) { fs += sim.influence.floodStr[r]; hs += this.believedHumanStr[r]; }
-        if (fs >= P.rampage.threshold * Math.max(hs, 0.3) && fs > 2) rampaging.add(n.idx);
+    for (const n of g.nodes) {
+      const region = g.nodesWithin(n.idx, 1, ['std'], () => true);
+      let fs = 0, hs = 0, hard = 0;
+      for (const r of region) {
+        fs += sim.influence.floodStr[r];
+        hs += this.believedHumanStr[r];
+        hard += this.believedHardness[r];
       }
-      if (rampaging.size > 0 && !this.rampageLogged) {
-        this.rampageLogged = true;
-        sim.log('rampage', `the hive stops hiding — open aggression begins (pool ${I}, scarcity ${S.toFixed(2)})`);
-      }
+      if (fs >= P.rampage.threshold * Math.max(hs, 0.3)
+        && fs >= P.rampage.localReserve
+        && hard < P.rampage.marineCap) rampaging.add(n.idx);
+    }
+    if (rampaging.size > 0 && !this.rampageLogged) {
+      this.rampageLogged = true;
+      sim.log('rampage', `flood pockets go loud where the crew is undefended (${rampaging.size} region(s))`);
     }
 
     // 2. carriers: enough to snowball (§13.4 needs K>=2), scaling with the
@@ -572,13 +582,14 @@ export class Hive {
     //    and slip away; an infection form converts it later. Static, known
     //    targets (the wounded, the officers who won't move) come first because
     //    the hive always knows exactly where they are.
-    // hunting is a surplus activity: a fragile combat form only goes out for
-    // bodies once the economy can spare it (§13.3 — a poor hive is risk-averse).
-    // While scarce, spare forms stay home and guard the carriers.
-    const mayHunt = S <= 1.4;
+    // This is a LOCAL decision, not a global one (user note): carriers get
+    // their guards first (step 3), and every SPARE form then hunts whatever
+    // safe, undefended prey is near it — nearestHuntNode already refuses to
+    // walk into marines, so a form only goes loud where its own surroundings
+    // are safe, whatever the global pool is doing elsewhere.
     for (const c of combat) {
       if (c.task) continue;
-      const prey = mayHunt ? this.nearestHuntNode(c.node) : -1;
+      const prey = this.nearestHuntNode(c.node);
       if (prey !== -1) { this.assign(c, { kind: TASK.ATTACK, node: prey }); continue; }
       const home = carriers.length ? carriers[c.id % carriers.length].node : this.carrierSite;
       if (home !== -1 && c.node !== home) this.assign(c, { kind: TASK.GUARD, node: this.scatterNode(home, c.id, 'big') });

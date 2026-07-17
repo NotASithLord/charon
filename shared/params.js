@@ -55,7 +55,11 @@ export const PARAMS = {
     civilianCallReliability: 0.35,// PLACEHOLDER
     callFadeSec: 60,
   },
-  rampage: { threshold: 1.5, scarcityCap: 1.0 }, // flood:human ratio; reserve gate
+  rampage: {
+    threshold: 1.5,      // local flood:human strength ratio to flip aggressive
+    localReserve: 1.5,   // min local flood mass in a region before it rampages
+    marineCap: 0.6,      // if believed marine strength in the region exceeds this, hide instead
+  },
   belief: {
     decayRatePerSec: 0.1,   // MASTER DIAL (lambda) — smart vs unfair
     predictionQuality: 0.7, // MASTER DIAL (q) — how well it guesses your route
