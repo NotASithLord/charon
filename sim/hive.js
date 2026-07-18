@@ -42,6 +42,7 @@ export class Hive {
     this.carrierSite = -1;
     this.sweepEtaSec = Infinity;
     this.baitCooldownUntil = 0;
+    this.strongpoints = new Map(); // node -> {w, t}: remembered fortified positions
     // static distance-from-garrison field (absorbed map knowledge): dens and
     // carrier sites want to be far from where armed humans muster
     const garrison = [
@@ -101,12 +102,21 @@ export class Hive {
     for (const f of sim.agents) {
       if (f.dead || !isActiveFloodForm(f)) continue;
       for (const n of sim.visibleNodes(f.node)) {
+        let shooterW = 0;
         for (const h of sim.occupants(n)) {
-          if (!isLivingHuman(h) || seen.has(h.id)) continue;
+          if (!isLivingHuman(h)) continue;
+          if (h.faction === FACTION.MARINE) shooterW += 1;
+          else if (h.faction === FACTION.ARMED) shooterW += 0.6;
+          if (seen.has(h.id)) continue;
           seen.add(h.id);
           const old = this.beliefs.get(h.id);
           this.beliefs.set(h.id, { node: h.node, t: sim.t, conf: 1, static: old?.static && (h.helpless || h.stayPut) });
         }
+        // remember FORTIFIED positions: a mass of guns seen once stays feared
+        // for minutes, not seconds — this is what stops the one-at-a-time
+        // trickle into the last-stand line (per-contact beliefs decay in ~7s,
+        // so the hive kept "forgetting" the line and feeding it another form)
+        if (shooterW >= 2) this.strongpoints.set(n, { w: shooterW, t: sim.t });
       }
     }
     // believed strength fields (§13.6): probability mass spreads over nodes
@@ -141,6 +151,14 @@ export class Hive {
           if (h.faction === FACTION.MARINE) this.believedHardness[n] += w * p;
         });
       }
+    }
+    // fold remembered strongpoints into the threat picture (slow ~3 min decay)
+    for (const [n, sp] of this.strongpoints) {
+      const age = sim.t - sp.t;
+      if (age > 360) { this.strongpoints.delete(n); continue; }
+      const s = sp.w * Math.exp(-age / 180);
+      this.believedHardness[n] += s;
+      this.believedHumanStr[n] += s;
     }
   }
 
@@ -593,13 +611,28 @@ export class Hive {
 
     // 4. rampage: combat forms in hot regions attack believed humans openly
     //    (infection forms swarm through the grab scoring below — rampage
-    //    scarcity makes those grabs near-free)
+    //    scarcity makes those grabs near-free). MUSTER DOCTRINE (user rule):
+    //    the flood never assaults a position it doesn't outnumber ~2:1 — it
+    //    stages nearby and gathers mass first, then everyone goes in.
     for (const f of combat) {
       if (!rampaging.has(f.node)) continue;
       if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT
         || f.task.kind === TASK.TRANSFORM)) continue; // a rooting carrier is not a soldier
       const target = this.nearestBelievedHuman(f.node);
-      if (target !== -1) this.assign(f, { kind: TASK.ATTACK, node: target });
+      if (target === -1) continue;
+      const defense = this.believedHumanStr[target] + this.believedHardness[target];
+      if (defense > 0.8 && this.musterStrength(target, P.swarm.musterHops) < defense * P.swarm.killRatio) {
+        const stage = this.stagingNodeNear(target);
+        if (stage !== -1) {
+          this.assign(f, { kind: TASK.GUARD, node: stage });
+          if (sim.t >= (this._musterLogAt ?? 0)) {
+            this._musterLogAt = sim.t + 30;
+            sim.log('hive', `the hive masses outside ${g.node(target).name} — waiting for the numbers`);
+          }
+        }
+        continue;
+      }
+      this.assign(f, { kind: TASK.ATTACK, node: target });
     }
 
     // 5. idle infection forms turn bodies into combat forms and hunt the crew
@@ -922,6 +955,31 @@ export class Hive {
         return;
       }
     }
+  }
+
+  // weighted flood mass within `hops` of a node — what the hive could bring
+  // to an assault there
+  musterStrength(node, hops = 2) {
+    const near = new Set(this.sim.graph.nodesWithin(node, hops, ['std', 'shaft', 'vent'], () => true));
+    let s = 0;
+    for (const a of this.sim.agents) {
+      if (a.dead || a.hp <= 0 || a.downed) continue;
+      if (a.faction === FACTION.COMBAT && near.has(a.node)) s += 1;
+      else if (a.faction === FACTION.INFECTION && near.has(a.node)) s += 0.25;
+    }
+    return s;
+  }
+
+  // a quiet gathering point 1-2 hops from a defended target
+  stagingNodeNear(target) {
+    const g = this.sim.graph;
+    let best = -1, bestScore = -Infinity;
+    for (const n of g.nodesWithin(target, 2, ['std', 'shaft'], this.bigPass)) {
+      if (n === target) continue;
+      const score = -this.localThreat(n) * 2 - (g.hasRole(n, 'artery') ? 0.5 : 0);
+      if (score > bestScore) { bestScore = score; best = n; }
+    }
+    return best;
   }
 
   nearestBelievedHuman(from) {
