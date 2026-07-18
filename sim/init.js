@@ -198,13 +198,22 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // --- 7. scatter corpses, weighted into corpse caches ---
+  // --- 7. scatter corpses: EVERY room gets its own randomly-rolled share,
+  // every run (user note) — each node's weight is its size times a fresh
+  // per-run roll, so where the portal event's dead ended up is never the
+  // same twice. Corpse caches (medbay/cryo) still lean heavy.
   const corpses = [];
   {
-    const caches = graph.nodesWithRole('corpse_cache');
-    const all = graph.nodes.map((n) => n.idx);
+    const weights = graph.nodes.map((n) => {
+      let w = (n.capacity * 0.5 + 2) * rng.range(0.15, 1.85);
+      if (n.roles.includes('corpse_cache')) w *= 2.5;
+      if (n.type === 'corridor') w *= 0.5;
+      return w;
+    });
+    const totalW = weights.reduce((a, b) => a + b, 0);
     for (let i = 0; i < P.npc.corpsesFromEvent; i++) {
-      const node = rng.chance(0.45) ? rng.pick(caches) : rng.pick(all);
+      let r = rng.next() * totalW, node = graph.n - 1;
+      for (let k = 0; k < weights.length; k++) { r -= weights[k]; if (r <= 0) { node = k; break; } }
       const c = makeAgent(FACTION.CORPSE, node, graph);
       c.state = STATE.DEAD;
       c.hp = 0; c.damage = 0; // fully convertible
@@ -234,7 +243,10 @@ export function initRun(seed, rng, P) {
     a.hp = a.maxHp = P.combat.combatForm.hp * (1 + rng.range(-P.combat.combatForm.hpJitter, P.combat.combatForm.hpJitter));
     flood.push(a);
   }
-  for (let i = 0; i < P.flood.breachCorpses; i++) {
+  // the crash site's fresh dead are random too (user note): ~50%-160% of the
+  // configured baseline, so the opening larder varies run to run
+  const freshDead = Math.max(2, Math.round(P.flood.breachCorpses * rng.range(0.5, 1.6)));
+  for (let i = 0; i < freshDead; i++) {
     const c = makeAgent(FACTION.CORPSE, breach, graph);
     c.state = STATE.DEAD; c.hp = 0; c.damage = 0;
     corpses.push(c);
