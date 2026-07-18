@@ -55,17 +55,25 @@ export function updateFloodTick(sim, dt) {
 
     // OPPORTUNISTIC INFECTION: a live human standing in a form's own node is
     // a free conversion and a silenced witness — take them immediately,
-    // whatever the form was told to do, unless guns are present (that's a
-    // fight for combat.js, not a grab). This is what stops a civilian from
-    // strolling through a den of carriers and forms untouched (user note).
+    // whatever the form was told to do. Guns normally make it a fight for
+    // combat.js instead of a grab — BUT a big enough pack overwhelms the
+    // guns (user note): when local flood strength outweighs the shooters
+    // ~2:1, grabs work THROUGH the gunfire and even marines get taken. The
+    // swarm eats stomp losses; that's the price of the pile-on.
     if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0
       && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
       const here = sim.occupants(a.node);
-      const guns = here.some((h) => h.hp > 0 && !h.dead &&
-        (h.faction === FACTION.MARINE || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT)));
-      if (!guns) {
+      let gunsW = 0;
+      for (const h of here) {
+        if (h.hp <= 0 || h.dead) continue;
+        if (h.faction === FACTION.MARINE) gunsW += 1;
+        else if (h.faction === FACTION.ARMED && h.state === STATE.FIGHT) gunsW += 0.6;
+      }
+      const overwhelmed = gunsW > 0 && sim.floodStrengthAt(a.node) >= gunsW * sim.P.swarm.overwhelmRatio;
+      if (gunsW === 0 || overwhelmed) {
         const prey = here.find((h) => h.hp > 0 && !h.dead &&
-          (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED));
+          (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED
+            || (overwhelmed && h.faction === FACTION.MARINE)));
         if (prey && a.task?.targetId !== prey.id) {
           hive.assign(a, { kind: TASK.GRAB, targetId: prey.id });
         }
@@ -189,6 +197,29 @@ export function updateFloodTick(sim, dt) {
           a.state = STATE.AMBUSHING;
           (link.ambushers ??= new Set()).add(a.id);
         } else moveToward(sim, a, t.end);
+        break;
+      }
+
+      case TASK.DECOY: {
+        // stage 0: run to the show node and be conspicuous until a human
+        // sees us (their calls now point AWAY from the dens); stage 1: evade
+        // to quiet ground — job done, time bought.
+        if (t.stage === 0) {
+          if (a.node !== t.show) moveToward(sim, a, t.show);
+          else {
+            const seen = sim.occupantsNear(a.node, 1).some((h) => !h.dead && h.hp > 0 &&
+              (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED));
+            if (seen) {
+              t.stage = 1;
+              const quiet = hive.quietNodeNear(a.node, 'big');
+              t.hide = quiet !== -1 ? quiet : a.node;
+              sim.log('bait', 'the decoy has been spotted — it melts away');
+            }
+          }
+        } else {
+          if (a.node !== t.hide) moveToward(sim, a, t.hide);
+          else if (!a.move) a.task = null; // gone to ground; hive re-tasks
+        }
         break;
       }
 

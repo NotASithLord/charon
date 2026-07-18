@@ -18,9 +18,12 @@ export const PARAMS = {
     lowerMaintenance: 10,     // unarmed maintenance crew roaming decks 4-5 fixing systems
     radio: { civilian: 0.35, armed: 0.7, marine: 1.0 }, // hasRadio fraction
   },
+  // DIFFICULTY LEVERS (user direction): without the player in the loop the
+  // flood should win most runs — the marines alone can't hold the ship. Tune
+  // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 20, // stated
-    initialCombatForms: 4,     // PLACEHOLDER
+    initialInfectionForms: 30, // spec said 20; raised so the NPC-only baseline loses the ship
+    initialCombatForms: 6,
     breachCorpses: 10,         // fresh corpses spawned at the breach
   },
   carrier: {
@@ -53,7 +56,7 @@ export const PARAMS = {
     gunfireHops: 3,    // gunfire carries further
   },
   radio: {
-    marineCallReliability: 0.65,  // MASTER DIAL — marine coordination efficiency
+    marineCallReliability: 0.5,   // MASTER DIAL — marine coordination efficiency / difficulty lever
                                   // (0.95 = intact comms; the portal event damaged them.
                                   //  Raise it and the response snuffs most outbreaks —
                                   //  re-tuned down after adding the top-deck garrison,
@@ -65,6 +68,19 @@ export const PARAMS = {
     threshold: 1.5,      // local flood:human strength ratio to flip aggressive
     localReserve: 1.5,   // min local flood mass in a region before it rampages
     marineCap: 0.6,      // if believed marine strength in the region exceeds this, hide instead
+  },
+  swarm: {
+    overwhelmRatio: 2.0,   // weighted flood:shooter ratio at which grabs work THROUGH gunfire
+    killRatio: 2.0,        // muster:squad ratio to spring on an isolated marine squad
+    musterHops: 3,         // how far the hive gathers forms for a squad-wipe
+    isolationHops: 3,      // no friendly squad within this = isolated
+    reserveForms: 8,       // only trade forms for marines while this pool (or a carrier) remains
+    escortPer: 3,          // 1 combat-form escort per ~3 infection forms in a pack
+  },
+  lastStand: {
+    marineFraction: 0.3,   // when squad marines drop below this of start, fall back
+    hearChance: 0.65,      // per-survivor roll to hear the fallback call
+    officerJoinChance: 0.6,// stay-put officers who step out into the corridor line
   },
   belief: {
     decayRatePerSec: 0.1,   // MASTER DIAL (lambda) — smart vs unfair

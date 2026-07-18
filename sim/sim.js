@@ -44,6 +44,8 @@ export class Sim {
     this.floodKnown = false;
     this.firstSweepCleared = false;
     this.burnOrderNode = -1; // last DESIGNATE_BURN target (companion §2.2)
+    this.lastStand = false;
+    this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison).length;
     this.outcome = null;
 
     this.stats = {
@@ -202,6 +204,7 @@ export class Sim {
       this._computeInfluence();
       this.hive.strategicTick();
       strategicSquads(this);
+      this._checkLastStand();
       this.stats.conversionsRound = 0;
       this._expireCalls();
     }
@@ -222,6 +225,37 @@ export class Sim {
     this._reap();
     this._checkOutcome();
     this.writeBuffer();
+  }
+
+  // LAST STAND (user note): once most of the squad marines are dead, the word
+  // goes out — fall back behind the garrison line on the top deck. Officers
+  // step out into the corridor to thicken the line. Radios are damaged and
+  // people are scattered, so each survivor only HEARS the call on a roll.
+  _checkLastStand() {
+    if (this.lastStand || this.initialSquadMarines === 0) return;
+    const alive = this.agents.reduce((n, a) => n +
+      (!a.dead && a.hp > 0 && a.faction === FACTION.MARINE && !a.garrison ? 1 : 0), 0);
+    if (alive > Math.ceil(this.initialSquadMarines * this.P.lastStand.marineFraction)) return;
+    this.lastStand = true;
+    const g = this.graph;
+    const line = g.byId.get('d1corr');
+    const shelters = [g.byId.get('officer'), g.byId.get('cic'), g.byId.get('signal'), g.byId.get('bridge')];
+    this.log('radio', `FALL BACK — all remaining hands to the command deck (${alive} marines left)`);
+    let heard = 0, missed = 0;
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || a.helpless || a.garrison) continue;
+      if (a.faction !== FACTION.CIVILIAN && a.faction !== FACTION.ARMED) continue;
+      if (!this.rng.chance(this.P.lastStand.hearChance)) { missed++; continue; }
+      heard++;
+      if (a.stayPut) {
+        // officers already on the top deck: some step out into the corridor
+        // and join the marines' line
+        if (this.rng.chance(this.P.lastStand.officerJoinChance)) { a.fallbackNode = line; a.stayPut = false; }
+      } else {
+        a.fallbackNode = shelters[a.id % shelters.length];
+      }
+    }
+    this.log('radio', `${heard} souls heard the call; ${missed} are still out there`);
   }
 
   _expireCalls() {

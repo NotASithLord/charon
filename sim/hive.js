@@ -16,6 +16,7 @@ export const TASK = {
   DRAG: 'drag',            // {corpseId, node} haul carrier food
   AMBUSH: 'ambush',        // {linkIdx, end} lie in wait mid-shaft
   BAIT: 'bait',            // {squadId, shaftIdx} get seen, retreat through shaft
+  DECOY: 'decoy',          // {show, stage} get seen far from the dens, then evade
   ATTACK: 'attack',        // {node} open aggression (rampage)
   SCOUT: 'scout',          // {node} refresh a lost belief — costs forms to look
 };
@@ -428,6 +429,34 @@ export class Hive {
       }
     }
 
+    // DECOY (user note): during the opening, one combat form runs AWAY from
+    // the den sites to get itself seen — luring the sweep and triggering
+    // radio calls somewhere the carriers aren't, then slipping into evade.
+    // Buying time is worth one form's risk.
+    if (!this.decoySent && combat.length >= 3) {
+      this.decoySent = true;
+      const decoy = combat.find((c) => !c.task || c.task.kind === TASK.GUARD);
+      if (decoy) {
+        // show node: reachable, far from every den, toward believed humans
+        let show = -1, bestScore = -Infinity;
+        for (const n of g.nodes) {
+          const d = g.hops(decoy.node, n.idx, ['std', 'shaft'], this.bigPass);
+          if (d === -1 || d < 2 || d > 5) continue;
+          let minDen = Infinity;
+          for (const den of dens) {
+            const dd = g.hops(n.idx, den, ['std', 'shaft'], this.bigPass);
+            if (dd !== -1) minDen = Math.min(minDen, dd);
+          }
+          const score = Math.min(minDen, 6) * 1.0 + this.believedHumanStr[n.idx] * 1.5 - d * 0.2;
+          if (score > bestScore) { bestScore = score; show = n.idx; }
+        }
+        if (show !== -1) {
+          this.assign(decoy, { kind: TASK.DECOY, show, stage: 0 });
+          sim.log('bait', `a combat form breaks cover toward ${g.node(show).name} — drawing the sweep off the dens`);
+        }
+      }
+    }
+
     // START PRODUCTION: root a couple of the initial combat forms into
     // carriers at quiet dens (carriers are converted combat forms — user
     // economy). It's a carrier rush (§13.4), and a carrier mints its first
@@ -600,16 +629,45 @@ export class Hive {
         this.assign(f, { kind: TASK.SCOUT, node: sim.rng.int(g.n) });
         continue;
       }
-      // default: hoard near a carrier (this reads as "hiding")
-      const home = carriers.length ? carriers[f.id % carriers.length].node : this.carrierSite;
-      if (home !== -1 && f.node !== home) {
-        this.assign(f, { kind: TASK.MOVE, node: this.scatterNode(home, f.id, 'infection') });
+      // NO IDLING (user note): an infection form with nothing better to do is
+      // wasted currency. It speeds toward the closest known corpse or believed
+      // civilian and stages there as a pack — the swarm forms where the food is.
+      const rally = this.nearestFoodNode(f);
+      if (rally !== -1 && f.node !== rally) {
+        this.assign(f, { kind: TASK.MOVE, node: rally, rally: true });
+      } else if (rally === -1 && carriers.length) {
+        this.assign(f, { kind: TASK.MOVE, node: this.scatterNode(carriers[f.id % carriers.length].node, f.id, 'infection') });
+      }
+    }
+
+    // 5b. pack escorts (user note): infection forms travel in packs, and a
+    //     pack moving with combat forms converts more reliably. For every ~3
+    //     forms rallying on a node, peel one spare combat form to escort it.
+    {
+      const rallyCounts = new Map();
+      for (const f of infection) {
+        if (f.task?.kind === TASK.MOVE && f.task.rally) {
+          rallyCounts.set(f.task.node, (rallyCounts.get(f.task.node) || 0) + 1);
+        }
+      }
+      for (const [node, count] of rallyCounts) {
+        const want = Math.floor(count / P.swarm.escortPer);
+        if (want < 1) continue;
+        const escorts = combat.filter((c) => c.task?.kind === TASK.GUARD && c.task.node === node).length;
+        if (escorts >= want) continue;
+        const free = combat.filter((c) => !c.task);
+        const e = this.nearest(free, node, ['std', 'shaft'], this.bigPass);
+        if (e) this.assign(e, { kind: TASK.GUARD, node });
       }
     }
 
     // 6. bait (§6.4): healthy military + a tracked squad + a shaft on their
     //    predicted path. Gated on reserve health, with a cooldown.
     if (C >= 4 && S <= 1.3 && sim.t >= this.baitCooldownUntil) this.tryBait(combat);
+
+    // 6b. squad-wipe (user note): an isolated squad the hive can hit 2:1
+    //     gets hit NOW, losses accepted, while a reserve exists elsewhere.
+    this.trySquadWipe(infection, combat, carriers, I);
 
     // 7. spare combat forms HUNT civilians for bodies while steering clear of
     //    marines (user note): they are the hive's body-harvesters. A combat
@@ -788,6 +846,76 @@ export class Hive {
       if (score > bestScore) { bestScore = score; best = n.idx; }
     }
     return best;
+  }
+
+  // Closest thing an infection form can eat or convert: a corpse, or a
+  // believed civilian position. Skips marine-held ground.
+  nearestFoodNode(form) {
+    const sim = this.sim;
+    let best = -1, bestD = Infinity;
+    for (const b of sim.agents) {
+      if (b.dead || b.faction !== FACTION.CORPSE || b.damage >= 100) continue;
+      if (this.believedHardness[b.node] > 0.5) continue;
+      const d = sim.graph.hops(form.node, b.node, ['std', 'vent'], this.infectionPass);
+      if (d !== -1 && d < bestD) { bestD = d; best = b.node; }
+    }
+    for (const [id, bel] of this.beliefs) {
+      const h = sim.byId.get(id);
+      if (!h || h.dead || h.hp <= 0 || h.faction === FACTION.MARINE || bel.conf < 0.3) continue;
+      if (this.believedHardness[bel.node] > 0.5) continue;
+      const d = sim.graph.hops(form.node, bel.node, ['std', 'vent'], this.infectionPass);
+      if (d !== -1 && d < bestD) { bestD = d; best = bel.node; }
+    }
+    return best;
+  }
+
+  // §swarm-kill (user note): an ISOLATED squad the hive can muster 2:1 on
+  // gets hit immediately, losses accepted, as long as the hive keeps a
+  // reserve (forms or a carrier) elsewhere. Eliminating the main threat is
+  // worth trading currency for.
+  trySquadWipe(infection, combat, carriers, I) {
+    const sim = this.sim, g = sim.graph, P = sim.P.swarm;
+    if (sim.t < (this.squadWipeCooldownUntil ?? 0)) return;
+    for (const squad of sim.squads) {
+      if (squad.broken) continue;
+      const members = squad.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
+      if (!members.length) continue;
+      const leader = members[0];
+      const bel = this.beliefs.get(leader.id);
+      if (!bel || bel.conf < 0.6) continue; // must have a solid fix
+      // isolated: no OTHER squad believed within isolationHops
+      let isolated = true;
+      for (const other of sim.squads) {
+        if (other === squad || other.broken) continue;
+        const oLeader = sim.byId.get(other.members[0]);
+        if (!oLeader || oLeader.dead) continue;
+        const ob = this.beliefs.get(oLeader.id);
+        if (!ob || ob.conf < 0.3) continue;
+        const d = g.hops(bel.node, ob.node, ['std'], humanPass);
+        if (d !== -1 && d <= P.isolationHops) { isolated = false; break; }
+      }
+      if (!isolated) continue;
+      // muster: every form within musterHops
+      const squadW = members.length;
+      const muster = [];
+      let musterW = 0;
+      for (const f of [...combat, ...infection]) {
+        if (f.task?.kind === TASK.TRANSFORM) continue;
+        const d = g.hops(f.node, bel.node, ['std', 'shaft', 'vent'],
+          f.faction === FACTION.INFECTION ? this.infectionPass : this.bigPass);
+        if (d !== -1 && d <= P.musterHops) { muster.push(f); musterW += f.faction === FACTION.COMBAT ? 1 : 0.25; }
+      }
+      // reserve rule: only trade the swarm for marines if the hive keeps a
+      // future (a carrier or a pool) somewhere else
+      const reserveOk = carriers.length > 0 || I - muster.filter((m) => m.faction === FACTION.INFECTION).length >= 0
+        ? (carriers.length > 0 || I >= P.reserveForms) : false;
+      if (musterW >= squadW * P.killRatio && reserveOk && muster.length) {
+        for (const f of muster) this.assign(f, { kind: TASK.ATTACK, node: bel.node });
+        this.squadWipeCooldownUntil = sim.t + 45;
+        sim.log('rampage', `the hive springs on isolated squad ${squad.id + 1} in ${g.node(bel.node).name} (${muster.length} forms, ${musterW.toFixed(1)}:${squadW} odds)`);
+        return;
+      }
+    }
   }
 
   nearestBelievedHuman(from) {

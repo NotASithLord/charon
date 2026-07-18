@@ -10,6 +10,14 @@ import { humanPass, marinePass } from './graph.js';
 export function updateHumansTick(sim, dt) {
   for (const a of sim.agents) {
     if (a.dead || a.hp <= 0) continue;
+    // last-stand fallback: survivors who heard the call make for the command
+    // deck whenever they aren't actively fighting or fleeing something seen
+    if (a.fallbackNode !== undefined && a.node !== a.fallbackNode
+      && a.faction !== FACTION.MARINE
+      && a.state !== STATE.FIGHT && !a.move && !a.path.length
+      && floodThreatVisible(sim, a) === 0) {
+      if (sim.setPathTo(a, a.fallbackNode, ['std'], humanPass)) a.state = STATE.MOVE;
+    }
     if (a.faction === FACTION.CIVILIAN) updateCivilian(sim, a, dt);
     else if (a.faction === FACTION.ARMED) updateArmed(sim, a, dt);
     else if (a.faction === FACTION.MARINE) updateMarineTick(sim, a, dt);
@@ -78,7 +86,7 @@ function updateCivilian(sim, a, dt) {
       } else if (a.panicked && !a.move) {
         // a panicked bystander bolts even without a direct sighting
         a.state = STATE.FLEE; a.hideTimer = 0; a.fleeSteps = 0;
-      } else if (a.worker && !a.move && !a.path.length && sim.rng.chance(P.civilian.workMoveChancePerSec * dt)) {
+      } else if (a.worker && a.fallbackNode === undefined && !a.move && !a.path.length && sim.rng.chance(P.civilian.workMoveChancePerSec * dt)) {
         // the ~20% still working the ship move with purpose between their
         // station and the systems that need tending (user note). They flee
         // like anyone else the moment they see the Flood.
