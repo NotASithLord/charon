@@ -9,8 +9,8 @@ import { humanPass } from './graph.js';
 export const TASK = {
   MOVE: 'move',            // {node}
   GRAB: 'grab',            // {targetId}
-  CONVERT: 'convert',      // {corpseId} corpse -> combat form (costs the form)
-  SEAT: 'seat',            // {corpseId} corpse -> carrier (costs the body only)
+  CONVERT: 'convert',      // {corpseId} infection form + body -> combat form (form spent)
+  TRANSFORM: 'transform',  // combat form roots into a carrier (the hive's ratio lever)
   GUARD: 'guard',          // {node} defend a carrier
   REANIMATE: 'reanimate',  // {targetId} downed combat form
   DRAG: 'drag',            // {corpseId, node} haul carrier food
@@ -163,12 +163,11 @@ export class Hive {
   }
 
   ventWatched(link) {
+    // a vent is only watched from the two rooms it connects — a shooter has
+    // to be at the grating to see through it (user note). No adjacency bleed.
     let w = 0;
     for (const end of [link.a, link.b]) {
       w += this.believedHardness[end] + this.believedHumanStr[end] * 0.5;
-      for (const { to } of this.sim.graph.neighbors(end, ['std'], () => true)) {
-        w += this.believedHardness[to] * 0.5; // motion tracker range 1 hop
-      }
     }
     return Math.min(1, w);
   }
@@ -429,16 +428,28 @@ export class Hive {
       }
     }
 
-    // seat a carrier at EVERY quiet den that has a body and a spare form —
-    // the whole opening is a carrier rush (§13.4), so use the crash corpses
-    // early rather than hoarding forms (user note: bodies ignored until late)
+    // START PRODUCTION: root a couple of the initial combat forms into
+    // carriers at quiet dens (carriers are converted combat forms — user
+    // economy). It's a carrier rush (§13.4), and a carrier mints its first
+    // form within seconds, so this stands up production immediately while the
+    // rest of the combat forms guard.
+    const carriersNow = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CARRIER).length;
+    let transforming = combat.filter((c) => c.task?.kind === TASK.TRANSFORM).length;
+    const wantCarriers = Math.min(dens.length, 2);
+    for (const den of dens) {
+      if (carriersNow + transforming >= wantCarriers) break;
+      if (this.localThreat(den) >= 0.6) continue;
+      if (sim.agents.some((a) => !a.dead && a.faction === FACTION.CARRIER && a.node === den)) continue;
+      const cf = combat.find((c) => c.node === den && !c.move && (!c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.DRAG));
+      if (cf) { this.assign(cf, { kind: TASK.TRANSFORM }); transforming++; }
+    }
+    // and keep the military up: an infection form sitting on a den body turns
+    // it into a fresh combat form to replace the ones that just rooted
     for (const den of dens) {
       if (this.localThreat(den) >= 0.6) continue;
-      const carrierHere = sim.agents.some((a) => !a.dead && a.faction === FACTION.CARRIER && a.node === den);
-      if (carrierHere) continue;
       const feed = bodies.find((b) => b.node === den && !b.claimed);
       const former = infection.find((f) => f.node === den && (!f.task || f.task.kind === TASK.MOVE));
-      if (feed && former) { feed.claimed = true; this.assign(former, { kind: TASK.SEAT, corpseId: feed.id }); }
+      if (feed && former && combat.length < 4) { feed.claimed = true; this.assign(former, { kind: TASK.CONVERT, corpseId: feed.id }); }
     }
   }
 
@@ -486,16 +497,21 @@ export class Hive {
       sim.log('rampage', `flood pockets go loud where the crew is undefended (${rampaging.size} region(s))`);
     }
 
-    // 2. carriers: enough to snowball (§13.4 needs K>=2), scaling with the
-    //    army — NOT with body count, or the hive just builds carriers forever
-    //    and never harvests. Once production is up, forms hunt instead.
+    // 2. carrier production is the RATIO LEVER (user economy): a spare combat
+    //    form roots into a carrier. Target enough carriers to snowball
+    //    (§13.4 needs K>=2), scaling with the force; only spend a combat form
+    //    on it when there's a genuine surplus (still >=1 combat per carrier),
+    //    and only in a safe, defensible node spread from the other carriers.
     const wantK = Math.min(4, 2 + Math.floor((I + C) / 22));
-    if (K < wantK && bodies.length > 0) {
-      const site = this.pickCarrierSite(bodies);
-      if (site) {
-        const free = infection.filter((f) => !f.task);
-        const former = this.nearest(free, site.corpse.node, ['std', 'vent'], this.infectionPass);
-        if (former) { site.corpse.claimed = true; this.assign(former, { kind: TASK.SEAT, corpseId: site.corpse.id }); }
+    if (K < wantK && C > K) {
+      const target = this.bestCarrierNode();
+      if (target !== -1) {
+        const spares = combat.filter((c) => !c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.ATTACK);
+        const c = this.nearest(spares, target, ['std', 'shaft'], this.bigPass);
+        if (c) {
+          if (c.node === target && !c.move && this.localThreat(target) < 0.5) this.assign(c, { kind: TASK.TRANSFORM });
+          else this.assign(c, { kind: TASK.GUARD, node: target }); // stage it there; it roots next round
+        }
       }
     }
 
@@ -522,34 +538,24 @@ export class Hive {
       if (target !== -1) this.assign(f, { kind: TASK.ATTACK, node: target });
     }
 
-    // 5. grabs & conversions for idle infection forms (§6.5 priority order
-    //    emerges from the value table, taxed by scarcity)
-    const U_convert = P.hive.militaryValue - S * 1.0;
+    // 5. idle infection forms turn bodies into combat forms and hunt the crew
+    //    (§6.5 priority). Building the combat force is what feeds BOTH defense
+    //    and carrier production (a carrier is a rooted combat form), so the
+    //    hive keeps making them up to a target that covers guards + hunters +
+    //    the carriers it still wants to grow into.
+    const wantC = Math.min(14, guardsWanted * K + 4 + Math.max(0, wantK - K));
     let convertsAssigned = 0;
-    let seats = K; // carriers standing + seatings queued this round
     for (const f of infection) {
       if (f.task) continue;
-      // GROW FIRST: while below the carrier target and bodies are lying
-      // around, an idle form seats a carrier on the nearest quiet body
-      // instead of hoarding — production is the whole game (§13.4), and it
-      // means the crash corpses get used from the start, not late (user note)
-      if (seats < wantK) {
-        const body = this.nearestSeatBody(f, bodies);
-        if (body) { body.claimed = true; seats++; this.assign(f, { kind: TASK.SEAT, corpseId: body.id }); continue; }
-      }
-      // military when the army is thin and currency is cheap — grabs can't
-      // touch marines (§6.5), combat forms can
-      if (C + convertsAssigned < 3 && U_convert > 0 && bodies.length > 3) {
+      // GROW THE FORCE: an idle form near a body turns it into a combat form
+      // (form + body -> combat form) while the force is below target. Uses the
+      // crash corpses from the start, not late (user note).
+      if (C + convertsAssigned < wantC && bodies.length > 2) {
         const body = this.nearestBody(f, bodies);
-        if (body) { convertsAssigned++; this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
+        if (body) { body.claimed = true; convertsAssigned++; this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
       }
       const grab = this.bestGrab(f, riskAversion, null, S);
       if (grab) { this.assign(f, grab); continue; }
-      // corpse -> combat form only when currency is cheap (scarcity tax)
-      if (U_convert > 0 && bodies.length > 3) {
-        const body = this.nearestBody(f, bodies);
-        if (body) { this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
-      }
       // reanimate a downed form: cheaper than a fresh conversion (§13.3)
       const downed = sim.agents.find((d) => !d.dead && d.faction === FACTION.COMBAT && d.downed && d.damage < 100 && !d.claimed);
       if (downed && 2.0 - S * 1.0 > 0) {
@@ -636,34 +642,30 @@ export class Hive {
     return best;
   }
 
-  pickCarrierSite(bodies) {
+  // Best node to root a new carrier: quiet, defensible, near our own mass,
+  // and spread from existing carriers so production isn't one clearable cluster.
+  bestCarrierNode() {
     const g = this.sim.graph;
-    // existing carrier nodes — new carriers should spread AWAY from these so
-    // the infection isn't one cluster the marines can sweep out in a single
-    // pass (user note: it over-concentrates). Growth = spreading territory.
     const carrierNodes = this.sim.agents
       .filter((a) => !a.dead && a.faction === FACTION.CARRIER).map((a) => a.node);
-    let best = null, bestScore = -Infinity;
-    for (const b of bodies) {
-      if (b.claimed) continue;
-      if (g.burningUntil[b.node] > this.sim.t) continue;
-      const threat = this.localThreat(b.node);
-      if (threat > 0.6) continue; // never seat a carrier in a hot zone
-      let score = -threat * 3 + this.sim.influence.floodStr[b.node] * 0.5;
-      if (g.hasRole(b.node, 'corpse_cache')) score += 1;
-      if (this.exitCount(b.node) < 2) score -= 2;
-      score += Math.min(this.garrisonDist[b.node] === -1 ? 4 : this.garrisonDist[b.node], 4) * 0.3;
-      score -= this.trafficPenalty(b.node) * 0.4;
-      // reward distance from the nearest existing carrier (spread out)
+    let best = -1, bestScore = 0.2; // need a genuinely good spot
+    for (const n of g.nodes) {
+      const idx = n.idx;
+      if (g.burningUntil[idx] > this.sim.t) continue;
+      if (this.localThreat(idx) > 0.4) continue;
+      if (this.exitCount(idx) < 2) continue;
+      let score = this.sim.influence.floodStr[idx] * 0.6;   // near our own forms
+      if (n.roles.includes('maintenance') || n.roles.includes('cargo') || n.roles.includes('corpse_cache')) score += 1;
+      if (n.type === 'corridor' || n.type === 'open') score -= 1.5;
+      score -= this.trafficPenalty(idx) * 0.5;
+      score += Math.min(this.garrisonDist[idx] === -1 ? 4 : this.garrisonDist[idx], 4) * 0.25;
       if (carrierNodes.length) {
         let near = Infinity;
-        for (const cn of carrierNodes) {
-          const d = g.hops(b.node, cn, ['std', 'shaft'], this.bigPass);
-          if (d !== -1) near = Math.min(near, d);
-        }
-        if (near !== Infinity) score += Math.min(near, 5) * 0.6;
+        for (const cn of carrierNodes) { const d = g.hops(idx, cn, ['std', 'shaft'], this.bigPass); if (d !== -1) near = Math.min(near, d); }
+        if (near === 0) continue;                 // already a carrier here
+        if (near !== Infinity) score += Math.min(near, 5) * 0.5;
       }
-      if (score > bestScore) { bestScore = score; best = { corpse: b } }
+      if (score > bestScore) { bestScore = score; best = idx; }
     }
     return best;
   }
@@ -716,21 +718,6 @@ export class Hive {
     let best = null, bestD = Infinity;
     for (const b of bodies) {
       if (b.claimed) continue;
-      const d = this.sim.graph.hops(form.node, b.node, ['std', 'vent'], this.infectionPass);
-      if (d !== -1 && d < bestD) { bestD = d; best = b; }
-    }
-    return best;
-  }
-
-  // nearest unclaimed body sitting in a quiet, defensible node — a place a
-  // carrier could actually survive incubation
-  nearestSeatBody(form, bodies) {
-    let best = null, bestD = Infinity;
-    for (const b of bodies) {
-      if (b.claimed) continue;
-      if (this.localThreat(b.node) >= 0.6) continue;
-      if (this.exitCount(b.node) < 2) continue;
-      if (this.sim.graph.burningUntil[b.node] > this.sim.t) continue;
       const d = this.sim.graph.hops(form.node, b.node, ['std', 'vent'], this.infectionPass);
       if (d !== -1 && d < bestD) { bestD = d; best = b; }
     }

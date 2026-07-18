@@ -129,8 +129,15 @@ Deviations from the spec's starter numbers, all in the "adjust freely" space it 
   every opening a death march across the corridor spine.
 - Marine complement ~15 (of 140 souls) — the ship is running light, per the scenario.
 - Squads berth in crew spaces (never in crash-candidate holds) so the outbreak isn't spawn-camped.
-- Carrier production has backpressure (stops minting at ≥110 live forms) to respect the
+- Carrier production has backpressure (stops minting above ~130 live forms) to respect the
   512-capacity agent buffer.
+- **Economy chain** (refined from §13's carrier-costs-a-body model): an infection form + a body
+  makes a **combat form** (the form is spent), and a **combat form roots into a carrier** — so
+  carriers are converted combat forms and the hive picks the combat:carrier ratio by need
+  (defense/hunting vs production). A carrier mints its first infection form within seconds of
+  forming, independent of whether it's relocating. Nothing spawns without consuming its inputs.
+- Vent exposure is strictly line-of-grating: an infection form moving through a vent can only be
+  seen/shot by someone standing in one of the two rooms the vent actually connects.
 
 ## Open decisions (§12) — current POC behavior
 

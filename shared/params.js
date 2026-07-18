@@ -24,10 +24,13 @@ export const PARAMS = {
   },
   carrier: {
     incubationIntervalSec: 15, // PLACEHOLDER (T_inc)
+    firstIncubationSec: 6,     // first form comes quickly — minting starts the moment it forms
     maxInfectionForms: 8,      // stated 7-8 (M)
     seekOrExplodeFraction: 0.85,
     explodeRelease: 3,         // forms released on detonation
     explodeDamage: 20,         // to humans in node
+    transformSec: 4,           // time for a combat form to root into a carrier
+    productionBackpressure: 130, // pause minting above this many live infection forms
   },
   combatForm: {
     selfReviveChance: 0.25,    // stated

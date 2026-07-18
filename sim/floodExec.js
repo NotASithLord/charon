@@ -59,7 +59,7 @@ export function updateFloodTick(sim, dt) {
     // fight for combat.js, not a grab). This is what stops a civilian from
     // strolling through a den of carriers and forms untouched (user note).
     if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0
-      && a.task?.kind !== TASK.SEAT && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
+      && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
       const here = sim.occupants(a.node);
       const guns = here.some((h) => h.hp > 0 && !h.dead &&
         (h.faction === FACTION.MARINE || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT)));
@@ -134,22 +134,22 @@ export function updateFloodTick(sim, dt) {
         break;
       }
 
-      case TASK.SEAT: {
-        const body = sim.byId.get(t.corpseId);
-        if (!body || body.dead || body.damage >= 100) { a.task = null; break; }
-        if (a.node === body.node && !a.move) {
-          a.taskProgress += dt;
-          if (a.taskProgress >= 5) {
-            body.dead = true;
-            const carrier = makeAgent(FACTION.CARRIER, a.node, sim.graph);
-            carrier.hp = carrier.maxHp = sim.P.combat.carrierHp;
-            carrier.state = STATE.INCUBATING;
-            sim.spawn(carrier);
-            a.task = { kind: TASK.GUARD, node: a.node }; // form survives: FormCost 0 (§13.3)
-            sim.stats.carriersSeated++;
-            sim.log('carrier', `a carrier takes root in ${sim.graph.node(a.node).name} — incubation begins`);
-          }
-        } else moveToward(sim, a, body.node, hive.safeInfectionPath.bind(hive));
+      case TASK.TRANSFORM: {
+        // a combat form roots itself into a carrier (user economy: carriers
+        // are converted combat forms, and the hive picks the ratio). Do it in
+        // place — the hive only assigns this to a form already in a safe den.
+        if (a.faction !== FACTION.COMBAT || a.downed) { a.task = null; break; }
+        if (a.move) break;
+        a.taskProgress += dt;
+        if (a.taskProgress >= sim.P.carrier.transformSec) {
+          const carrier = makeAgent(FACTION.CARRIER, a.node, sim.graph);
+          carrier.hp = carrier.maxHp = sim.P.combat.carrierHp;
+          carrier.state = STATE.INCUBATING;
+          sim.spawn(carrier);
+          sim.removeAgent(a); // the combat form BECOMES the carrier
+          sim.stats.carriersSeated++;
+          sim.log('carrier', `a combat form roots into a carrier in ${sim.graph.node(a.node).name} — incubation begins`);
+        }
         break;
       }
 
@@ -240,12 +240,16 @@ export function spawnCombatForm(sim, node) {
 function updateCarrier(sim, a, dt) {
   const P = sim.P;
   if (a.hp <= 0 || a.dead) return;
+  // Minting runs the moment the carrier forms and is INDEPENDENT of whether
+  // it's relocating/hiding (user note) — the timer always advances, so a
+  // carrier being dragged to safety keeps gestating.
   a.mintTimer += dt;
-  // production backpressure: a hive drowning in forms stops incubating
+  // production backpressure: a hive drowning in forms pauses incubating
   // (also keeps the agent buffer within its 512 capacity)
-  if (sim.agents.reduce((n, x) => n + (!x.dead && x.faction === FACTION.INFECTION ? 1 : 0), 0) >= 110) return;
-  // §6.6: mints ~1 infection form per interval up to the cap, then is spent
-  if (a.mintTimer >= P.carrier.incubationIntervalSec) {
+  if (sim.agents.reduce((n, x) => n + (!x.dead && x.faction === FACTION.INFECTION ? 1 : 0), 0) >= P.carrier.productionBackpressure) return;
+  // §6.6: first form comes quickly, then ~1 per interval up to the cap
+  const due = a.minted === 0 ? P.carrier.firstIncubationSec : P.carrier.incubationIntervalSec;
+  if (a.mintTimer >= due) {
     a.mintTimer = 0;
     a.minted++;
     const f = makeAgent(FACTION.INFECTION, a.node, sim.graph);

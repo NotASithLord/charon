@@ -19,18 +19,18 @@ export function resolveCombat(sim, dt) {
     g.push(a);
   }
 
-  // --- vent exposure (§7): moving infection forms are free kills if watched ---
+  // --- vent exposure (§7): a moving infection form can only be seen/shot by
+  // someone standing in ONE OF THE TWO ROOMS THE VENT ACTUALLY CONNECTS —
+  // not from an adjacent compartment (user note). You have to be at the
+  // grating to see through it.
   for (const a of sim.agents) {
     if (a.dead || a.faction !== FACTION.INFECTION || !a.move || a.move.layer !== 'vent') continue;
     const link = a.move.link;
     let watched = false;
     for (const end of [link.a, link.b]) {
-      for (const n of sim.nodesNear(end, P.motionTracker.rangeHops)) {
-        if (sim.occupants(n).some((h) => (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED) && h.hp > 0)) {
-          watched = true; break;
-        }
+      if (sim.occupants(end).some((h) => (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED) && h.hp > 0)) {
+        watched = true; break;
       }
-      if (watched) break;
     }
     if (watched && sim.rng.chance(P.hive.ventKillProbPerSec * dt)) {
       sim.removeAgent(a);
