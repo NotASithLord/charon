@@ -90,9 +90,9 @@ export function updateFloodTick(sim, dt) {
           let mayEat = true;
           if (hive.opening) {
             // even with no fix on the marines, the hive assumes a sweep is
-            // coming — the smash-and-grab window closes at ~30s regardless
+            // coming — it budgets 45 seconds of smash-and-grab, then runs
             const timeLeft = hive.sweepEtaSec === Infinity ? 999 : hive.sweepEtaSec;
-            if (timeLeft < 25 || sim.t > 30) mayEat = false;
+            if (timeLeft < 25 || sim.t > 45) mayEat = false;
             else {
               const eating = here.reduce((n, x) => n +
                 (x.faction === FACTION.INFECTION && x.task?.kind === TASK.CONVERT ? 1 : 0), 0);
