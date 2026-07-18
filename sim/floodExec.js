@@ -109,7 +109,9 @@ export function updateFloodTick(sim, dt) {
         break;
 
       case TASK.ATTACK:
-        moveToward(sim, a, t.node);
+        // no direct-route fallback on an assault: if the objective can't be
+        // reached without crossing a DIFFERENT gun line, the attack is off
+        moveToward(sim, a, t.node, (from, to) => hive.safeAssaultPath(from, to));
         // open aggression is a hunt, not a post: if the room is empty but
         // prey is visible next door, PRESS THE ATTACK into that room (this
         // is what left forms standing in a cleared room forever, staring at
@@ -298,7 +300,11 @@ function moveToward(sim, a, node, pathFn = null) {
   let path;
   if (pathFn) path = pathFn(a.node, node);
   else if (a.faction === FACTION.INFECTION) path = hive.safeInfectionPath(a.node, node);
-  else path = sim.graph.path(a.node, node, ['std', 'shaft'], hive.bigPass);
+  // combat forms route AROUND remembered gun lines — the plain shortest path
+  // marched every form transiting near the last stand straight through it,
+  // one at a time (fall back to the direct route only when there is none)
+  else path = hive.safeAssaultPath(a.node, node)
+    ?? sim.graph.path(a.node, node, ['std', 'shaft'], hive.bigPass);
   if (path && path.length) sim.setPath(a, path);
   else if (!path) a.task = null; // believed-unreachable; hive will reassign
 }

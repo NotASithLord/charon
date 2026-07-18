@@ -207,6 +207,19 @@ export class Hive {
   }
   safeInfectionPath(from, to) { return this.stealthPath(from, to, 'infection'); }
 
+  // Combat-form route that never cuts THROUGH a remembered gun line: any
+  // intermediate node with real believed hardness is off-limits (only the
+  // destination itself may be hard — that's the assault). Walking the muster
+  // through the last-stand corridor was how forms trickled in one at a time.
+  safeAssaultPath(from, to) {
+    const pass = (l, a, b) => {
+      if (!this.bigPass(l, a, b)) return false;
+      if (b !== from && b !== to && this.believedHardness[b] > 0.7) return false;
+      return true;
+    };
+    return this.sim.graph.path(from, to, ['std', 'shaft'], pass);
+  }
+
   // --- sweep ETA (§6.7/§13.5): a belief, not ground truth ---
   estimateSweepEta() {
     const sim = this.sim;
@@ -320,6 +333,9 @@ export class Hive {
       // evade/rampage yank was why the hive stopped producing carriers
       if (f.task?.kind === TASK.AMBUSH || f.task?.kind === TASK.BAIT || f.task?.kind === TASK.ATTACK
         || f.task?.kind === TASK.TRANSFORM) continue;
+      // a form staged for a muster holds its ground — the gathering point is
+      // deliberately near the target, and evade would bleed the muster dry
+      if (f.task?.kind === TASK.GUARD && f.task.muster !== undefined) continue;
       const threat = this.localThreat(f.node);
       const own = sim.influence.floodStr[f.node];
       if (threat > Math.max(own, 0.8)) {
@@ -621,10 +637,15 @@ export class Hive {
       const target = this.nearestBelievedHuman(f.node);
       if (target === -1) continue;
       const defense = this.believedHumanStr[target] + this.believedHardness[target];
-      if (defense > 0.8 && this.musterStrength(target, P.swarm.musterHops) < defense * P.swarm.killRatio) {
+      if (defense > 0.8) {
+        // a defended position is NEVER attacked piecemeal: every form stages
+        // first, and step 4b launches the whole muster together once the
+        // gathered mass clears the ratio
         const stage = this.stagingNodeNear(target);
         if (stage !== -1) {
-          this.assign(f, { kind: TASK.GUARD, node: stage });
+          const until = (f.task?.kind === TASK.GUARD && f.task.muster === target)
+            ? f.task.until : sim.t + 90;
+          this.assign(f, { kind: TASK.GUARD, node: stage, muster: target, until });
           if (sim.t >= (this._musterLogAt ?? 0)) {
             this._musterLogAt = sim.t + 30;
             sim.log('hive', `the hive masses outside ${g.node(target).name} — waiting for the numbers`);
@@ -635,26 +656,47 @@ export class Hive {
       this.assign(f, { kind: TASK.ATTACK, node: target });
     }
 
+    // 4b. LAUNCH THE MUSTER (user rule): staged forms go in TOGETHER once
+    //     the mass that has actually ARRIVED at the staging ground clears
+    //     killRatio against the believed defense — never one at a time. A
+    //     muster that can't fill in 90s gives its forms back to the economy.
+    {
+      const staged = new Map(); // target -> staged combat forms
+      for (const f of combat) {
+        const t = f.task;
+        if (t?.kind !== TASK.GUARD || t.muster === undefined) continue;
+        if (sim.t > t.until) { f.task = null; continue; }
+        if (!staged.has(t.muster)) staged.set(t.muster, []);
+        staged.get(t.muster).push(f);
+      }
+      for (const [target, forms] of staged) {
+        const defense = this.believedHumanStr[target] + this.believedHardness[target];
+        const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
+        if (defense <= 0.8 || arrived >= defense * P.swarm.killRatio) {
+          for (const f of forms) this.assign(f, { kind: TASK.ATTACK, node: target });
+          sim.log('rampage', `the muster is up — ${forms.length} forms storm ${g.node(target).name} together`);
+        }
+      }
+    }
+
     // 5. idle infection forms turn bodies into combat forms and hunt the crew
-    //    (§6.5 priority). Building the combat force is what feeds BOTH defense
-    //    and carrier production (a carrier is a rooted combat form), so the
-    //    hive keeps making them up to a target that covers guards + hunters +
-    //    the carriers it still wants to grow into.
-    const wantC = Math.min(14, guardsWanted * K + 4 + Math.max(0, wantK - K));
-    let convertsAssigned = 0;
+    //    (§6.5 priority). Conversion is UNCAPPED (user rule): every safe
+    //    corpse on the ship is a guaranteed combat form, and the combat force
+    //    is what fills the musters and roots into carriers.
     for (const f of infection) {
       if (f.task) continue;
-      // GROW THE FORCE: an idle form near a body turns it into a combat form
-      // (form + body -> combat form) while the force is below target. Uses the
-      // crash corpses from the start, not late (user note).
-      if (C + convertsAssigned < wantC && bodies.length > 2) {
-        const body = this.nearestBody(f, bodies);
-        if (body) { body.claimed = true; convertsAssigned++; this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
-      }
+      // LOW-HANGING CORPSES FIRST (user rule): the ship is littered with
+      // bodies and every SAFE one is a guaranteed combat form — multiplying
+      // always beats hunting or marching on guns. The muster is built from
+      // corpses; nearestBody refuses bodies inside a remembered gun line.
+      const body = this.nearestBody(f, bodies);
+      if (body) { body.claimed = true; this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
       const grab = this.bestGrab(f, riskAversion, null, S);
       if (grab) { this.assign(f, grab); continue; }
-      // reanimate a downed form: cheaper than a fresh conversion (§13.3)
-      const downed = sim.agents.find((d) => !d.dead && d.faction === FACTION.COMBAT && d.downed && d.damage < 100 && !d.claimed);
+      // reanimate a downed form: cheaper than a fresh conversion (§13.3) —
+      // but not one lying in the marines' kill zone
+      const downed = sim.agents.find((d) => !d.dead && d.faction === FACTION.COMBAT && d.downed && d.damage < 100 && !d.claimed
+        && this.believedHardness[d.node] <= 0.5);
       if (downed && 2.0 - S * 1.0 > 0) {
         downed.claimed = true;
         this.assign(f, { kind: TASK.REANIMATE, targetId: downed.id });
@@ -846,6 +888,9 @@ export class Hive {
     let best = null, bestD = Infinity;
     for (const b of bodies) {
       if (b.claimed) continue;
+      // a corpse inside a remembered gun line isn't food, it's bait: eating
+      // it would stand a fresh combat form up straight into the kill zone
+      if (this.believedHardness[b.node] > 0.5 || this.localThreat(b.node) > 1.2) continue;
       const d = this.sim.graph.hops(form.node, b.node, ['std', 'vent'], this.infectionPass);
       if (d !== -1 && d < bestD) { bestD = d; best = b; }
     }
@@ -878,9 +923,10 @@ export class Hive {
       if (prior[n.idx] <= 0) continue;
       if (this.believedHardness[n.idx] > 0.5) continue;   // marines here — skip
       if (this.localThreat(n.idx) > 1.0) continue;        // garrison/armory area
-      const d = g.hops(from, n.idx, ['std', 'shaft'], this.bigPass);
-      if (d === -1 || d > 7) continue;
-      const score = prior[n.idx] - d * 0.3;
+      // prey you can only reach by walking through a gun line isn't prey
+      const p = this.safeAssaultPath(from, n.idx);
+      if (!p || p.length > 7) continue;
+      const score = prior[n.idx] - p.length * 0.3;
       if (score > bestScore) { bestScore = score; best = n.idx; }
     }
     return best;
@@ -988,9 +1034,10 @@ export class Hive {
       if (this.believedHumanStr[n] <= 0.05) continue;
       // rushing the garrison rooms in the first minute is suicide (user rule)
       if (this.sim.t < 60 && this.staticGarrison(n) > 0) continue;
-      const d = this.sim.graph.hops(from, n, ['std', 'shaft'], this.bigPass);
-      if (d === -1) continue;
-      const s = this.believedHumanStr[n] - d * 0.2;
+      // only targets reachable without marching through ANOTHER gun line
+      const p = this.safeAssaultPath(from, n);
+      if (!p) continue;
+      const s = this.believedHumanStr[n] - p.length * 0.2;
       if (s > bestScore) { bestScore = s; best = n; }
     }
     return best;
