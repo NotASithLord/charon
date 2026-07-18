@@ -82,6 +82,11 @@ export const PARAMS = {
     marineFraction: 0.3,   // when squad marines drop below this of start, fall back
     hearChance: 0.65,      // per-survivor roll to hear the fallback call
     officerJoinChance: 0.6,// stay-put officers who step out into the corridor line
+    armedJoinFraction: 0.8,// armed civilians who stand WITH the marines on the line
+  },
+  armory: {
+    selfArmChance: 0.25,   // chance an unarmed civilian runs for the armory once panic breaks out
+    stock: 10,             // rifles left on the rack — first come, first served
   },
   belief: {
     decayRatePerSec: 0.1,   // MASTER DIAL (lambda) — smart vs unfair

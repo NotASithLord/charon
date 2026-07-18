@@ -17,6 +17,22 @@ export function updateHumansTick(sim, dt) {
       && a.state !== STATE.FIGHT && !a.move && !a.path.length
       && floodThreatVisible(sim, a) === 0) {
       if (sim.setPathTo(a, a.fallbackNode, ['std'], humanPass)) a.state = STATE.MOVE;
+    } else if (a.armingUp !== undefined && a.fallbackNode === undefined
+      && a.faction === FACTION.CIVILIAN && a.state !== STATE.FIGHT
+      && !a.move && !a.path.length && floodThreatVisible(sim, a) === 0) {
+      // panic-driven armory run (user note): reach the rack, take a rifle
+      if (a.node === a.armingUp) {
+        const took = (sim.armoryStock ?? 0) > 0;
+        a.armingUp = undefined;
+        if (took) {
+          sim.armoryStock--;
+          a.faction = FACTION.ARMED;
+          a.hp = a.maxHp = Math.max(a.hp, sim.P.combat.armed.hp);
+          a.hasRadio = true;
+          sim.log('combat', `a civilian arms up at the armory (${sim.armoryStock} rifles left)`);
+        }
+      } else if (sim.setPathTo(a, a.armingUp, ['std'], humanPass)) a.state = STATE.MOVE;
+      else a.armingUp = undefined; // no safe route — give it up
     }
     if (a.faction === FACTION.CIVILIAN) updateCivilian(sim, a, dt);
     else if (a.faction === FACTION.ARMED) updateArmed(sim, a, dt);

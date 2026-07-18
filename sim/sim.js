@@ -204,6 +204,7 @@ export class Sim {
       this._computeInfluence();
       this.hive.strategicTick();
       strategicSquads(this);
+      this._checkSelfArming();
       this._checkLastStand();
       this.stats.conversionsRound = 0;
       this._expireCalls();
@@ -249,13 +250,38 @@ export class Sim {
       heard++;
       if (a.stayPut) {
         // officers already on the top deck: some step out into the corridor
-        // and join the marines' line
-        if (this.rng.chance(this.P.lastStand.officerJoinChance)) { a.fallbackNode = line; a.stayPut = false; }
+        // and join the marines' line (they keep holding once there)
+        if (this.rng.chance(this.P.lastStand.officerJoinChance)) a.fallbackNode = line;
+      } else if (a.faction === FACTION.ARMED) {
+        // 80% of the armed crew STAND WITH THE MARINES on the line (user
+        // note); the rest shepherd the civilians in the shelter rooms.
+        // Line-holders lock in: they fight in place and never rout.
+        if (this.rng.chance(this.P.lastStand.armedJoinFraction)) { a.fallbackNode = line; a.stayPut = true; }
+        else a.fallbackNode = shelters[a.id % shelters.length];
       } else {
         a.fallbackNode = shelters[a.id % shelters.length];
       }
     }
     this.log('radio', `${heard} souls heard the call; ${missed} are still out there`);
+  }
+
+  // Once panic breaks out shipwide (before any last stand), some unarmed
+  // civilians make a run for the armory and arm themselves — first come,
+  // first served on the remaining rifles (user note).
+  _checkSelfArming() {
+    if (this._armingRolled || !this.floodKnown) return;
+    this._armingRolled = true;
+    this.armoryStock = this.P.armory.stock;
+    const armory = this.graph.byId.get('armory');
+    let n = 0;
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || a.faction !== FACTION.CIVILIAN) continue;
+      if (a.helpless || a.stayPut) continue;
+      if (!this.rng.chance(this.P.armory.selfArmChance)) continue;
+      a.armingUp = armory;
+      n++;
+    }
+    if (n) this.log('radio', `word of the outbreak spreads — ${n} civilians make for the armory`);
   }
 
   _expireCalls() {
