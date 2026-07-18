@@ -137,7 +137,7 @@ export const PARAMS = {
   civilian: {
     fleeHearingHops: 1,        // only bolt from trouble this close (was ship-wide)
     workerFraction: 0.2,       // fraction still working the ship — they move with purpose
-    workMoveChancePerSec: 0.12,// how often an idle worker relocates to a task
+    workMoveChancePerSec: 0.03,// a work trip every ~30s, not constant lapping; halved once the outbreak is known
   },
   speed: { // edge-traversal multipliers (1.0 = base edge time)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.2,

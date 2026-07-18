@@ -62,10 +62,24 @@ function updateCivilian(sim, a, dt) {
   }
   const threat = floodThreatVisible(sim, a);
 
-  // panic contagion: seeing/hearing a panicked neighbor forces a panic roll
-  if (!a.panicked) {
+  // Panic EXPIRES (user note: no more running back and forth forever). Being
+  // panicked is a burst, not a permanent state — it lasts a few seconds past
+  // the last thing that scared them, then they go to ground.
+  if (threat > 0 && a.panicked) a.panicUntil = sim.t + 8;
+  if (a.panicked && sim.t > (a.panicUntil ?? 0) && threat === 0) a.panicked = false;
+
+  // panic contagion: SEEING a panicked neighbor can panic you — and it makes
+  // you bolt ONCE, right now, not stand up and jog laps later
+  if (!a.panicked && !a.stayPut) {
     for (const n of sim.visibleNodes(a.node)) {
-      if (sim.panickedAt(n) && sim.rng.chance(0.10 * dt * 15)) { a.panicked = true; break; }
+      if (sim.panickedAt(n) && sim.rng.chance(0.06 * dt * 15)) {
+        a.panicked = true;
+        a.panicUntil = sim.t + 8;
+        if (a.state === STATE.IDLE || a.state === STATE.HIDE) {
+          a.state = STATE.FLEE; a.hideTimer = 0; a.fleeSteps = 0;
+        }
+        break;
+      }
     }
   }
 
@@ -76,20 +90,20 @@ function updateCivilian(sim, a, dt) {
     case STATE.IDLE:
     case STATE.HIDE:
       // A calm civilian stays put. They move only when they actually SEE the
-      // Flood (or a panic sweeps the room) — no idle wandering (user note).
+      // Flood (or a fresh panic bolts them, handled above). No idle wandering,
+      // and NO re-bolting from a hiding spot on stale panic.
       if (threat > 0) {
         a.state = STATE.ALERT; a.alertTimer = floodHere ? 0 : 0.3;
-        if (sim.rng.chance(floodHere ? 0.9 : 0.4)) a.panicked = true;
+        if (sim.rng.chance(floodHere ? 0.9 : 0.4)) { a.panicked = true; a.panicUntil = sim.t + 8; }
         // point-blank contact you SCREAM (local noise), you don't calmly get
         // a coherent call out; a doorway sighting still radios normally
         maybeDistressCall(sim, a, P.radio.civilianCallReliability * (floodHere ? 0.25 : 1));
-      } else if (a.panicked && !a.move) {
-        // a panicked bystander bolts even without a direct sighting
-        a.state = STATE.FLEE; a.hideTimer = 0; a.fleeSteps = 0;
-      } else if (a.worker && a.fallbackNode === undefined && !a.move && !a.path.length && sim.rng.chance(P.civilian.workMoveChancePerSec * dt)) {
-        // the ~20% still working the ship move with purpose between their
-        // station and the systems that need tending (user note). They flee
-        // like anyone else the moment they see the Flood.
+      } else if (a.worker && a.fallbackNode === undefined && !sim.lastStand
+        && !a.move && !a.path.length
+        && sim.rng.chance(P.civilian.workMoveChancePerSec * (sim.floodKnown ? 0.5 : 1) * dt)) {
+        // the ~20% still working the ship move with purpose — occasionally,
+        // not constantly; half as often once the outbreak is common knowledge,
+        // and not at all once the fallback call has gone out
         workerRelocate(sim, a);
       }
       break;
@@ -106,14 +120,19 @@ function updateCivilian(sim, a, dt) {
       if (!a.move && !a.path.length) {
         const next = fleeStep(sim, a);
         if (next === -1) { a.state = STATE.COWER; break; }
-        if (next !== null) { sim.setPath(a, [next]); a.fleeSteps = (a.fleeSteps || 0) + 1; }
+        if (next === null) { a.state = STATE.HIDE; a.panicked = false; break; } // safest spot is right here
+        sim.setPath(a, [next]);
+        a.lastFledFrom = a.node;
+        a.fleeSteps = (a.fleeSteps || 0) + 1;
       }
       // once clear of any visible Flood, stop running and go to ground —
       // don't keep trotting around the ship (this is what made them wander
       // in and out of danger). A short settle, then a sticky HIDE.
       if (threat === 0 && !a.move && !a.path.length) {
         a.hideTimer += dt;
-        if (a.hideTimer > 1.5 || a.fleeSteps >= 3) { a.state = STATE.HIDE; a.panicked = a.panicked && sim.rng.chance(0.3); }
+        // going to ground ENDS the episode: hide and calm down, so the same
+        // scare can't keep them jogging laps (panic also expires on its own)
+        if (a.hideTimer > 1.5 || a.fleeSteps >= 3) { a.state = STATE.HIDE; a.panicked = false; }
       } else a.hideTimer = 0;
       break;
     }
@@ -156,19 +175,30 @@ function workerRelocate(sim, a) {
 }
 
 // Step to the safest neighbor, NEVER toward a node that has Flood in it.
-// Returns -1 when every exit is into the Flood or blocked (→ cower).
+// Returns -1 when every exit is into the Flood or blocked (→ cower), and
+// null when staying put is at least as safe as any move — a civilian who can
+// merely SEE the Flood through a doorway goes to ground where they are
+// instead of ping-ponging between two rooms (user note).
 function fleeStep(sim, a) {
+  const floodHere = sim.floodStrengthAt(a.node) > 0;
   const safe = [];
   for (const { to } of sim.graph.neighbors(a.node, ['std'], humanPass)) {
     if (sim.floodStrengthAt(to) > 0) continue; // never flee into the Flood
+    if (to === a.lastFledFrom && !floodHere) continue; // no backtracking laps
     safe.push(to);
   }
-  if (!safe.length) return -1;
+  if (!safe.length) return floodHere ? -1 : null; // trapped: cower / hide here
   if (a.panicked && sim.rng.chance(0.4)) return sim.rng.pick(safe); // blind panic
   let best = null, bestScore = Infinity;
   for (const to of safe) {
     const score = sim.influence.floodStr[to] * 4 + sim.rng.range(0, 0.3);
     if (score < bestScore) { bestScore = score; best = to; }
+  }
+  // the Flood isn't IN this room: only run if the move genuinely improves
+  // things, otherwise hide right here
+  if (!floodHere) {
+    const here = sim.influence.floodStr[a.node] * 4;
+    if (bestScore >= here - 0.4) return null;
   }
   return best;
 }
@@ -320,6 +350,14 @@ function applySquadOrder(sim, squad, leader) {
 // --- squad strategic re-planning (§5.3, runs each infection round) ---
 export function strategicSquads(sim) {
   const P = sim.P;
+  // phase 2 can't wait on a breach CLEAR that may never come — if the crash
+  // site is known-hot and hasn't been secured within a couple of minutes,
+  // the ship goes to general deck sweeps anyway (this is what left every
+  // squad holding position forever while the lower decks rotted)
+  if (!sim.firstSweepCleared && sim.floodKnown && sim.t > 120) {
+    sim.firstSweepCleared = true;
+    sim.log('sweep', 'crash site is hot and holding — squads begin general deck sweeps');
+  }
   for (const squad of sim.squads) {
     const members = squad.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
     // morale: heavy losses break the squad (§5.3)
@@ -434,9 +472,13 @@ function pickSweepTarget(sim, leader) {
     const d = g.hops(leader.node, n.idx, ['std', 'shaft'], marinePass);
     if (d === -1) continue;
     const breachDist = g.hops(n.idx, g.breachNode, ['std', 'shaft'], marinePass);
-    // nearest first, with a mild pull toward the breach and a bonus for
-    // long-unswept rooms
-    const score = d + (breachDist === -1 ? 6 : breachDist) * 0.35 - Math.min(staleness, 180) * 0.01;
+    // the danger is DOWN where the ship was holed: breach-proximity and the
+    // lower decks dominate the pick, distance-from-squad only breaks ties —
+    // otherwise nearest-first keeps squads grazing the upper decks forever
+    const score = d * 0.5
+      + (breachDist === -1 ? 8 : breachDist) * 0.9
+      - (n.deck >= 4 ? 2.5 : 0)
+      - Math.min(staleness, 300) * 0.01;
     if (score < bestScore) { bestScore = score; best = n.idx; }
   }
   return best;

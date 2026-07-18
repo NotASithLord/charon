@@ -60,7 +60,7 @@ export function updateFloodTick(sim, dt) {
     // guns (user note): when local flood strength outweighs the shooters
     // ~2:1, grabs work THROUGH the gunfire and even marines get taken. The
     // swarm eats stomp losses; that's the price of the pile-on.
-    if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0
+    if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0 && a.state !== STATE.GRABBING
       && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
       const here = sim.occupants(a.node);
       let gunsW = 0;
@@ -76,6 +76,14 @@ export function updateFloodTick(sim, dt) {
             || (overwhelmed && h.faction === FACTION.MARINE)));
         if (prey && a.task?.targetId !== prey.id) {
           hive.assign(a, { kind: TASK.GRAB, targetId: prey.id });
+        } else if (!prey) {
+          // ALWAYS INFECT (user note): a form never walks past a usable
+          // corpse — it burrows in on the spot and stands up a combat form
+          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed);
+          if (corpse) {
+            corpse.claimed = true;
+            hive.assign(a, { kind: TASK.CONVERT, corpseId: corpse.id });
+          }
         }
       }
     }

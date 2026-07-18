@@ -348,12 +348,21 @@ export function renderStats(sim, el) {
     : `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('');
 }
 
-export function renderLog(sim, el, maxLines = 26) {
+export function renderLog(sim, el, maxLines = 80) {
+  // only rebuild when something new arrived — rewriting every frame made the
+  // log impossible to scroll
+  const stamp = sim.events.length + ':' + (sim.events[sim.events.length - 1]?.t ?? 0);
+  if (el._stamp === stamp) return;
+  el._stamp = stamp;
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const prevTop = el.scrollTop;
   const events = sim.events.slice(-maxLines);
   el.innerHTML = events.map((e) =>
     `<div class="ev ev-${e.type}"><span class="t">${fmtTime(e.t)}</span> ${escapeHtml(e.msg)}</div>`
   ).join('');
-  el.scrollTop = el.scrollHeight;
+  // follow the tail only if the user was already at the tail; otherwise
+  // leave their scroll position alone so they can read history
+  el.scrollTop = atBottom ? el.scrollHeight : prevTop;
 }
 
 function escapeHtml(s) {
