@@ -78,8 +78,23 @@ export function updateFloodTick(sim, dt) {
           hive.assign(a, { kind: TASK.GRAB, targetId: prey.id });
         } else if (!prey) {
           // ALWAYS INFECT (user note): a form never walks past a usable
-          // corpse — it burrows in on the spot and stands up a combat form
-          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed);
+          // corpse — it burrows in on the spot and stands up a combat form.
+          // EXCEPT during the opening race (§6.7): the crash site is a
+          // larder, but the sweep is coming — eat only while there's time
+          // on the clock, a few forms at once, and RUN when it's close.
+          // (This is what left the whole pool standing in the hangar chain-
+          // converting bodies instead of evacuating.)
+          let mayEat = true;
+          if (hive.opening) {
+            const timeLeft = hive.sweepEtaSec === Infinity ? 999 : hive.sweepEtaSec;
+            if (timeLeft < 25) mayEat = false;
+            else {
+              const eating = here.reduce((n, x) => n +
+                (x.faction === FACTION.INFECTION && x.task?.kind === TASK.CONVERT ? 1 : 0), 0);
+              if (eating >= 4) mayEat = false; // the rest keep moving to the dens
+            }
+          }
+          const corpse = mayEat ? here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed) : null;
           if (corpse) {
             corpse.claimed = true;
             hive.assign(a, { kind: TASK.CONVERT, corpseId: corpse.id });
