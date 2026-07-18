@@ -129,6 +129,33 @@ export function initRun(seed, rng, P) {
     }
   }
 
+  // roaming pair patrols (user note): three 2-marine details, in ADDITION to
+  // the squads, walking a fixed circuit of the whole ship. They answer
+  // distress calls like any squad, then pick the round back up. Staggered
+  // thirds around the loop so the ship always has coverage somewhere.
+  {
+    const route = ['d1corr', 'd2corrF', 'mess', 'd2corrA', 'corrM', 'corrF', 'maintF',
+      'hangar', 'hangarA', 'vehicle', 'cargo1', 'lowerCorr', 'eng', 'lowerCorr',
+      'hangarA', 'corrA', 'corrM'].map((id) => graph.byId.get(id));
+    for (let p = 0; p < P.marineDoctrine.patrols; p++) {
+      const leg = Math.floor((p * route.length) / P.marineDoctrine.patrols);
+      const node = route[leg];
+      const squad = {
+        id: squads.length, members: [], objective: null, morale: 1,
+        respondingTo: null, phase1: false, patrol: true, patrolNo: p + 1, route, leg,
+      };
+      for (let m = 0; m < P.marineDoctrine.patrolSize; m++) {
+        const a = makeAgent(FACTION.MARINE, node, graph);
+        a.hp = a.maxHp = P.combat.marine.hp;
+        a.hasRadio = true;
+        a.squad = squad.id;
+        squad.members.push(a.id);
+        agents.push(a);
+      }
+      squads.push(squad);
+    }
+  }
+
   // armed humans: armory + corridors
   {
     const armory = graph.byId.get('armory');
@@ -217,6 +244,7 @@ export function initRun(seed, rng, P) {
       const c = makeAgent(FACTION.CORPSE, node, graph);
       c.state = STATE.DEAD;
       c.hp = 0; c.damage = 0; // fully convertible
+      scatterInRoom(c, graph.node(node), rng);
       corpses.push(c);
     }
   }
@@ -249,10 +277,18 @@ export function initRun(seed, rng, P) {
   for (let i = 0; i < freshDead; i++) {
     const c = makeAgent(FACTION.CORPSE, breach, graph);
     c.state = STATE.DEAD; c.hp = 0; c.damage = 0;
+    scatterInRoom(c, graph.node(breach), rng);
     corpses.push(c);
   }
 
   return { graph, agents: [...agents, ...corpses, ...flood], squads, breach };
+}
+
+// bodies lie where they fell — a fixed, seeded spot inside the room's real
+// footprint, not a stack on the room's center point
+function scatterInRoom(a, nd, rng) {
+  a.x = nd.x + rng.range(-0.5, 0.5) * Math.max(2, nd.w - 2.5);
+  a.y = nd.y + rng.range(-0.5, 0.5) * Math.max(2, nd.d - 2.5);
 }
 
 // Unlock a minimal set of locked doors so every node stays human-reachable

@@ -74,6 +74,7 @@ export const PARAMS = {
     overwhelmRatio: 2.0,   // weighted flood:shooter ratio at which grabs work THROUGH gunfire
     killRatio: 2.0,        // muster:squad ratio to spring on an isolated marine squad
     musterHops: 3,         // how far the hive gathers forms for a squad-wipe
+    maxMusterForms: 45,    // a wave this size flattens any line — stop waiting
     isolationHops: 3,      // no friendly squad within this = isolated
     reserveForms: 8,       // only trade forms for marines while this pool (or a carrier) remains
     escortPer: 3,          // 1 combat-form escort per ~3 infection forms in a pack
@@ -131,13 +132,16 @@ export const PARAMS = {
     // coin-flip whether they kill it clean or trade one, 3 win clean, 1 loses.
     combatForm: { hp: 63, dps: 20, hpJitter: 0.18 }, // spawn hp varies ±18% -> real 50/50 at 2v1
     carrierHp: 40,
-    infectionGrabSec: 1.2,     // time to convert an armed/overwhelmed target
-    civilianGrabSec: 1.0,      // an unarmed civilian is taken almost instantly
+    infectionGrabSec: 8,       // time to convert an armed/overwhelmed target
+    civilianGrabSec: 7,        // burrowing in takes real seconds now (user note)
+    corpseConvertSec: 7,       // infection form + body -> combat form
     grabPins: true,            // a grabbed target is held in place (can't flee)
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
   },
   marineDoctrine: {
     firstSweepDelaySec: 5,     // muster time before the crash sweep launches (§5.3)
+    patrols: 3,                // roaming pair patrols walking the whole ship (user note)
+    patrolSize: 2,
     commandGarrison: 6,        // permanent marines holding the corridor into the top deck (never move)
     officers: 4,               // officer civilians who stay put in Officer Country
     bridgeOfficers: 3,         // captain + officers who never leave the bridge
@@ -149,11 +153,22 @@ export const PARAMS = {
     workerFraction: 0.2,       // fraction still working the ship — they move with purpose
     workMoveChancePerSec: 0.03,// a work trip every ~30s, not constant lapping; halved once the outbreak is known
   },
-  speed: { // edge-traversal multipliers (1.0 = base edge time), user-set
+  speed: { // multipliers on movement.baseMps (relative ratios are user-set)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.0,
     infection: 0.9, combatForm: 1.25, carrier: 0.8, drag: 0.5,
   },
-  edgeTravelSec: { hatch: 3, blastdoor: 4, lift: 6, ladder: 5, shaft: 8, vent: 6 },
+  // REAL DISTANCES (user note): the map is laid out in meters and travel
+  // time = distance / speed — the foundation for the navigable 3D map.
+  // baseMps is a purposeful walk; the speed multipliers above scale it.
+  movement: {
+    baseMps: 1.4,             // human purposeful walk
+    doorDelaySec: { hatch: 0.8, blastdoor: 2.5, lift: 0, ladder: 0 },
+    liftSec: 10,              // call + ride, distance-independent
+    ladderClimbMps: 0.5,      // vertical speed on ladder runs
+    shaftMps: 0.7,            // crawl pace in maintenance shafts
+    ventMps: 0.55,            // infection-form pace in ducting
+    crawlWindingFactor: 1.35, // shafts/vents are never straight lines
+  },
   // command path (companion spec §0/§3.4). In single-player the producer
   // stamps orders this many ticks ahead; the same knob is net.inputDelayTicks
   // (~3-5) once lockstep transport slots underneath the queue.

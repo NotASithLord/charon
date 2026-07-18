@@ -175,7 +175,7 @@ export function updateFloodTick(sim, dt) {
         if (!body || body.dead || body.damage >= 100) { a.task = null; break; }
         if (a.node === body.node && !a.move) {
           a.taskProgress += dt;
-          if (a.taskProgress >= 3) {
+          if (a.taskProgress >= sim.P.combat.corpseConvertSec) {
             body.dead = true;
             spawnCombatForm(sim, a.node);
             sim.stats.conversions++; sim.stats.conversionsRound++;

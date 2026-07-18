@@ -136,15 +136,23 @@
   <main>
     <div id="left"><div id="canvasWrap"><canvas id="canvas"></canvas>
       <div id="legend">
+        <div class="lgTitle">CAMERA <span style="color:#39424c">scroll = zoom · drag = pan · dbl-click = whole ship</span></div>
         <div class="lgTitle">AGENTS</div>
         <div class="lgGrid">
           <span><i class="dot" style="background:#f2f2f2"></i>civilian</span>
           <span><i class="dot" style="background:#e8c840"></i>armed crew</span>
-          <span><i class="dot" style="background:#4d8ef0"></i>marine</span>
+          <span><i class="sq" style="background:#4d8ef0"></i>marine</span>
           <span><i class="dot" style="background:#51ff6a"></i>infection form</span>
-          <span><i class="dot" style="background:#c0392b"></i>combat form</span>
+          <span><i class="sq" style="background:#c0392b;clip-path:polygon(50% 0,100% 100%,0 100%)"></i>combat form</span>
           <span><i class="dot" style="background:#b15fd9"></i>carrier</span>
-          <span><i class="dot" style="background:#777"></i>corpse</span>
+          <span><i class="ln solid" style="border-color:#6d6d6d;width:10px"></i>corpse (lying)</span>
+        </div>
+        <div class="lgTitle">IN-ROOM ACTION</div>
+        <div class="lgGrid">
+          <span><i class="ln solid" style="border-color:#ffe08c"></i>tracer fire</span>
+          <span><i class="ln solid" style="border-color:#51ff6a"></i>grab in progress</span>
+          <span><i class="dot ring" style="border-color:#51ff6a"></i>body converting</span>
+          <span><i class="dot ring" style="border-color:#b15fd9"></i>rooting to carrier</span>
         </div>
         <div class="lgTitle">STATE MARKERS</div>
         <div class="lgGrid">

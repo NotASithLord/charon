@@ -393,6 +393,9 @@ export function strategicSquads(sim) {
     // engaged squads don't re-plan
     if (members.some((m) => m.state === STATE.FIGHT)) continue;
 
+    // roaming pair patrols run their own doctrine: circuit + distress response
+    if (squad.patrol) { patrolPlan(sim, squad, leader); continue; }
+
     // launch the mustered crash sweep once the delay elapses (user note)
     if (squad.pendingSweep && sim.t >= sim.P.marineDoctrine.firstSweepDelaySec) {
       squad.pendingSweep = false;
@@ -499,6 +502,48 @@ export function strategicSquads(sim) {
   }
 }
 
+// Roaming pair patrols (user note): walk the whole ship on a fixed circuit,
+// peel off to distress calls like any squad (sharing the 2-responder cap),
+// then pick the round back up where it left off. A commander order overrides
+// the circuit; the last-stand call overrides everything.
+function patrolPlan(sim, squad, leader) {
+  const P = sim.P;
+  if (squad.lastStandBound) {
+    squad.objective = { kind: 'order', node: sim.graph.byId.get('d1corr') };
+    return;
+  }
+  if (squad.order && applySquadOrder(sim, squad, leader)) return;
+
+  const callPolicy = squad.callPolicy ?? 'auto';
+  for (const call of (callPolicy === 'ignore' ? [] : sim.calls)) {
+    if (sim.t - call.t > P.radio.callFadeSec) continue;
+    if (call.rolled.has(squad.id)) continue;
+    call.rolled.add(squad.id);
+    if (!sim.rng.chance(P.radio.marineCallReliability)) continue;
+    const responders = sim.squads.filter((s) => !s.broken && s.respondingTo === call.id).length;
+    if (responders >= 2) continue;
+    const cur = squad.objective?.kind === 'distress'
+      ? sim.graph.hops(leader.node, squad.objective.node, ['std'], humanPass) : Infinity;
+    const d = sim.graph.hops(leader.node, call.node, ['std', 'shaft'], marinePass);
+    if (d !== -1 && d < cur) {
+      squad.objective = { kind: 'distress', node: call.node, callId: call.id };
+      squad.respondingTo = call.id;
+      sim.log('radio', `patrol ${squad.patrolNo} responding to distress in ${sim.graph.node(call.node).name}`);
+    }
+  }
+  if (squad.objective?.kind === 'distress') {
+    const objNode = squad.objective.node;
+    const clear = sim.visibleNodes(objNode).every((n) => sim.floodStrengthAt(n) === 0);
+    if (leader.node === objNode && clear) { squad.objective = null; squad.respondingTo = null; }
+    else return;
+  }
+  // walk the circuit
+  if (leader.node === squad.route[squad.leg] && !leader.move && !leader.path.length) {
+    squad.leg = (squad.leg + 1) % squad.route.length;
+  }
+  squad.objective = { kind: 'patrol', node: squad.route[squad.leg] };
+}
+
 // Thinned-out squads stick together (user note): survivors of a broken or
 // 2-man squad who run into a healthier squad fold into it — one bigger squad
 // instead of two dying ones. The receiving squad's morale baseline grows too.
@@ -507,6 +552,7 @@ function mergeThinSquads(sim) {
     const aliveA = A.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
     if (!aliveA.length) continue;
     if (!A.broken && aliveA.length > 2) continue; // healthy enough on its own
+    if (A.patrol && aliveA.length >= 2) continue; // a pair patrol is MEANT to be 2
     for (const B of sim.squads) {
       if (B === A || B.broken) continue;
       const aliveB = B.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
@@ -563,6 +609,7 @@ export function assignFirstSweep(sim) {
   for (const squad of sim.squads) {
     const leader = sim.byId.get(squad.members[0]);
     squad.size0 = squad.members.length;
+    if (squad.patrol) continue; // patrols keep walking their round
     squad.objective = { kind: 'hold', node: leader.node };
     const d = sim.graph.hops(leader.node, sim.graph.breachNode, ['std'], humanPass);
     if (d !== -1) ranked.push({ squad, d });

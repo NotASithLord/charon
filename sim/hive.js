@@ -163,9 +163,13 @@ export class Hive {
       if (observed.has(n) && observed.get(n) < 2) { this.strongpoints.delete(n); continue; }
       const age = sim.t - sp.t;
       if (age > 360) { this.strongpoints.delete(n); continue; }
+      // the memory is a FLOOR under the live picture, not an addition — while
+      // forms keep eyes on the line, live beliefs already carry its full
+      // weight, and summing both doubled the defense estimate (the muster
+      // then waited for numbers that couldn't exist)
       const s = sp.w * Math.exp(-age / 180);
-      this.believedHardness[n] += s;
-      this.believedHumanStr[n] += s;
+      this.believedHardness[n] += Math.max(0, s - this.believedHardness[n]);
+      this.believedHumanStr[n] += Math.max(0, s - this.believedHumanStr[n]);
     }
   }
 
@@ -238,7 +242,8 @@ export class Hive {
       if (d !== -1 && d < bestHops) bestHops = d;
     }
     if (bestHops === Infinity) return Infinity;
-    return bestHops * (4 / sim.P.speed.marine); // seconds from NOW
+    // seconds from NOW at a marine's pace over average real hop distance
+    return bestHops * (sim.graph.avgStdLenM / (sim.P.movement.baseMps * sim.P.speed.marine));
   }
 
   // arteries carry marine traffic; denning beside them is asking to be found
@@ -678,7 +683,9 @@ export class Hive {
       }
       for (const [target, forms] of staged) {
         const defense = this.believedHumanStr[target] + this.believedHardness[target];
-        const needed = defense * P.swarm.killRatio;
+        // a wave past maxMusterForms overwhelms ANY line — never keep waiting
+        // for 2x a fear-inflated estimate of the defense
+        const needed = Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
         const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
         if (defense <= 0.8 || arrived >= needed) {
           for (const f of forms) this.assign(f, { kind: TASK.ATTACK, node: target });
@@ -818,7 +825,7 @@ export class Hive {
       if (!path) continue;
       const hops = path.length;
       if (openingTimeLeft !== null) {
-        const eta = hops * (P.edgeTravelSec.hatch / P.speed.infection) + P.combat.infectionGrabSec;
+        const eta = hops * (sim.graph.avgStdLenM / (P.movement.baseMps * P.speed.infection)) + P.combat.infectionGrabSec;
         if (eta > openingTimeLeft - P.hive.openingSweepMargin) continue;
         if (hops > 3) continue;
       }

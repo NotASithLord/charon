@@ -374,6 +374,20 @@ export class Sim {
     }
   }
 
+  // REAL-DISTANCE travel (user note): seconds to cross a link = its measured
+  // meters over the mover's speed, plus door/lift mechanics. Crawling through
+  // shafts and ducting is pace-limited by the space, not the crawler.
+  travelSec(link, mult) {
+    const M = this.P.movement;
+    const run = (link.horizM + link.vertM);
+    if (link.kind === 'shaft') return run * M.crawlWindingFactor / M.shaftMps;
+    if (link.kind === 'vent') return run * M.crawlWindingFactor / M.ventMps;
+    const mps = M.baseMps * Math.max(0.2, mult);
+    if (link.type === 'lift') return link.horizM / mps + M.liftSec;
+    if (link.type === 'ladder') return link.horizM / mps + link.vertM / M.ladderClimbMps;
+    return run / mps + (M.doorDelaySec[link.type] ?? 0);
+  }
+
   _speedMult(a) {
     const S = this.P.speed;
     switch (a.faction) {
@@ -442,8 +456,7 @@ export class Sim {
         }
         a.doorBalks = 0;
         a.path.shift();
-        const base = this.P.edgeTravelSec[link.kind === 'std' ? link.type : link.kind];
-        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: base / this._speedMult(a) };
+        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, this._speedMult(a)) };
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
         this._parkDrift(a, dt);
@@ -451,13 +464,13 @@ export class Sim {
     }
   }
 
-  // parked agents drift to a personal offset inside the node (render nicety)
+  // parked agents drift to a personal offset inside the room's real footprint
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
     const ang = (a.id * 2.399963) % (Math.PI * 2);
-    const rad = ((a.id * 7919) % 100) / 100 * nd.r * 0.75;
-    const tx = nd.x + Math.cos(ang) * rad;
-    const ty = nd.y + Math.sin(ang) * rad;
+    const frac = ((a.id * 7919) % 100) / 100 * 0.85;
+    const tx = nd.x + Math.cos(ang) * (nd.w / 2 - 1.2) * frac;
+    const ty = nd.y + Math.sin(ang) * (nd.d / 2 - 1.2) * frac;
     a.x += (tx - a.x) * Math.min(1, dt * 3);
     a.y += (ty - a.y) * Math.min(1, dt * 3);
     a.animTime += dt;

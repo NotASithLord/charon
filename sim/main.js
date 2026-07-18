@@ -95,6 +95,25 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// --- camera: scroll = zoom (to cursor), drag = pan, double-click = fit ---
+{
+  const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    viz.zoomAt((e.clientX - r.left) * dpr(), (e.clientY - r.top) * dpr(), Math.exp(-e.deltaY * 0.0014));
+  }, { passive: false });
+  let drag = null;
+  canvas.addEventListener('mousedown', (e) => { drag = { x: e.clientX, y: e.clientY }; });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    viz.pan((e.clientX - drag.x) * dpr(), (e.clientY - drag.y) * dpr());
+    drag = { x: e.clientX, y: e.clientY };
+  });
+  window.addEventListener('mouseup', () => { drag = null; });
+  canvas.addEventListener('dblclick', () => viz.fitShip());
+}
+
 document.getElementById('restart').addEventListener('click', restart);
 document.getElementById('randomSeed').addEventListener('click', () => {
   // UI-side randomness only (not sim code) — picks a fresh seed then restarts

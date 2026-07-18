@@ -1,9 +1,12 @@
-// Debug visualization (§8): top-down schematic, decks stacked or isolated,
-// influence heatmap, three traversal-layer overlays, agents as dots,
-// distress rings, flow vectors, motion-tracker circles, stats panel.
+// Debug visualization (§8), high-fidelity pass: real-meter floor plan with a
+// pan/zoom camera, rooms drawn at their authored footprints, bodies lying
+// where they fell, tracer fire and grab/convert progress inside rooms,
+// influence heatmap, traversal overlays, distress rings, stats panel.
 
 import { FACTION, FLAG } from '../shared/agentBuffer.js';
 import { fmtTime } from './sim.js';
+import { STATE } from './init.js';
+import { TASK } from './hive.js';
 
 const FACTION_COLOR = {
   [FACTION.CIVILIAN]: '#f2f2f2',
@@ -24,6 +27,10 @@ export class Viz {
     this.overlays = { influence: true, shafts: true, vents: true, calls: true, tracker: false, beliefs: false, labels: true, conns: false };
     this.callRings = []; // {node, t0}
     this.lastCallCount = 0;
+    // camera in world METERS: center + zoom on top of the fit-to-canvas scale
+    this.cam = { x: sim.graph.width / 2, y: sim.graph.height / 2, zoom: 1 };
+    this.s = 1; // current total px-per-meter, set each frame
+    this.focusBreach();
     // per-agent render position keyed by AGENT ID, not buffer slot. The sim
     // repacks the buffer as agents die/spawn, so slot i holds different agents
     // over time — interpolating by slot made every agent "fly into position"
@@ -31,16 +38,49 @@ export class Viz {
     this.rpos = new Map();
   }
 
-  setSim(sim) { this.sim = sim; this.callRings = []; this.lastCallCount = 0; this.rpos = new Map(); }
+  setSim(sim) {
+    this.sim = sim;
+    this.callRings = [];
+    this.lastCallCount = 0;
+    this.rpos = new Map();
+    this.focusBreach();
+  }
+
+  // start CLOSE on the action (user note: much bigger view) — the camera
+  // opens over the breach; scroll to zoom, drag to pan, double-click to fit
+  focusBreach() {
+    const n = this.sim.graph.node(this.sim.graph.breachNode);
+    this.cam = { x: n.x, y: n.y, zoom: 2.6 };
+  }
+  fitShip() {
+    this.cam = { x: this.sim.graph.width / 2, y: this.sim.graph.height / 2, zoom: 1 };
+  }
+  zoomAt(px, py, factor) {
+    const W = this.canvas.width, H = this.canvas.height;
+    const wx = this.cam.x + (px - W / 2) / this.s;
+    const wy = this.cam.y + (py - H / 2) / this.s;
+    this.cam.zoom = Math.min(16, Math.max(0.85, this.cam.zoom * factor));
+    const fit = Math.min(W / this.sim.graph.width, H / this.sim.graph.height);
+    const s2 = fit * this.cam.zoom;
+    this.cam.x = wx - (px - W / 2) / s2;
+    this.cam.y = wy - (py - H / 2) / s2;
+  }
+  pan(dxPx, dyPx) {
+    this.cam.x -= dxPx / this.s;
+    this.cam.y -= dyPx / this.s;
+  }
 
   draw(dt = 0.016) {
     const { ctx, sim } = this;
     const g = sim.graph;
     const W = this.canvas.width, H = this.canvas.height;
-    const sx = W / g.width, sy = H / g.height;
-    ctx.save();
-    ctx.clearRect(0, 0, W, H);
-    ctx.scale(sx, sy);
+    const fit = Math.min(W / g.width, H / g.height);
+    const s = fit * this.cam.zoom;
+    this.s = s;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#07090c';
+    ctx.fillRect(0, 0, W, H);
+    ctx.setTransform(s, 0, 0, s, W / 2 - this.cam.x * s, H / 2 - this.cam.y * s);
 
     // pick up new distress calls for ring animation
     while (this.lastCallCount < sim.calls.length) {
@@ -53,13 +93,18 @@ export class Viz {
     if (this.overlays.vents) this._vents(g);
     this._edges(g);
     if (this.overlays.shafts) this._shafts(g);
-    this._nodes(g);
+    this._rooms(g);
+    this._edgeMarkers(g);
     if (this.overlays.calls) this._callRings(g);
     if (this.overlays.tracker) this._tracker(g);
     if (this.overlays.beliefs) this._beliefs(g);
     this._agents(dt);
-    ctx.restore();
+    this._combatFx(g);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
+
+  _lw(px) { return px / this.s; }  // constant on-screen line width
+  _font(px) { return `${px / this.s}px monospace`; }
 
   _visible(nodeIdx) {
     return this.deckFilter === 0 || this.sim.graph.node(nodeIdx).deck === this.deckFilter;
@@ -67,22 +112,17 @@ export class Viz {
 
   _deckBands(g) {
     const { ctx } = this;
-    ctx.font = '11px monospace';
+    ctx.font = this._font(11);
     for (let d = 1; d <= 5; d++) {
-      const y0 = 46 + (d - 1) * 132;
+      const band = g.deckBands[d - 1];
       ctx.fillStyle = this.deckFilter && this.deckFilter !== d ? '#0b0e12' : (d % 2 ? '#11151c' : '#0e1218');
-      ctx.fillRect(0, y0, g.width, 132);
+      ctx.fillRect(0, band.y0, g.width, band.y1 - band.y0);
       ctx.fillStyle = '#3a4556';
-      ctx.fillText(`DECK ${d}${d === 1 ? ' — COMMAND' : d === 5 ? ' — ENGINEERING' : ''}`, 10, y0 + 14);
+      ctx.fillText(`DECK ${d}${d === 1 ? ' — COMMAND' : d === 5 ? ' — ENGINEERING' : ''}`, 3, band.y0 + 14 / this.s);
     }
     ctx.fillStyle = '#232b38';
-    ctx.fillText('BOW ◄', 12, 40);
-    ctx.fillText('► STERN', g.width - 64, 40);
-  }
-
-  _edgeColor(e) {
-    if (e.locked) return '#7a2d2d';
-    return '#2c3a4d';
+    ctx.fillText('BOW ◄', 3, g.deckBands[0].y0 - 4 / this.s);
+    ctx.fillText('► STERN', g.width - 60 / this.s, g.deckBands[0].y0 - 4 / this.s);
   }
 
   _edges(g) {
@@ -90,107 +130,125 @@ export class Viz {
     for (const e of g.edges) {
       if (!this._visible(e.a) && !this._visible(e.b)) continue;
       const a = g.node(e.a), b = g.node(e.b);
-      ctx.strokeStyle = this._edgeColor(e);
-      ctx.lineWidth = e.type === 'blastdoor' ? 3 : 1.5;
-      ctx.setLineDash(e.type === 'lift' || e.type === 'ladder' ? [2, 3] : []);
+      ctx.strokeStyle = e.locked ? '#5a2626' : '#26313f';
+      ctx.lineWidth = e.type === 'blastdoor' ? this._lw(3) : this._lw(1.5);
+      ctx.setLineDash(e.type === 'lift' || e.type === 'ladder' ? [this._lw(3), this._lw(4)] : []);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+  }
+
+  // locks, door pips and connection labels — drawn on TOP of the rooms
+  _edgeMarkers(g) {
+    const { ctx } = this;
+    for (const e of g.edges) {
+      if (!this._visible(e.a) && !this._visible(e.b)) continue;
+      const a = g.node(e.a), b = g.node(e.b);
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
       if (e.locked) {
-        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        const r = this._lw(3);
         ctx.fillStyle = '#c0392b';
-        ctx.fillRect(mx - 2.5, my - 2.5, 5, 5);
+        ctx.fillRect(mx - r, my - r, r * 2, r * 2);
       }
-      if (this.overlays.conns) this._connLabel(a, b, e.label, e.locked ? '#e06a5a' : '#5a708f');
+      if (this.overlays.conns) this._connLabel(mx, my, e.label, e.locked ? '#e06a5a' : '#5a708f');
+    }
+    for (const s of g.shafts) {
+      if (!this._visible(s.a) && !this._visible(s.b)) continue;
+      const a = g.node(s.a), b = g.node(s.b);
+      if (this.overlays.conns) this._connLabel((a.x + b.x) / 2, (a.y + b.y) / 2, s.label, '#b39a4a');
+    }
+    for (const v of g.vents) {
+      if (!this._visible(v.a) && !this._visible(v.b)) continue;
+      const a = g.node(v.a), b = g.node(v.b);
+      if (this.overlays.conns) this._connLabel((a.x + b.x) / 2, (a.y + b.y) / 2, v.label, v.blocked ? '#39424c' : '#3f8a5e');
     }
   }
 
   // strict connection designation drawn at the edge midpoint (user note)
-  _connLabel(a, b, text, color) {
+  _connLabel(mx, my, text, color) {
     if (!text) return;
     const { ctx } = this;
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-    ctx.font = '8px monospace';
+    ctx.font = this._font(8);
     const w = ctx.measureText(text).width;
     ctx.fillStyle = 'rgba(7,9,12,0.82)';
-    ctx.fillRect(mx - w / 2 - 2, my - 5.5, w + 4, 10);
+    ctx.fillRect(mx - w / 2 - this._lw(2), my - this._lw(5.5), w + this._lw(4), this._lw(10));
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
-    ctx.fillText(text, mx, my + 2.5);
+    ctx.fillText(text, mx, my + this._lw(2.5));
     ctx.textAlign = 'left';
   }
 
   _shafts(g) {
-    const { ctx, sim } = this;
+    const { ctx } = this;
     for (const s of g.shafts) {
       if (!this._visible(s.a) && !this._visible(s.b)) continue;
       const a = g.node(s.a), b = g.node(s.b);
       ctx.strokeStyle = '#7a6a2f';
-      ctx.lineWidth = 3.5;
-      ctx.setLineDash([7, 5]);
+      ctx.lineWidth = this._lw(3.5);
+      ctx.setLineDash([this._lw(7), this._lw(5)]);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       ctx.setLineDash([]);
       // ambush corner diamonds, lit when someone lies in wait (§8)
       const occupied = s.ambushers && s.ambushers.size > 0;
       for (const k of [0.25, 0.75]) {
         const mx = a.x + (b.x - a.x) * k, my = a.y + (b.y - a.y) * k;
+        const r = this._lw(4);
         ctx.fillStyle = occupied ? '#ffd23f' : '#4d4526';
         ctx.beginPath();
-        ctx.moveTo(mx, my - 4); ctx.lineTo(mx + 4, my); ctx.lineTo(mx, my + 4); ctx.lineTo(mx - 4, my);
+        ctx.moveTo(mx, my - r); ctx.lineTo(mx + r, my); ctx.lineTo(mx, my + r); ctx.lineTo(mx - r, my);
         ctx.closePath(); ctx.fill();
       }
-      if (this.overlays.conns) this._connLabel(a, b, s.label, '#b39a4a');
     }
   }
 
   _vents(g) {
-    const { ctx, sim } = this;
+    const { ctx } = this;
     for (const v of g.vents) {
       if (!this._visible(v.a) && !this._visible(v.b)) continue;
       const a = g.node(v.a), b = g.node(v.b);
       ctx.strokeStyle = v.blocked ? '#2a2f36' : '#2f6b46';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 4]);
+      ctx.lineWidth = this._lw(1);
+      ctx.setLineDash([this._lw(2), this._lw(4)]);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       ctx.setLineDash([]);
-      if (this.overlays.conns) this._connLabel(a, b, v.label, v.blocked ? '#39424c' : '#3f8a5e');
     }
   }
 
-  _nodes(g) {
+  // rooms at their real footprint: rect w × d meters, heat-filled
+  _rooms(g) {
     const { ctx, sim } = this;
     for (const n of g.nodes) {
       if (!this._visible(n.idx)) continue;
       const flood = sim.influence.floodStr[n.idx];
       const human = sim.influence.humanStr[n.idx];
-      // heatmap: human-blue through contested-dark to flood-green (§8)
-      let fill = '#161b23';
+      let fill = n.type === 'corridor' ? '#141920' : '#161b23';
       if (this.overlays.influence && (flood > 0.05 || human > 0.05)) {
         const total = flood + human;
         const k = flood / total;
         const alpha = Math.min(0.55, total * 0.12 + 0.12);
         fill = `rgba(${Math.round(30 + k * 40)}, ${Math.round(70 + k * 140)}, ${Math.round(170 - k * 110)}, ${alpha})`;
       }
+      const x0 = n.x - n.w / 2, y0 = n.y - n.d / 2;
       ctx.fillStyle = fill;
       ctx.strokeStyle = sim.graph.burningUntil[n.idx] > sim.t ? '#ff7733'
         : g.unpowered[n.idx] ? '#3d3d4d' : '#3a4a61';
-      ctx.lineWidth = n.idx === g.breachNode ? 2.5 : 1.2;
+      ctx.lineWidth = n.idx === g.breachNode ? this._lw(2.5) : this._lw(1.2);
       if (n.idx === g.breachNode) ctx.strokeStyle = '#ff5533';
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.fillRect(x0, y0, n.w, n.d);
+      ctx.strokeRect(x0, y0, n.w, n.d);
       if (g.unpowered[n.idx]) {
         ctx.fillStyle = 'rgba(20,20,30,0.45)';
-        ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillRect(x0, y0, n.w, n.d);
       }
       if (this.overlays.labels) {
         ctx.fillStyle = '#5b6b82';
-        ctx.font = '9px monospace';
+        ctx.font = this._font(9.5);
         ctx.textAlign = 'center';
-        ctx.fillText(n.name, n.x, n.y + n.r + 9);
+        const above = n.type === 'corridor' ? n.y + this._lw(3) : y0 - this._lw(3);
+        ctx.fillText(n.name, n.x, above);
         ctx.textAlign = 'left';
       }
     }
@@ -210,16 +268,16 @@ export class Viz {
       else { node = r.node; const n = g.node(node); cx = n.x; cy = n.y; }
       if (!this._visible(node)) continue;
       const age = sim.t - r.t0;
-      const rad = 8 + age * 14;
+      const rad = 2 + age * 5;
       const marine = r.faction === FACTION.MARINE;
       const a = Math.max(0, 0.8 - age * 0.13);
       ctx.strokeStyle = marine ? `rgba(90, 150, 240, ${a})` : `rgba(240, 150, 60, ${a})`;
-      ctx.lineWidth = 1.6;
+      ctx.lineWidth = this._lw(1.6);
       ctx.beginPath(); ctx.arc(cx, cy, rad, 0, Math.PI * 2); ctx.stroke();
       // solid pip on the caller so you can see exactly who is calling
       if (age < 3) {
         ctx.fillStyle = marine ? '#5a96f0' : '#f0963c';
-        ctx.beginPath(); ctx.arc(cx, cy, 3.4, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, this._lw(3.4), 0, Math.PI * 2); ctx.fill();
       }
     }
     // marine convergence vectors toward active distress objectives
@@ -230,8 +288,8 @@ export class Viz {
       const t = g.node(squad.objective.node);
       if (!this._visible(leader.node) && !this._visible(squad.objective.node)) continue;
       ctx.strokeStyle = 'rgba(77, 142, 240, 0.35)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = this._lw(1);
+      ctx.setLineDash([this._lw(4), this._lw(4)]);
       ctx.beginPath(); ctx.moveTo(leader.x, leader.y); ctx.lineTo(t.x, t.y); ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -245,7 +303,8 @@ export class Viz {
       const node = buf.nodeId[i];
       if (!this._visible(node)) continue;
       ctx.strokeStyle = 'rgba(80, 160, 255, 0.18)';
-      ctx.beginPath(); ctx.arc(buf.posX[i], buf.posY[i], 55, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = this._lw(1);
+      ctx.beginPath(); ctx.arc(buf.posX[i], buf.posY[i], 16, 0, Math.PI * 2); ctx.stroke();
     }
   }
 
@@ -255,9 +314,9 @@ export class Viz {
     for (const n of g.nodes) {
       if (!this._visible(n.idx) || bel[n.idx] < 0.05) continue;
       ctx.strokeStyle = `rgba(255, 120, 200, ${Math.min(0.8, bel[n.idx] * 0.5)})`;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 3, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = this._lw(1.5);
+      ctx.setLineDash([this._lw(3), this._lw(3)]);
+      ctx.strokeRect(n.x - n.w / 2 - 1, n.y - n.d / 2 - 1, n.w + 2, n.d + 2);
       ctx.setLineDash([]);
     }
   }
@@ -281,44 +340,159 @@ export class Viz {
     if (this.rpos.size > buf.count * 2) { // occasional prune of dead ids
       for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
     }
+    // glyphs stay readable at any zoom: real meters near, min screen px far
+    const rr = (m, px) => Math.max(m, px / this.s);
+    // corpses first (they lie under the living)
+    for (let i = 0; i < buf.count; i++) {
+      if (buf.faction[i] !== FACTION.CORPSE) continue;
+      if (!this._visible(buf.nodeId[i])) continue;
+      const rp = this.rpos.get(buf.id[i]);
+      const burned = buf.flags[i] & FLAG.BURNED;
+      this._corpseGlyph(rp.x, rp.y, buf.id[i], burned ? '#181818' : '#6d6d6d');
+    }
     for (let i = 0; i < buf.count; i++) {
       const node = buf.nodeId[i];
-      if (!this._visible(node)) continue;
+      const f = buf.faction[i];
+      if (f === FACTION.CORPSE || !this._visible(node)) continue;
       const rp = this.rpos.get(buf.id[i]);
       const x = rp.x, y = rp.y;
-      const f = buf.faction[i];
       const flags = buf.flags[i];
       const burned = flags & FLAG.BURNED;
       const downed = flags & FLAG.DOWNED;
-      let r = f === FACTION.CARRIER ? 4.5 : f === FACTION.COMBAT ? 3.5 : f === FACTION.INFECTION ? 2 : 2.6;
-      if (f === FACTION.CORPSE) r = 2;
+      const color = FACTION_COLOR[f];
 
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      if (burned) { ctx.fillStyle = '#111'; ctx.fill(); ctx.strokeStyle = '#333'; ctx.lineWidth = 0.8; ctx.stroke(); }
-      else if (downed) { ctx.strokeStyle = FACTION_COLOR[f]; ctx.lineWidth = 1.2; ctx.stroke(); } // hollow
-      else { ctx.fillStyle = FACTION_COLOR[f]; ctx.fill(); }
+      if (burned) {
+        ctx.fillStyle = '#111';
+        ctx.beginPath(); ctx.arc(x, y, rr(0.5, 2), 0, Math.PI * 2); ctx.fill();
+      } else if (downed) {
+        // hollow — a downed combat form waiting on revive/execution
+        ctx.strokeStyle = color; ctx.lineWidth = this._lw(1.2);
+        ctx.beginPath(); ctx.arc(x, y, rr(0.55, 3), 0, Math.PI * 2); ctx.stroke();
+      } else if (f === FACTION.MARINE) {
+        const r = rr(0.55, 2.8);
+        ctx.fillStyle = color;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2); // marines read as squares
+      } else if (f === FACTION.COMBAT) {
+        const r = rr(0.65, 3.2);
+        ctx.fillStyle = color;
+        ctx.beginPath(); // spiked triangle
+        ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.9, y + r * 0.8); ctx.lineTo(x - r * 0.9, y + r * 0.8);
+        ctx.closePath(); ctx.fill();
+      } else if (f === FACTION.CARRIER) {
+        const r = rr(0.85, 4);
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(177,95,217,0.5)';
+        ctx.lineWidth = this._lw(1.2);
+        ctx.beginPath(); ctx.arc(x, y, r + this._lw(2.5), 0, Math.PI * 2); ctx.stroke();
+      } else {
+        const r = f === FACTION.INFECTION ? rr(0.3, 1.8) : rr(0.42, 2.2);
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      }
 
       // exposed infection form in a vent flashes (§8: shows the shot window)
       if (flags & FLAG.EXPOSED && Math.floor(sim.t * 6) % 2 === 0) {
         ctx.strokeStyle = '#aaffbb';
-        ctx.lineWidth = 1.4;
-        ctx.beginPath(); ctx.arc(x, y, r + 2.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.lineWidth = this._lw(1.4);
+        ctx.beginPath(); ctx.arc(x, y, rr(0.6, 4), 0, Math.PI * 2); ctx.stroke();
       }
       if (flags & FLAG.AMBUSH) {
         ctx.strokeStyle = '#ffd23f';
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.stroke();
+        ctx.lineWidth = this._lw(1);
+        ctx.beginPath(); ctx.arc(x, y, rr(0.7, 4.5), 0, Math.PI * 2); ctx.stroke();
       }
       if (flags & FLAG.FLAMER) {
         ctx.fillStyle = '#ff7733';
-        ctx.fillRect(x - 1.4, y - r - 4, 2.8, 2.8);
+        const r = this._lw(1.4);
+        ctx.fillRect(x - r, y - rr(0.9, 5) - r * 2, r * 2, r * 2);
       }
       if (flags & FLAG.PANICKED) {
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.fillRect(x - 0.8, y - r - 4, 1.6, 1.6);
+        const r = this._lw(0.9);
+        ctx.fillRect(x - r, y - rr(0.8, 5), r * 2, r * 2);
       }
     }
+  }
+
+  // a body lying where it fell: short slab + head dot, angle fixed per id
+  _corpseGlyph(x, y, id, color) {
+    const { ctx } = this;
+    const ang = (id * 2.399963) % (Math.PI * 2);
+    const len = Math.max(0.9, 3 / this.s);
+    const dx = Math.cos(ang) * len / 2, dy = Math.sin(ang) * len / 2;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(0.32, 1.6 / this.s);
+    ctx.beginPath(); ctx.moveTo(x - dx, y - dy); ctx.lineTo(x + dx, y + dy); ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x + dx * 1.25, y + dy * 1.25, Math.max(0.18, 0.9 / this.s), 0, Math.PI * 2); ctx.fill();
+  }
+
+  // the fight INSIDE the room (user note): tracers + muzzle flashes while a
+  // node exchanges fire, grab tethers while a form takes someone, progress
+  // arcs over bodies being converted and combat forms rooting into carriers
+  _combatFx(g) {
+    const { ctx, sim } = this;
+    // gunfire: nodes that fired within the last couple of ticks
+    for (let n = 0; n < g.n; n++) {
+      if (sim.tickCount - sim.gunfireTick[n] > 2 || !this._visible(n)) continue;
+      const occ = sim.occupants(n);
+      const shooters = occ.filter((a) => a.hp > 0 && !a.dead &&
+        (a.faction === FACTION.MARINE || (a.faction === FACTION.ARMED && a.state === STATE.FIGHT)));
+      const targets = occ.filter((a) => !a.dead && a.hp > 0 && !a.downed &&
+        (a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER || a.faction === FACTION.INFECTION));
+      if (!shooters.length || !targets.length) continue;
+      for (const sh of shooters) {
+        const t = targets[(sh.id + (sim.tickCount >> 1)) % targets.length];
+        const sp = this.rpos.get(sh.id) ?? sh, tp = this.rpos.get(t.id) ?? t;
+        const flick = (sh.id + sim.tickCount) % 3;
+        if (flick === 0) continue; // strobing, not a solid beam
+        ctx.strokeStyle = `rgba(255, 224, 140, ${flick === 1 ? 0.5 : 0.25})`;
+        ctx.lineWidth = Math.max(0.08, 1 / this.s);
+        ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(tp.x, tp.y); ctx.stroke();
+        // muzzle flash
+        const dx = tp.x - sp.x, dy = tp.y - sp.y, dl = Math.hypot(dx, dy) || 1;
+        ctx.fillStyle = 'rgba(255, 240, 180, 0.9)';
+        ctx.beginPath();
+        ctx.arc(sp.x + dx / dl * 0.7, sp.y + dy / dl * 0.7, Math.max(0.16, 1.2 / this.s), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // grabs, conversions, rooting — read straight from the sim agents
+    for (const a of sim.agents) {
+      if (a.dead || !this._visible(a.node)) continue;
+      const ap = this.rpos.get(a.id) ?? a;
+      if (a.state === STATE.GRABBING && a.task?.targetId !== undefined) {
+        const v = sim.byId.get(a.task.targetId);
+        if (v && !v.dead) {
+          const vp = this.rpos.get(v.id) ?? v;
+          const pulse = 0.45 + 0.3 * Math.sin(sim.t * 9);
+          ctx.strokeStyle = `rgba(90, 255, 120, ${pulse})`;
+          ctx.lineWidth = Math.max(0.14, 1.4 / this.s);
+          ctx.beginPath(); ctx.moveTo(ap.x, ap.y); ctx.lineTo(vp.x, vp.y); ctx.stroke();
+          const need = v.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
+          this._progressArc(vp.x, vp.y, (a.grabTimer ?? 0) / need, '#51ff6a');
+        }
+      } else if (a.task?.kind === TASK.CONVERT && a.taskProgress > 0) {
+        const body = sim.byId.get(a.task.corpseId);
+        if (body && !body.dead) {
+          const bp = this.rpos.get(body.id) ?? body;
+          this._progressArc(bp.x, bp.y, a.taskProgress / sim.P.combat.corpseConvertSec, '#51ff6a');
+        }
+      } else if (a.task?.kind === TASK.TRANSFORM && a.taskProgress > 0) {
+        this._progressArc(ap.x, ap.y, a.taskProgress / sim.P.carrier.transformSec, '#b15fd9');
+      }
+    }
+  }
+
+  _progressArc(x, y, frac, color) {
+    const { ctx } = this;
+    const r = Math.max(0.9, 5 / this.s);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(0.16, 1.6 / this.s);
+    ctx.beginPath();
+    ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + Math.min(1, frac) * Math.PI * 2);
+    ctx.stroke();
   }
 }
 

@@ -7,6 +7,7 @@ const EDGE_PREFIX = { hatch: 'H', blastdoor: 'B', lift: 'L', ladder: 'K' };
 
 export class ShipGraph {
   constructor(data) {
+    this.data = data;
     this.nodes = data.nodes.map((n, i) => ({ ...n, idx: i }));
     this.byId = new Map(this.nodes.map((n) => [n.id, n.idx]));
     this.n = this.nodes.length;
@@ -62,22 +63,60 @@ export class ShipGraph {
   }
 
   _layout() {
-    // schematic space: x by foreAft, y by deck band; rooms alternate above/
-    // below their deck's corridor line to avoid overlap
-    const W = 1280, DECK_H = 132, TOP = 46, PADX = 90;
-    this.width = W;
-    this.height = TOP + 5 * DECK_H + 20;
+    // REAL-DISTANCE layout (user note): all coordinates are METERS. x is real
+    // fore-aft position along the ship; decks are drawn as stacked bands with
+    // rooms alternating above/below the deck's corridor line, and every node
+    // carries its authored footprint (w × d). Travel time comes from these
+    // distances, not from a fixed per-edge constant.
+    const LEN = this.data?.playableLengthM ?? 220;
+    this.deckHeightM = this.data?.deckHeightM ?? 4.2;
+    const BAND = 52, TOP = 18, PADX = 12;
+    this.lengthM = LEN;
+    this.width = LEN + 2 * PADX;
+    this.height = TOP + 5 * BAND + 8;
+    this.deckBands = [];
     for (let d = 1; d <= 5; d++) {
       const band = this.nodes.filter((n) => n.deck === d).sort((a, b) => a.foreAft - b.foreAft);
-      const yC = TOP + (d - 1) * DECK_H + DECK_H / 2;
+      const y0 = TOP + (d - 1) * BAND;
+      this.deckBands.push({ y0, y1: y0 + BAND });
+      const yC = y0 + BAND / 2;
       let flip = 1;
       for (const n of band) {
-        n.x = PADX + n.foreAft * (W - 2 * PADX);
+        n.w = n.w ?? 10; n.d = n.d ?? 8;
+        n.x = PADX + n.foreAft * LEN;
         if (n.type === 'corridor') { n.y = yC; }
-        else { n.y = yC + flip * 44; flip = -flip; }
-        n.r = 10 + Math.sqrt(n.capacity) * 3.2; // draw + jitter radius
+        else { n.y = yC + flip * (2.5 + 1.5 + n.d / 2); flip = -flip; }
+        n.r = Math.max(2, Math.min(n.w, n.d) / 2 - 1); // scatter radius inside the room
+      }
+      // de-overlap same-side rooms along x (deterministic left-to-right push)
+      for (const side of [-1, 1]) {
+        const row = band.filter((n) => n.type !== 'corridor' && Math.sign(n.y - yC) === side);
+        row.sort((a, b) => a.x - b.x);
+        for (let i = 1; i < row.length; i++) {
+          const minX = row[i - 1].x + row[i - 1].w / 2 + row[i].w / 2 + 2;
+          if (row[i].x < minX) row[i].x = minX;
+        }
       }
     }
+    // per-link real distances: horizontal walk + vertical climb components.
+    // Same-deck links measure center-to-center in the deck plane; cross-deck
+    // links measure real fore-aft offset plus the deck-height climb (the
+    // stacked-band y distance is a drawing artifact, not geometry).
+    const measure = (l) => {
+      const a = this.nodes[l.a], b = this.nodes[l.b];
+      if (a.deck === b.deck) {
+        l.horizM = Math.max(3, Math.hypot(a.x - b.x, a.y - b.y));
+        l.vertM = 0;
+      } else {
+        l.horizM = Math.max(2, Math.abs(a.x - b.x));
+        l.vertM = Math.abs(a.deck - b.deck) * this.deckHeightM;
+      }
+    };
+    for (const l of this.edges) measure(l);
+    for (const l of this.shafts) measure(l);
+    for (const l of this.vents) measure(l);
+    // mean std-edge length: the hive's ETA guesses are hop-based
+    this.avgStdLenM = this.edges.reduce((s, l) => s + l.horizM + l.vertM, 0) / this.edges.length;
   }
 
   node(i) { return this.nodes[i]; }
