@@ -137,7 +137,7 @@ export const PARAMS = {
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
   },
   marineDoctrine: {
-    firstSweepDelaySec: 18,    // muster time before the crash sweep launches (§5.3)
+    firstSweepDelaySec: 5,     // muster time before the crash sweep launches (§5.3)
     commandGarrison: 6,        // permanent marines holding the corridor into the top deck (never move)
     officers: 4,               // officer civilians who stay put in Officer Country
     bridgeOfficers: 3,         // captain + officers who never leave the bridge
