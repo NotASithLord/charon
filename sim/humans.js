@@ -357,6 +357,9 @@ export function strategicSquads(sim) {
   if (!sim.firstSweepCleared && sim.floodKnown && sim.t > 120) {
     sim.firstSweepCleared = true;
     sim.log('sweep', 'crash site is hot and holding — squads begin general deck sweeps');
+    for (const s of sim.squads) {
+      if (s.objective?.kind === 'breach') s.objective = null; // stop besieging, start sweeping
+    }
   }
   for (const squad of sim.squads) {
     const members = squad.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
@@ -428,9 +431,16 @@ export function strategicSquads(sim) {
     const arrived = objNode !== undefined && members.every((m) => m.node === objNode || sim.graph.hops(m.node, objNode, ['std', 'shaft'], marinePass) <= 1);
     const clear = objNode !== undefined && sim.visibleNodes(objNode).every((n) => sim.floodStrengthAt(n) === 0);
     if (!squad.objective || (arrived && clear)) {
-      if (squad.objective?.kind === 'breach' && !sim.firstSweepCleared) {
-        sim.firstSweepCleared = true;
-        sim.log('sweep', `first sweep cleared the breach region (${sim.graph.node(sim.graph.breachNode).name})`);
+      if (squad.objective?.kind === 'breach') {
+        if (!sim.firstSweepCleared) {
+          sim.firstSweepCleared = true;
+          sim.log('sweep', `first sweep cleared the breach region (${sim.graph.node(sim.graph.breachNode).name})`);
+        }
+        // the crash squads spend ~30s working the site before fanning out
+        // in different directions across the lower decks (user note)
+        squad.objective = { kind: 'hold', node: leader.node };
+        squad.holdUntil = sim.t + 30;
+        continue;
       }
       if (squad.objective?.kind === 'breach' || sim.firstSweepCleared || !squad.objective) {
         // phase 2: METHODICAL sweep — push to the nearest room that hasn't
@@ -463,9 +473,15 @@ export function strategicSquads(sim) {
 // danger is down where the ship was holed, not up on the command decks.
 function pickSweepTarget(sim, leader) {
   const g = sim.graph;
+  // fan out: never pick a room another squad is already sweeping toward —
+  // this is what splits the two crash squads in different directions
+  const taken = new Set();
+  for (const s of sim.squads) {
+    if (!s.broken && (s.objective?.kind === 'sweep' || s.objective?.kind === 'order')) taken.add(s.objective.node);
+  }
   let best = -1, bestScore = Infinity;
   for (const n of g.nodes) {
-    if (n.type === 'corridor' || n.idx === leader.node) continue;
+    if (n.type === 'corridor' || n.idx === leader.node || taken.has(n.idx)) continue;
     if (n.roles.includes('command')) continue; // the garrison holds the bridge
     const staleness = sim.t - sim.sweptAt[n.idx];
     if (staleness < 40) continue; // cleared very recently — leave it
@@ -484,28 +500,22 @@ function pickSweepTarget(sim, leader) {
   return best;
 }
 
-// Assign the automatic first sweep (§5.3 phase 1): the squad with the
-// shortest human-traversable path to the breach moves at t=0.
+// Assign the automatic first sweep (§5.3 phase 1): the TWO squads with the
+// shortest human-traversable paths to the breach respond (user note). They
+// muster ~18s, investigate, spend ~30s at the site, then fan out in
+// different directions across the lower decks.
 export function assignFirstSweep(sim) {
-  let best = null, bestD = Infinity;
+  const ranked = [];
   for (const squad of sim.squads) {
     const leader = sim.byId.get(squad.members[0]);
     squad.size0 = squad.members.length;
+    squad.objective = { kind: 'hold', node: leader.node };
     const d = sim.graph.hops(leader.node, sim.graph.breachNode, ['std'], humanPass);
-    if (d !== -1 && d < bestD) { bestD = d; best = squad; }
+    if (d !== -1) ranked.push({ squad, d });
   }
-  // The crash sweep does NOT launch instantly — the surviving crew is
-  // scattered and stunned; the nearest squad musters for firstSweepDelaySec
-  // before moving out (user note: initial response should be slower). This
-  // widens the window the hive is racing (§6.7).
-  if (best) {
-    best.pendingSweep = true;
-    best.objective = { kind: 'hold', node: sim.byId.get(best.members[0]).node };
-    sim.firstSweepSquad = best.id;
-    sim.log('sweep', `squad ${best.id + 1} mustering to investigate the crash (${sim.graph.node(sim.graph.breachNode).name}, ${bestD} hops) — moving out in ~${sim.P.marineDoctrine.firstSweepDelaySec}s`);
-  }
-  for (const squad of sim.squads) {
-    if (squad !== best) squad.objective = { kind: 'hold', node: sim.byId.get(squad.members[0]).node };
-    squad.size0 = squad.members.length;
+  ranked.sort((a, b) => a.d - b.d);
+  for (const { squad, d } of ranked.slice(0, 2)) {
+    squad.pendingSweep = true;
+    sim.log('sweep', `squad ${squad.id + 1} mustering to investigate the crash (${sim.graph.node(sim.graph.breachNode).name}, ${d} hops) — moving out in ~${sim.P.marineDoctrine.firstSweepDelaySec}s`);
   }
 }

@@ -100,12 +100,20 @@ export function updateFloodTick(sim, dt) {
 
       case TASK.ATTACK:
         moveToward(sim, a, t.node);
-        // open aggression is a hunt, not a post: stand down when the target
-        // area turns out to be empty so the hive can re-task the form
+        // open aggression is a hunt, not a post: if the room is empty but
+        // prey is visible next door, PRESS THE ATTACK into that room (this
+        // is what left forms standing in a cleared room forever, staring at
+        // survivors through a doorway); if nothing is visible, stand down
         if (a.node === t.node && !a.move) {
-          const prey = sim.visibleNodes(a.node).some((n) => sim.occupants(n).some((h) => h.hp > 0 && !h.dead &&
-            (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE)));
-          if (!prey) a.task = null;
+          let preyNode = -1;
+          for (const n of sim.visibleNodes(a.node)) {
+            if (sim.occupants(n).some((h) => h.hp > 0 && !h.dead &&
+              (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE))) {
+              preyNode = n; break;
+            }
+          }
+          if (preyNode === -1) a.task = null;
+          else if (preyNode !== a.node) t.node = preyNode; // advance
         }
         break;
 
