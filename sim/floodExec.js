@@ -184,6 +184,9 @@ export function updateFloodTick(sim, dt) {
           const carrier = makeAgent(FACTION.CARRIER, a.node, sim.graph);
           carrier.hp = carrier.maxHp = sim.P.combat.carrierHp;
           carrier.state = STATE.INCUBATING;
+          // incubation began the moment the transformation started (user
+          // note) — the rooting time counts toward the first mint
+          carrier.mintTimer = a.taskProgress;
           sim.spawn(carrier);
           sim.removeAgent(a); // the combat form BECOMES the carrier
           sim.stats.carriersSeated++;
