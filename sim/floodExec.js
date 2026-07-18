@@ -60,7 +60,10 @@ export function updateFloodTick(sim, dt) {
     // guns (user note): when local flood strength outweighs the shooters
     // ~2:1, grabs work THROUGH the gunfire and even marines get taken. The
     // swarm eats stomp losses; that's the price of the pile-on.
+    // (parked forms only — yanking a form that is already mid-transit off a
+    // node back to a corpse behind it created an eating carousel at the breach)
     if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0 && a.state !== STATE.GRABBING
+      && !a.move && !a.path.length
       && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
       const here = sim.occupants(a.node);
       let gunsW = 0;
@@ -86,8 +89,10 @@ export function updateFloodTick(sim, dt) {
           // converting bodies instead of evacuating.)
           let mayEat = true;
           if (hive.opening) {
+            // even with no fix on the marines, the hive assumes a sweep is
+            // coming — the smash-and-grab window closes at ~30s regardless
             const timeLeft = hive.sweepEtaSec === Infinity ? 999 : hive.sweepEtaSec;
-            if (timeLeft < 25) mayEat = false;
+            if (timeLeft < 25 || sim.t > 30) mayEat = false;
             else {
               const eating = here.reduce((n, x) => n +
                 (x.faction === FACTION.INFECTION && x.task?.kind === TASK.CONVERT ? 1 : 0), 0);
