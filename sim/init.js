@@ -113,13 +113,14 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // permanent command-deck garrison (user note): a fixed marine detail on the
-  // bridge/CIC that never sweeps, never answers calls, never takes orders —
-  // it just holds. Not part of any squad, so it's exempt from all squad logic.
+  // permanent top-deck garrison (user note): six marines standing guard on
+  // the Command Corridor — the one way into the command deck — at all times.
+  // They never sweep, never answer calls, never take orders; they just hold
+  // the chokepoint. Not part of any squad, exempt from all squad logic.
   {
-    const posts = [graph.byId.get('bridge'), graph.byId.get('cic')];
+    const post = graph.byId.get('d1corr');
     for (let i = 0; i < P.marineDoctrine.commandGarrison; i++) {
-      const a = makeAgent(FACTION.MARINE, posts[i % posts.length], graph);
+      const a = makeAgent(FACTION.MARINE, post, graph);
       a.hp = a.maxHp = P.combat.marine.hp;
       a.hasRadio = true;
       a.squad = -1;
@@ -181,6 +182,18 @@ export function initRun(seed, rng, P) {
       a.stayPut = true;
       a.captain = i === 0;
       a.hasRadio = true;
+      agents.push(a);
+    }
+
+    // unarmed maintenance crew working the LOWER decks (user note): they roam
+    // decks 4-5 fixing systems — moving bodies right where the outbreak lives
+    const lowerNodes = graph.nodes.filter((n) => n.deck >= 4).map((n) => n.idx);
+    for (let i = 0; i < P.npc.lowerMaintenance; i++) {
+      const a = makeAgent(FACTION.CIVILIAN, rng.pick(lowerNodes), graph);
+      a.hp = a.maxHp = P.combat.civilian.hp;
+      a.worker = true;
+      a.lowerDecks = true; // their work orders keep them on decks 4-5
+      a.hasRadio = rng.chance(P.npc.radio.civilian);
       agents.push(a);
     }
   }

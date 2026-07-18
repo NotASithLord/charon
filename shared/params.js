@@ -15,6 +15,7 @@ export const PARAMS = {
     armedFraction: 0.15,      // armed (non-marine) crew
     brigPrisoners: 2,
     medbayWounded: 6,
+    lowerMaintenance: 10,     // unarmed maintenance crew roaming decks 4-5 fixing systems
     radio: { civilian: 0.35, armed: 0.7, marine: 1.0 }, // hasRadio fraction
   },
   flood: {
@@ -52,9 +53,11 @@ export const PARAMS = {
     gunfireHops: 3,    // gunfire carries further
   },
   radio: {
-    marineCallReliability: 0.75,  // MASTER DIAL — marine coordination efficiency
+    marineCallReliability: 0.65,  // MASTER DIAL — marine coordination efficiency
                                   // (0.95 = intact comms; the portal event damaged them.
-                                  //  Raise it and the response snuffs most outbreaks.)
+                                  //  Raise it and the response snuffs most outbreaks —
+                                  //  re-tuned down after adding the top-deck garrison,
+                                  //  armed officers, and lower-deck maintenance crew.)
     civilianCallReliability: 0.35,// PLACEHOLDER
     callFadeSec: 60,
   },
@@ -109,9 +112,11 @@ export const PARAMS = {
   },
   marineDoctrine: {
     firstSweepDelaySec: 18,    // muster time before the crash sweep launches (§5.3)
-    commandGarrison: 3,        // permanent marines holding the command deck (never move)
+    commandGarrison: 6,        // permanent marines holding the corridor into the top deck (never move)
     officers: 4,               // officer civilians who stay put in Officer Country
     bridgeOfficers: 3,         // captain + officers who never leave the bridge
+    sweepDwellSec: 25,         // min pause at each cleared room — slow, methodical (+ jitter)
+    sweepDwellJitterSec: 15,
   },
   civilian: {
     fleeHearingHops: 1,        // only bolt from trouble this close (was ship-wide)

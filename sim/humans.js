@@ -72,7 +72,9 @@ function updateCivilian(sim, a, dt) {
       if (threat > 0) {
         a.state = STATE.ALERT; a.alertTimer = floodHere ? 0 : 0.3;
         if (sim.rng.chance(floodHere ? 0.9 : 0.4)) a.panicked = true;
-        maybeDistressCall(sim, a, P.radio.civilianCallReliability);
+        // point-blank contact you SCREAM (local noise), you don't calmly get
+        // a coherent call out; a doorway sighting still radios normally
+        maybeDistressCall(sim, a, P.radio.civilianCallReliability * (floodHere ? 0.25 : 1));
       } else if (a.panicked && !a.move) {
         // a panicked bystander bolts even without a direct sighting
         a.state = STATE.FLEE; a.hideTimer = 0; a.fleeSteps = 0;
@@ -118,7 +120,7 @@ function updateCivilian(sim, a, dt) {
       if (threat > 0) {
         a.path = []; a.state = STATE.ALERT; a.alertTimer = floodHere ? 0 : 0.3;
         if (sim.rng.chance(floodHere ? 0.9 : 0.4)) a.panicked = true;
-        maybeDistressCall(sim, a, P.radio.civilianCallReliability);
+        maybeDistressCall(sim, a, P.radio.civilianCallReliability * (floodHere ? 0.25 : 1));
       } else if (!a.move && !a.path.length) a.state = STATE.IDLE; // arrived
       break;
   }
@@ -129,7 +131,9 @@ function updateCivilian(sim, a, dt) {
 function workerRelocate(sim, a) {
   if (!a._workNodes) {
     a._workNodes = sim.graph.nodes
-      .filter((n) => ['systems', 'power', 'engineering', 'medbay', 'armed', 'quarters', 'soft', 'command'].some((r) => n.roles.includes(r)))
+      .filter((n) => ['systems', 'power', 'engineering', 'medbay', 'armed', 'quarters', 'soft', 'command'].some((r) => n.roles.includes(r))
+        || (a.lowerDecks && ['maintenance', 'cargo', 'vehicles', 'hangar'].some((r) => n.roles.includes(r))))
+      .filter((n) => !a.lowerDecks || n.deck >= 4) // lower-deck crew stay below
       .map((n) => n.idx);
   }
   const dest = sim.rng.pick(a._workNodes);
@@ -341,7 +345,10 @@ export function strategicSquads(sim) {
 
     // distress calls: roll reliability once per squad per call (§5.3);
     // this is the MASTER DIAL for coordination efficiency
-    for (const call of (callPolicy === 'ignore' ? [] : sim.calls)) {
+    // during the initial muster the squads are still kitting up — no distress
+    // dispatch until the ship's reflex response has actually stood up
+    const mustering = sim.t < P.marineDoctrine.firstSweepDelaySec;
+    for (const call of (mustering || callPolicy === 'ignore' ? [] : sim.calls)) {
       if (sim.t - call.t > P.radio.callFadeSec) continue;
       if (call.rolled.has(squad.id)) continue;
       call.rolled.add(squad.id);
@@ -391,7 +398,10 @@ export function strategicSquads(sim) {
             squad.objective = target !== -1
               ? { kind: 'sweep', node: target }
               : { kind: 'hold', node: leader.node };
-            squad.holdUntil = sim.t + 12 + sim.rng.range(0, 8);
+            // slow and methodical (user note): a real pause at each cleared
+            // room before pushing to the next — the flood knows this rhythm,
+            // which is why it spreads out and grabs what it can in the gaps
+            squad.holdUntil = sim.t + P.marineDoctrine.sweepDwellSec + sim.rng.range(0, P.marineDoctrine.sweepDwellJitterSec);
           }
         } else {
           // before phase 2, non-sweep squads hold near spawn
