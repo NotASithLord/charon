@@ -414,9 +414,39 @@ export class Sim {
         a.move.t += dt / a.move.travelSec;
         const from = g.node(a.move.from), to = g.node(a.move.to);
         const k = Math.min(1, a.move.t);
-        a.x = from.x + (to.x - from.x) * k;
-        a.y = from.y + (to.y - from.y) * k;
-        a.heading = Math.atan2(to.y - from.y, to.x - from.x);
+        const link = a.move.link;
+        // HALLWAYS ARE SPACES, NOT LINKS (user note): a standard connection
+        // is a doorway on the shared wall. The mover walks center → door →
+        // center, and the moment it passes the door it IS in the next space —
+        // it stands in that room's occupancy, sightlines and fire lanes for
+        // the rest of the crossing. No more being "in" a room you left 15
+        // seconds ago while halfway down the corridor.
+        if (a.move.layer === 'std' && link.door && from.deck === to.deck) {
+          const fwd = a.move.from === link.a;
+          const flipT = fwd ? link.flipT : 1 - link.flipT;
+          const d = link.door;
+          if (k < flipT) {
+            const kk = k / flipT;
+            a.x = from.x + (d.x - from.x) * kk;
+            a.y = from.y + (d.y - from.y) * kk;
+            a.heading = Math.atan2(d.y - from.y, d.x - from.x);
+          } else {
+            const kk = (k - flipT) / Math.max(1e-6, 1 - flipT);
+            a.x = d.x + (to.x - d.x) * kk;
+            a.y = d.y + (to.y - d.y) * kk;
+            a.heading = Math.atan2(to.y - d.y, to.x - d.x);
+            if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
+          }
+        } else {
+          a.x = from.x + (to.x - from.x) * k;
+          a.y = from.y + (to.y - from.y) * k;
+          a.heading = Math.atan2(to.y - from.y, to.x - from.x);
+          // lifts/ladders hand over halfway up the trunk; shaft/vent crawlers
+          // keep their special mid-link combat model and flip on arrival
+          if (a.move.layer === 'std' && k >= (link.flipT ?? 0.5) && a.node !== a.move.to) {
+            a.node = a.move.to; a.deck = to.deck;
+          }
+        }
         a.animTime += dt;
         if (a.move.t >= 1) {
           a.node = a.move.to;

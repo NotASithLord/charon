@@ -135,6 +135,7 @@ export class Viz {
       ctx.setLineDash(e.type === 'lift' || e.type === 'ladder' ? [this._lw(3), this._lw(4)] : []);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
+      if (e.door) ctx.lineTo(e.door.x, e.door.y); // the walk goes THROUGH the doorway
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -147,8 +148,14 @@ export class Viz {
     for (const e of g.edges) {
       if (!this._visible(e.a) && !this._visible(e.b)) continue;
       const a = g.node(e.a), b = g.node(e.b);
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      if (e.locked) {
+      const mx = e.door ? e.door.x : (a.x + b.x) / 2;
+      const my = e.door ? e.door.y : (a.y + b.y) / 2;
+      // the doorway itself: a real feature on the shared wall
+      if (e.door) {
+        const r = Math.max(0.5, this._lw(2));
+        ctx.fillStyle = e.locked ? '#c0392b' : '#4a5a72';
+        ctx.fillRect(mx - r, my - r, r * 2, r * 2);
+      } else if (e.locked) {
         const r = this._lw(3);
         ctx.fillStyle = '#c0392b';
         ctx.fillRect(mx - r, my - r, r * 2, r * 2);

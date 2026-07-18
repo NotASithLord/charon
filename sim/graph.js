@@ -105,11 +105,29 @@ export class ShipGraph {
     const measure = (l) => {
       const a = this.nodes[l.a], b = this.nodes[l.b];
       if (a.deck === b.deck) {
-        l.horizM = Math.max(3, Math.hypot(a.x - b.x, a.y - b.y));
+        // spaces are ROOMS, not points (user note): the connection is a real
+        // doorway on the shared wall. Find where the center-to-center segment
+        // leaves rect A and enters rect B; the door sits between those, and
+        // the walk is measured through it. flipT is the fraction of the walk
+        // at which the mover passes the door — the moment it stops being in
+        // space A and starts being in space B.
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const L = Math.max(0.001, Math.hypot(dx, dy));
+        const ux = Math.abs(dx) / L, uy = Math.abs(dy) / L;
+        const exitA = Math.min(ux > 1e-6 ? (a.w / 2) / ux : Infinity, uy > 1e-6 ? (a.d / 2) / uy : Infinity);
+        const entryB = Math.min(ux > 1e-6 ? (b.w / 2) / ux : Infinity, uy > 1e-6 ? (b.d / 2) / uy : Infinity);
+        let doorDist = (exitA + (L - entryB)) / 2; // midpoint of the gap
+        if (exitA + entryB >= L) doorDist = L / 2;  // rects touch/overlap
+        doorDist = Math.min(L - 0.5, Math.max(0.5, doorDist));
+        l.door = { x: a.x + dx / L * doorDist, y: a.y + dy / L * doorDist };
+        const lenA = doorDist, lenB = L - doorDist;
+        l.flipT = lenA / (lenA + lenB);
+        l.horizM = Math.max(3, lenA + lenB);
         l.vertM = 0;
       } else {
         l.horizM = Math.max(2, Math.abs(a.x - b.x));
         l.vertM = Math.abs(a.deck - b.deck) * this.deckHeightM;
+        l.flipT = 0.5; // handover halfway up/down the trunk
       }
     };
     for (const l of this.edges) measure(l);
