@@ -206,6 +206,7 @@ export class Sim {
       strategicSquads(this);
       this._checkSelfArming();
       this._checkLastStand();
+      this._lastStandStragglers();
       this.stats.conversionsRound = 0;
       this._expireCalls();
     }
@@ -238,10 +239,21 @@ export class Sim {
       (!a.dead && a.hp > 0 && a.faction === FACTION.MARINE && !a.garrison ? 1 : 0), 0);
     if (alive > Math.ceil(this.initialSquadMarines * this.P.lastStand.marineFraction)) return;
     this.lastStand = true;
+    this.lastStandAt = this.t;
     const g = this.graph;
     const line = g.byId.get('d1corr');
     const shelters = [g.byId.get('officer'), g.byId.get('cic'), g.byId.get('signal'), g.byId.get('bridge')];
     this.log('radio', `FALL BACK — all remaining hands to the command deck (${alive} marines left)`);
+    // marine squads hear on the leader's radio roll and bind to the line;
+    // broken/squadless marines roll alone
+    for (const squad of this.squads) {
+      const members = squad.members.map((id) => this.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
+      if (!members.length) continue;
+      if (!squad.broken && this.rng.chance(this.P.lastStand.hearChance)) squad.lastStandBound = true;
+      else if (squad.broken) {
+        for (const m of members) if (this.rng.chance(this.P.lastStand.hearChance)) m.fallbackNode = line;
+      }
+    }
     let heard = 0, missed = 0;
     for (const a of this.agents) {
       if (a.dead || a.hp <= 0 || a.helpless || a.garrison) continue;
@@ -263,6 +275,38 @@ export class Sim {
       }
     }
     this.log('radio', `${heard} souls heard the call; ${missed} are still out there`);
+  }
+
+  // A minute after the call, whoever missed it works it out on their own —
+  // the ship has gone quiet and everyone left alive heads for the line
+  // (user note).
+  _lastStandStragglers() {
+    if (!this.lastStand || this._stragglersDone) return;
+    if (this.t < this.lastStandAt + 60) return;
+    this._stragglersDone = true;
+    const g = this.graph;
+    const line = g.byId.get('d1corr');
+    const shelters = [g.byId.get('officer'), g.byId.get('cic'), g.byId.get('signal'), g.byId.get('bridge')];
+    let n = 0;
+    for (const squad of this.squads) {
+      if (!squad.broken && !squad.lastStandBound
+        && squad.members.some((id) => { const m = this.byId.get(id); return m && !m.dead && m.hp > 0; })) {
+        squad.lastStandBound = true; n++;
+      }
+    }
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || a.helpless || a.garrison || a.fallbackNode !== undefined) continue;
+      if (a.faction === FACTION.MARINE) {
+        if (this.squads[a.squad]?.broken) { a.fallbackNode = line; n++; }
+      } else if (a.faction === FACTION.ARMED && !a.stayPut) {
+        a.fallbackNode = this.rng.chance(this.P.lastStand.armedJoinFraction) ? line : shelters[a.id % shelters.length];
+        if (a.fallbackNode === line) a.stayPut = true;
+        n++;
+      } else if (a.faction === FACTION.CIVILIAN && !a.stayPut) {
+        a.fallbackNode = shelters[a.id % shelters.length]; n++;
+      }
+    }
+    if (n) this.log('radio', `the stragglers get the word — ${n} more fall back on their own`);
   }
 
   // Once panic breaks out shipwide (before any last stand), some unarmed

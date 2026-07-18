@@ -13,7 +13,7 @@ export function updateHumansTick(sim, dt) {
     // last-stand fallback: survivors who heard the call make for the command
     // deck whenever they aren't actively fighting or fleeing something seen
     if (a.fallbackNode !== undefined && a.node !== a.fallbackNode
-      && a.faction !== FACTION.MARINE
+      && (a.faction !== FACTION.MARINE || (!a.garrison && sim.squads[a.squad]?.broken))
       && a.state !== STATE.FIGHT && !a.move && !a.path.length
       && floodThreatVisible(sim, a) === 0) {
       if (sim.setPathTo(a, a.fallbackNode, ['std'], humanPass)) a.state = STATE.MOVE;
@@ -377,6 +377,8 @@ export function strategicSquads(sim) {
       if (s.objective?.kind === 'breach') s.objective = null; // stop besieging, start sweeping
     }
   }
+
+  mergeThinSquads(sim);
   for (const squad of sim.squads) {
     const members = squad.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
     // morale: heavy losses break the squad (§5.3)
@@ -404,6 +406,13 @@ export function strategicSquads(sim) {
     // the squad's objective and suppresses autonomy until it completes or is
     // RELEASEd. Self-defense and morale still apply (handled per-tick).
     if (squad.order && applySquadOrder(sim, squad, leader)) continue;
+
+    // last stand: a squad that heard the call binds to the corridor line and
+    // stops sweeping/responding — it fights its way home and holds
+    if (squad.lastStandBound) {
+      squad.objective = { kind: 'order', node: sim.graph.byId.get('d1corr') };
+      continue;
+    }
 
     // a squad set to ignore calls (SET_CALL_POLICY) skips the call scan
     const callPolicy = squad.callPolicy ?? 'auto';
@@ -486,6 +495,29 @@ export function strategicSquads(sim) {
           squad.objective = { kind: 'hold', node: leader.node };
         }
       }
+    }
+  }
+}
+
+// Thinned-out squads stick together (user note): survivors of a broken or
+// 2-man squad who run into a healthier squad fold into it — one bigger squad
+// instead of two dying ones. The receiving squad's morale baseline grows too.
+function mergeThinSquads(sim) {
+  for (const A of sim.squads) {
+    const aliveA = A.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
+    if (!aliveA.length) continue;
+    if (!A.broken && aliveA.length > 2) continue; // healthy enough on its own
+    for (const B of sim.squads) {
+      if (B === A || B.broken) continue;
+      const aliveB = B.members.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
+      if (aliveB.length < 2) continue;
+      const d = sim.graph.hops(aliveA[0].node, aliveB[0].node, ['std'], humanPass);
+      if (d === -1 || d > 1) continue; // must actually run into each other
+      for (const m of aliveA) { m.squad = B.id; B.members.push(m.id); }
+      A.members = A.members.filter((id) => !aliveA.some((m) => m.id === id));
+      B.size0 += aliveA.length;
+      sim.log('morale', `survivors of squad ${A.id + 1} fold into squad ${B.id + 1} (${aliveB.length + aliveA.length} rifles)`);
+      break;
     }
   }
 }

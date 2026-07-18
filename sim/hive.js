@@ -534,8 +534,11 @@ export class Hive {
     //    (§13.4 needs K>=2), scaling with the force; only spend a combat form
     //    on it when there's a genuine surplus (still >=1 combat per carrier),
     //    and only in a safe, defensible node spread from the other carriers.
+    // REPRODUCTION IS THE FIRST INSTINCT (user note): with no carriers the
+    // hive roots one NOW, whatever else is happening — production precedes
+    // defense, hunting, everything.
     const wantK = Math.min(4, 2 + Math.floor((I + C) / 22));
-    if (K < wantK && C > K) {
+    if (K < wantK && (C > K || K === 0)) {
       const target = this.bestCarrierNode();
       if (target !== -1) {
         const spares = combat.filter((c) => !c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.ATTACK);
@@ -552,27 +555,24 @@ export class Hive {
     //     hide and wait to be shot. The safest-positioned form roots into a
     //     carrier to restart production; the rest pull back to the quietest
     //     ground they can reach. This is the last-ditch survival play.
-    const desperate = K === 0 && I < 6;
-    if (desperate && combat.length > 0 && !combat.some((c) => c.task?.kind === TASK.TRANSFORM)) {
-      let safest = null, bestT = Infinity;
+    // When it's down to a few combat forms and nothing else, EVERY one of
+    // them hides and roots into a carrier (user note) — the last soldiers
+    // become the seed stock, full stop. No hunting, no guarding, no waiting.
+    const desperate = K === 0 && I < 6 && combat.length <= 4;
+    if (desperate) {
       for (const c of combat) {
-        if (c.downed) continue;
-        const t = this.localThreat(c.node);
-        if (t < bestT) { bestT = t; safest = c; }
-      }
-      if (safest) {
-        if (bestT < 0.9 && !safest.move) this.assign(safest, { kind: TASK.TRANSFORM });
-        else {
-          const quiet = this.quietNodeNear(safest.node, 'big');
-          if (quiet !== -1 && quiet !== safest.node) this.assign(safest, { kind: TASK.GUARD, node: quiet });
-          else if (!safest.move) this.assign(safest, { kind: TASK.TRANSFORM }); // nowhere safer — root here
+        if (c.downed || c.task?.kind === TASK.TRANSFORM) continue;
+        if (this.localThreat(c.node) < 0.9 && !c.move) {
+          this.assign(c, { kind: TASK.TRANSFORM });
+        } else {
+          const quiet = this.quietNodeNear(c.node, 'big');
+          if (quiet !== -1 && quiet !== c.node) this.assign(c, { kind: TASK.GUARD, node: quiet });
+          else if (!c.move) this.assign(c, { kind: TASK.TRANSFORM }); // nowhere safer — root here
         }
       }
-      // everyone else goes to ground near the survivor rather than hunting
-      for (const c of combat) {
-        if (c === safest || c.task?.kind === TASK.TRANSFORM) continue;
-        const quiet = this.quietNodeNear(c.node, 'big');
-        if (quiet !== -1 && quiet !== c.node) this.assign(c, { kind: TASK.GUARD, node: quiet });
+      if (!this._desperateLogged) {
+        this._desperateLogged = true;
+        this.sim.log('hive', 'the last combat forms go to ground to seed new carriers');
       }
     }
     this._desperate = desperate;

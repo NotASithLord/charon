@@ -145,11 +145,9 @@ export const PARAMS = {
     workerFraction: 0.2,       // fraction still working the ship — they move with purpose
     workMoveChancePerSec: 0.03,// a work trip every ~30s, not constant lapping; halved once the outbreak is known
   },
-  speed: { // edge-traversal multipliers (1.0 = base edge time)
-    civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.2,
-    // the flood does NOT outpace the response on open ground (user note:
-    // it crossed the ship faster than the marines could react)
-    infection: 1.0, combatForm: 0.95, carrier: 0.6, drag: 0.5,
+  speed: { // edge-traversal multipliers (1.0 = base edge time), user-set
+    civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.0,
+    infection: 0.9, combatForm: 1.25, carrier: 0.8, drag: 0.5,
   },
   edgeTravelSec: { hatch: 3, blastdoor: 4, lift: 6, ladder: 5, shaft: 8, vent: 6 },
   // command path (companion spec §0/§3.4). In single-player the producer
