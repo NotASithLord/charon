@@ -322,40 +322,32 @@ export function spawnCombatForm(sim, node) {
 function updateCarrier(sim, a, dt) {
   const P = sim.P;
   if (a.hp <= 0 || a.dead) return;
-  // Minting runs the moment the carrier forms and is INDEPENDENT of whether
-  // it's relocating/hiding (user note) — the timer always advances, so a
-  // carrier being dragged to safety keeps gestating.
+  // GAME-ACCURATE CARRIER (user note): infection forms accumulate INSIDE the
+  // swelling carrier. Nothing comes out until it RUPTURES — when it takes
+  // fire, or when it hits its top limit. The gestation timer is independent
+  // of movement, so a carrier dragged to safety keeps swelling.
   a.mintTimer += dt;
-  // production backpressure: a hive drowning in forms pauses incubating
+  // production backpressure: a hive drowning in forms pauses gestating
   // (also keeps the agent buffer within its 512 capacity)
   if (sim.agents.reduce((n, x) => n + (!x.dead && x.faction === FACTION.INFECTION ? 1 : 0), 0) >= P.carrier.productionBackpressure) return;
-  // §6.6: first form comes quickly, then ~1 per interval up to the cap
-  const due = a.minted === 0 ? P.carrier.firstIncubationSec : P.carrier.incubationIntervalSec;
-  if (a.mintTimer >= due) {
+  // §6.6: the first form seats quickly, then ~1 per interval up to the limit
+  const due = a.held === 0 ? P.carrier.firstIncubationSec : P.carrier.incubationIntervalSec;
+  if (a.mintTimer >= due && a.held < P.carrier.maxInfectionForms) {
     a.mintTimer = 0;
-    a.minted++;
-    const f = makeAgent(FACTION.INFECTION, a.node, sim.graph);
-    f.hp = f.maxHp = 1;
-    sim.spawn(f);
-    sim.stats.formsMinted++;
-    if (a.minted === 1) sim.log('carrier', `first infection form minted in ${sim.graph.node(a.node).name}`);
-    if (a.minted >= P.carrier.maxInfectionForms) {
-      a.dead = true;
-      const corpse = makeAgent(FACTION.CORPSE, a.node, sim.graph);
-      corpse.state = STATE.DEAD; corpse.damage = 100; // spent husk
-      sim.spawn(corpse);
-      sim.log('carrier', `a spent carrier collapses in ${sim.graph.node(a.node).name} (${a.minted} forms produced)`);
-    }
+    a.held++;
+    if (a.held === 1) sim.log('carrier', `the carrier in ${sim.graph.node(a.node).name} begins to swell`);
   }
-  // near-full carrier seeks humans to detonate on (§6.6)
-  if (a.minted >= P.carrier.maxInfectionForms * P.carrier.seekOrExplodeFraction) {
+  // TOP LIMIT — the skin can't hold: it ruptures where it stands
+  if (a.held >= P.carrier.maxInfectionForms) { explodeCarrier(sim, a); return; }
+  // a near-full carrier waddles toward prey so the rupture lands on someone —
+  // the pop itself still only comes from gunfire or the limit
+  if (a.held >= P.carrier.maxInfectionForms * P.carrier.seekOrExplodeFraction) {
     const nearHumans = sim.occupantsNear(a.node, 1).filter((h) => h.hp > 0 &&
       (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE));
     if (nearHumans.length && !a.move && !a.path.length && nearHumans[0].node !== a.node) {
       const path = sim.graph.path(a.node, nearHumans[0].node, ['std'], sim.hive.bigPass);
       if (path) sim.setPath(a, path);
     }
-    if (nearHumans.some((h) => h.node === a.node)) explodeCarrier(sim, a);
   }
 }
 
@@ -368,12 +360,15 @@ export function explodeCarrier(sim, a) {
       sim.hurtHuman(h, P.carrier.explodeDamage);
     }
   }
-  for (let i = 0; i < P.carrier.explodeRelease; i++) {
+  // everything it was carrying spills out at once
+  const n = a.held ?? 0;
+  for (let i = 0; i < n; i++) {
     const f = makeAgent(FACTION.INFECTION, a.node, sim.graph);
     f.hp = f.maxHp = 1;
     sim.spawn(f);
   }
-  sim.log('carrier', `a carrier detonates in ${sim.graph.node(a.node).name}`);
+  sim.stats.formsMinted += n;
+  sim.log('carrier', `a carrier ruptures in ${sim.graph.node(a.node).name} — ${n} infection form${n === 1 ? '' : 's'} spill out`);
 }
 
 function convertHuman(sim, form, target) {

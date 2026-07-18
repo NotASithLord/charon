@@ -589,11 +589,14 @@ export class Sim {
     for (let n = 0; n < this.graph.n; n++) {
       if (this.influence.floodStr[n] > this.influence.humanStr[n] && this.influence.floodStr[n] > 0.5) floodNodes++;
     }
+    const gestating = this.agents.reduce((s, a) =>
+      s + (!a.dead && a.faction === FACTION.CARRIER ? (a.held ?? 0) : 0), 0);
     return {
       t: this.t, tick: this.tickCount, outcome: this.outcome,
       scarcity: this.hive.lastScarcity ?? this.hive.scarcity(this.P.flood.initialInfectionForms),
       opening: this.hive.opening,
       floodControlled: floodNodes,
+      gestating,
       ...alive, ...this.stats,
     };
   }

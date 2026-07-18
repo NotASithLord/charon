@@ -27,12 +27,14 @@ export const PARAMS = {
     initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
     breachCorpses: 10,         // fresh corpses spawned at the breach
   },
+  // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling
+  // carrier and only spill out when it RUPTURES — under fire, or at the top
+  // limit. Gestation starts the moment the carrier forms.
   carrier: {
     incubationIntervalSec: 15, // PLACEHOLDER (T_inc)
-    firstIncubationSec: 6,     // first form comes quickly — minting starts the moment it forms
-    maxInfectionForms: 8,      // stated 7-8 (M)
-    seekOrExplodeFraction: 0.85,
-    explodeRelease: 3,         // forms released on detonation
+    firstIncubationSec: 6,     // first form seats quickly
+    maxInfectionForms: 8,      // top limit — the skin can't hold more; it ruptures
+    seekOrExplodeFraction: 0.85, // near-full: waddle toward prey so the pop lands on someone
     explodeDamage: 20,         // to humans in node
     transformSec: 4,           // time for a combat form to root into a carrier
     productionBackpressure: 130, // pause minting above this many live infection forms

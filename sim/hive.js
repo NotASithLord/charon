@@ -609,7 +609,12 @@ export class Hive {
     if (desperate) {
       for (const c of combat) {
         if (c.downed || c.task?.kind === TASK.TRANSFORM) continue;
-        if (this.localThreat(c.node) < 0.9 && !c.move) {
+        // a form that has been hunting quiet ground for half a minute roots
+        // WHEREVER it is — the perfect den it kept walking toward left the
+        // last survivor wandering for a quarter hour instead of seeding
+        c.desperateSince ??= sim.t;
+        const overdue = sim.t - c.desperateSince > 30;
+        if ((this.localThreat(c.node) < 0.9 || overdue) && !c.move) {
           this.assign(c, { kind: TASK.TRANSFORM });
         } else {
           const quiet = this.quietNodeNear(c.node, 'big');
@@ -621,6 +626,8 @@ export class Hive {
         this._desperateLogged = true;
         this.sim.log('hive', 'the last combat forms go to ground to seed new carriers');
       }
+    } else {
+      for (const c of combat) c.desperateSince = undefined;
     }
     this._desperate = desperate;
 

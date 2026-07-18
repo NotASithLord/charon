@@ -386,7 +386,11 @@ export class Viz {
         ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.9, y + r * 0.8); ctx.lineTo(x - r * 0.9, y + r * 0.8);
         ctx.closePath(); ctx.fill();
       } else if (f === FACTION.CARRIER) {
-        const r = rr(0.85, 4);
+        // the belly swells with what it carries (user note: game-accurate —
+        // it accumulates inside and only ruptures under fire or at the limit)
+        const held = sim.byId.get(buf.id[i])?.held ?? 0;
+        const cap = sim.P.carrier.maxInfectionForms;
+        const r = rr(0.85 + (held / cap) * 0.8, 4);
         ctx.fillStyle = color;
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = 'rgba(177,95,217,0.5)';
@@ -515,12 +519,13 @@ export function renderStats(sim, el) {
     ['infection pool', s.infection],
     ['combat forms', `${s.combat} (+${s.combatDowned} downed)`],
     ['carriers', s.carrier],
+    ['gestating inside', s.gestating],
     ['—', '—'],
     ['bodies left', s.corpses], ['bodies burned', s.corpsesBurned],
     ['flood-held nodes', s.floodControlled],
     ['conversions', s.conversions + (s.conversionsRound ? ` (+${s.conversionsRound} this round)` : '')],
     ['carriers seated', s.carriersSeated],
-    ['forms minted', s.formsMinted],
+    ['forms released', s.formsMinted],
     ['distress calls', s.distressCalls],
     ['vent kills', s.formsShotInVents],
   ];

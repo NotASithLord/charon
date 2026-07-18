@@ -34,7 +34,7 @@ export function makeAgent(kind, node, graph) {
     flamer: false, fuel: 0,
     task: null,      // hive task for flood forms
     hideTimer: 0, alertTimer: 0, grabTimer: 0, calledOut: false,
-    minted: 0,       // carrier production count
+    held: 0,         // infection forms gestating INSIDE a carrier
     mintTimer: 0,
     lastMovedAt: 0,  // for ambush "stationary" checks
     animTime: 0,
