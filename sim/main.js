@@ -9,10 +9,21 @@ const canvas = document.getElementById('canvas');
 const statsEl = document.getElementById('stats');
 const logEl = document.getElementById('log');
 
-// swarm size is an init-time difficulty lever (user note): applied on restart
+// starting-force composition is an init-time difficulty lever (user note):
+// infection forms, combat forms, and carriers each set independently,
+// applied on restart
 function swarmOverrides() {
-  const swarm = Math.max(4, Math.min(60, Number(document.getElementById('swarm').value) || 20));
-  return { flood: { initialInfectionForms: swarm, initialCombatForms: Math.max(2, Math.round(swarm / 5)) } };
+  const num = (id, lo, hi, dflt) => {
+    const v = Number(document.getElementById(id).value);
+    return Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : dflt;
+  };
+  return {
+    flood: {
+      initialInfectionForms: num('startInf', 0, 60, 20),
+      initialCombatForms: num('startCf', 0, 20, 4),
+      initialCarriers: num('startCar', 0, 6, 0),
+    },
+  };
 }
 
 let sim = new Sim(document.getElementById('seed').value, swarmOverrides());

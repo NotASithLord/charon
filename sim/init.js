@@ -223,6 +223,12 @@ export function initRun(seed, rng, P) {
     a.hp = a.maxHp = 1;
     flood.push(a);
   }
+  for (let i = 0; i < P.flood.initialCarriers; i++) {
+    const a = makeAgent(FACTION.CARRIER, breach, graph);
+    a.hp = a.maxHp = P.combat.carrierHp;
+    a.state = STATE.INCUBATING;
+    flood.push(a);
+  }
   for (let i = 0; i < P.flood.initialCombatForms; i++) {
     const a = makeAgent(FACTION.COMBAT, breach, graph);
     a.hp = a.maxHp = P.combat.combatForm.hp * (1 + rng.range(-P.combat.combatForm.hpJitter, P.combat.combatForm.hpJitter));

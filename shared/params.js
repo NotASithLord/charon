@@ -22,8 +22,9 @@ export const PARAMS = {
   // flood should win most runs — the marines alone can't hold the ship. Tune
   // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 20, // difficulty lever — also a live "swarm" input in the sim UI
-    initialCombatForms: 4,     // scales with the swarm input (~1 per 5 infection forms)
+    initialInfectionForms: 20, // difficulty lever — live input in the sim UI
+    initialCombatForms: 4,     // difficulty lever — live input in the sim UI
+    initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
     breachCorpses: 10,         // fresh corpses spawned at the breach
   },
   carrier: {
