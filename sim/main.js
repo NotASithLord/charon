@@ -9,7 +9,13 @@ const canvas = document.getElementById('canvas');
 const statsEl = document.getElementById('stats');
 const logEl = document.getElementById('log');
 
-let sim = new Sim(document.getElementById('seed').value);
+// swarm size is an init-time difficulty lever (user note): applied on restart
+function swarmOverrides() {
+  const swarm = Math.max(4, Math.min(60, Number(document.getElementById('swarm').value) || 20));
+  return { flood: { initialInfectionForms: swarm, initialCombatForms: Math.max(2, Math.round(swarm / 5)) } };
+}
+
+let sim = new Sim(document.getElementById('seed').value, swarmOverrides());
 let viz = new Viz(canvas, sim);
 let paused = false;
 let speed = 1;
@@ -29,7 +35,7 @@ function applyDials() {
 }
 
 function restart() {
-  sim = new Sim(document.getElementById('seed').value.trim() || 'charon-1');
+  sim = new Sim(document.getElementById('seed').value.trim() || 'charon-1', swarmOverrides());
   applyDials();
   viz.setSim(sim);
   acc = 0;

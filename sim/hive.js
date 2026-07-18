@@ -298,7 +298,10 @@ export class Hive {
   evade(forms, carriers) {
     const sim = this.sim;
     for (const f of forms) {
-      if (f.task?.kind === TASK.AMBUSH || f.task?.kind === TASK.BAIT || f.task?.kind === TASK.ATTACK) continue;
+      // never interrupt a rooting carrier — losing the 4s transform to an
+      // evade/rampage yank was why the hive stopped producing carriers
+      if (f.task?.kind === TASK.AMBUSH || f.task?.kind === TASK.BAIT || f.task?.kind === TASK.ATTACK
+        || f.task?.kind === TASK.TRANSFORM) continue;
       const threat = this.localThreat(f.node);
       const own = sim.influence.floodStr[f.node];
       if (threat > Math.max(own, 0.8)) {
@@ -592,7 +595,8 @@ export class Hive {
     //    scarcity makes those grabs near-free)
     for (const f of combat) {
       if (!rampaging.has(f.node)) continue;
-      if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT)) continue;
+      if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT
+        || f.task.kind === TASK.TRANSFORM)) continue; // a rooting carrier is not a soldier
       const target = this.nearestBelievedHuman(f.node);
       if (target !== -1) this.assign(f, { kind: TASK.ATTACK, node: target });
     }

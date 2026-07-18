@@ -420,6 +420,12 @@ export function strategicSquads(sim) {
       }
     }
 
+    // make the crash-response convergence visible in the log
+    if (squad.objective?.kind === 'breach' && !squad.reachedBreach && leader.node === sim.graph.breachNode) {
+      squad.reachedBreach = true;
+      sim.log('sweep', `squad ${squad.id + 1} reaches the crash site`);
+    }
+
     // fresh contact on the blackboard -> pursue it (enables the hive's bait play)
     if (squad.contactNode !== undefined && sim.tickCount - squad.contactTick < 15 * 10
       && squad.objective?.kind !== 'breach' && sim.rng.chance(0.6)) {

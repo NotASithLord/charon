@@ -22,8 +22,8 @@ export const PARAMS = {
   // flood should win most runs — the marines alone can't hold the ship. Tune
   // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 30, // spec said 20; raised so the NPC-only baseline loses the ship
-    initialCombatForms: 6,
+    initialInfectionForms: 20, // difficulty lever — also a live "swarm" input in the sim UI
+    initialCombatForms: 4,     // scales with the swarm input (~1 per 5 infection forms)
     breachCorpses: 10,         // fresh corpses spawned at the breach
   },
   carrier: {
@@ -141,7 +141,9 @@ export const PARAMS = {
   },
   speed: { // edge-traversal multipliers (1.0 = base edge time)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.2,
-    infection: 1.5, combatForm: 1.1, carrier: 0.6, drag: 0.5,
+    // the flood does NOT outpace the response on open ground (user note:
+    // it crossed the ship faster than the marines could react)
+    infection: 1.0, combatForm: 0.95, carrier: 0.6, drag: 0.5,
   },
   edgeTravelSec: { hatch: 3, blastdoor: 4, lift: 6, ladder: 5, shaft: 8, vent: 6 },
   // command path (companion spec §0/§3.4). In single-player the producer
