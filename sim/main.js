@@ -79,6 +79,11 @@ window.addEventListener('resize', resize);
 resize();
 
 document.getElementById('restart').addEventListener('click', restart);
+document.getElementById('randomSeed').addEventListener('click', () => {
+  // UI-side randomness only (not sim code) — picks a fresh seed then restarts
+  document.getElementById('seed').value = 'run-' + Math.random().toString(36).slice(2, 8);
+  restart();
+});
 document.getElementById('pause').addEventListener('click', (e) => {
   paused = !paused;
   e.target.textContent = paused ? 'run ▶' : 'pause ⏸';
@@ -129,8 +134,8 @@ function frame(now) {
     }
     if (guard >= 240) acc = 0; // fell behind; drop time rather than spiral
   }
-  const interp = paused ? 1 : Math.max(0, Math.min(1, acc / sim.dt));
-  viz.draw(interp);
+  // pass real frame time; the viz smooths agent positions by id (see Viz)
+  viz.draw(dtReal * (paused ? 0.4 : Math.max(1, speed)));
   renderStats(sim, statsEl);
   renderLog(sim, logEl);
   requestAnimationFrame(frame);

@@ -178,13 +178,16 @@ function updateArmed(sim, a, dt) {
   const cornered = fleeStep(sim, a) === -1 && threat > 0;
 
   if (a.state === STATE.FIGHT) {
-    if (threat === 0) a.state = STATE.FLEE;
-    else if (threatHere > P.combat.armedBraveryStrength && !cornered) a.state = STATE.FLEE;
+    if (threat === 0) a.state = a.stayPut ? STATE.IDLE : STATE.FLEE;
+    // stay-put officers hold their post and fight to the end; they never rout
+    else if (!a.stayPut && threatHere > P.combat.armedBraveryStrength && !cornered) a.state = STATE.FLEE;
     return; // combat resolution handles the shooting
   }
   if (threat > 0) {
     maybeDistressCall(sim, a, P.radio.civilianCallReliability * 1.5);
-    if (cornered || threatHere <= P.combat.armedBraveryStrength) {
+    // armed officers holding a post fight anything they see; mobile armed crew
+    // fight only when cornered or the visible Flood looks weak (§5.2)
+    if (a.stayPut || cornered || threatHere <= P.combat.armedBraveryStrength) {
       a.state = STATE.FIGHT; a.path = [];
       return;
     }
@@ -213,6 +216,9 @@ function updateMarineTick(sim, a, dt) {
     return;
   }
   if (a.state === STATE.FIGHT) a.state = STATE.MOVE;
+  // a marine standing in a clear room has swept it — timestamp it so the
+  // squad's sweep planner expands into unswept ground instead of doubling back
+  if (sim.graph.node(a.node).type !== 'corridor' && threat === 0) sim.sweptAt[a.node] = sim.t;
 
   // report contacts to the blackboard + shipwide alert
   if (threat > 0) {
@@ -374,14 +380,18 @@ export function strategicSquads(sim) {
         sim.log('sweep', `first sweep cleared the breach region (${sim.graph.node(sim.graph.breachNode).name})`);
       }
       if (squad.objective?.kind === 'breach' || sim.firstSweepCleared || !squad.objective) {
-        // phase 2: independent random sweeps (§5.3), with a dwell pause so
-        // the ship isn't saturated with constant patrols
+        // phase 2: METHODICAL sweep — push to the nearest room that hasn't
+        // been cleared recently, expanding outward from where the squad is
+        // (which starts at the breach on the lower decks). This stops squads
+        // from clearing the crash site and then wandering back up to already-
+        // safe upper decks (user note).
         if (sim.firstSweepCleared || squad.objective) {
           if (squad.holdUntil === undefined || sim.t >= squad.holdUntil) {
-            const rooms = sim.graph.nodes.filter((n) => n.type !== 'corridor').map((n) => n.idx)
-              .filter((n) => n !== leader.node);
-            squad.objective = { kind: 'sweep', node: sim.rng.pick(rooms) };
-            squad.holdUntil = sim.t + 25 + sim.rng.range(0, 15);
+            const target = pickSweepTarget(sim, leader);
+            squad.objective = target !== -1
+              ? { kind: 'sweep', node: target }
+              : { kind: 'hold', node: leader.node };
+            squad.holdUntil = sim.t + 12 + sim.rng.range(0, 8);
           }
         } else {
           // before phase 2, non-sweep squads hold near spawn
@@ -390,6 +400,28 @@ export function strategicSquads(sim) {
       }
     }
   }
+}
+
+// Nearest room the squad hasn't cleared recently, so sweeps expand outward
+// instead of doubling back. Ties break toward the breach region — the known
+// danger is down where the ship was holed, not up on the command decks.
+function pickSweepTarget(sim, leader) {
+  const g = sim.graph;
+  let best = -1, bestScore = Infinity;
+  for (const n of g.nodes) {
+    if (n.type === 'corridor' || n.idx === leader.node) continue;
+    if (n.roles.includes('command')) continue; // the garrison holds the bridge
+    const staleness = sim.t - sim.sweptAt[n.idx];
+    if (staleness < 40) continue; // cleared very recently — leave it
+    const d = g.hops(leader.node, n.idx, ['std', 'shaft'], marinePass);
+    if (d === -1) continue;
+    const breachDist = g.hops(n.idx, g.breachNode, ['std', 'shaft'], marinePass);
+    // nearest first, with a mild pull toward the breach and a bonus for
+    // long-unswept rooms
+    const score = d + (breachDist === -1 ? 6 : breachDist) * 0.35 - Math.min(staleness, 180) * 0.01;
+    if (score < bestScore) { bestScore = score; best = n.idx; }
+  }
+  return best;
 }
 
 // Assign the automatic first sweep (§5.3 phase 1): the squad with the

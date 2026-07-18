@@ -62,6 +62,7 @@ export class Sim {
     this._floodAt = new Float32Array(graph.n);
     this.gunfireTick = new Int32Array(graph.n).fill(-9999);
     this.screamTick = new Int32Array(graph.n).fill(-9999);
+    this.sweptAt = new Float64Array(graph.n).fill(-9999); // last time a marine cleared a room
     this._panicked = new Uint8Array(graph.n);
 
     this.hive = new Hive(this);

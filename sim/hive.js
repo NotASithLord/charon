@@ -515,6 +515,36 @@ export class Hive {
       }
     }
 
+    // 2b. DESPERATION (user note): reduced to a handful of combat forms with no
+    //     carriers and no pool, a rational hive rebuilds — it does NOT just
+    //     hide and wait to be shot. The safest-positioned form roots into a
+    //     carrier to restart production; the rest pull back to the quietest
+    //     ground they can reach. This is the last-ditch survival play.
+    const desperate = K === 0 && I < 6;
+    if (desperate && combat.length > 0 && !combat.some((c) => c.task?.kind === TASK.TRANSFORM)) {
+      let safest = null, bestT = Infinity;
+      for (const c of combat) {
+        if (c.downed) continue;
+        const t = this.localThreat(c.node);
+        if (t < bestT) { bestT = t; safest = c; }
+      }
+      if (safest) {
+        if (bestT < 0.9 && !safest.move) this.assign(safest, { kind: TASK.TRANSFORM });
+        else {
+          const quiet = this.quietNodeNear(safest.node, 'big');
+          if (quiet !== -1 && quiet !== safest.node) this.assign(safest, { kind: TASK.GUARD, node: quiet });
+          else if (!safest.move) this.assign(safest, { kind: TASK.TRANSFORM }); // nowhere safer — root here
+        }
+      }
+      // everyone else goes to ground near the survivor rather than hunting
+      for (const c of combat) {
+        if (c === safest || c.task?.kind === TASK.TRANSFORM) continue;
+        const quiet = this.quietNodeNear(c.node, 'big');
+        if (quiet !== -1 && quiet !== c.node) this.assign(c, { kind: TASK.GUARD, node: quiet });
+      }
+    }
+    this._desperate = desperate;
+
     // 3. guards on each carrier. Protecting the first carriers through
     //    incubation is the whole game (§13.4), so guard HARDER when the pool
     //    is thin — that's exactly when losing a carrier is fatal.
@@ -595,7 +625,9 @@ export class Hive {
     // are safe, whatever the global pool is doing elsewhere.
     for (const c of combat) {
       if (c.task) continue;
-      const prey = this.nearestHuntNode(c.node);
+      // when desperate the survivors rebuild and hide (handled in 2b) — they
+      // don't go hunting into the guns
+      const prey = this._desperate ? -1 : this.nearestHuntNode(c.node);
       if (prey !== -1) { this.assign(c, { kind: TASK.ATTACK, node: prey }); continue; }
       const home = carriers.length ? carriers[c.id % carriers.length].node : this.carrierSite;
       if (home !== -1 && c.node !== home) this.assign(c, { kind: TASK.GUARD, node: this.scatterNode(home, c.id, 'big') });

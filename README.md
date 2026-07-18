@@ -138,6 +138,16 @@ Deviations from the spec's starter numbers, all in the "adjust freely" space it 
   forming, independent of whether it's relocating. Nothing spawns without consuming its inputs.
 - Vent exposure is strictly line-of-grating: an infection form moving through a vent can only be
   seen/shot by someone standing in one of the two rooms the vent actually connects.
+- A deck-5→deck-3 maintenance shaft (Lower Corridor ↔ Main Corridor Aft) bypasses the hangar deck,
+  so the two hangar ladders aren't an inescapable chokepoint.
+- All command-deck officers (bridge + Officer Country) are armed and fight in place.
+- Marines sweep methodically outward from the breach (nearest un-cleared room, biased toward the
+  crash), instead of wandering to already-safe upper decks; the command garrison holds the bridge.
+- If reduced to a few combat forms with no carriers/pool, the hive rebuilds (roots its safest form
+  into a carrier) rather than hiding to be picked off.
+- Debug view renders agent motion smoothed per agent-id, not per buffer slot — the sim repacks the
+  buffer on every death/spawn, and the old slot-based interpolation made agents "fly into position"
+  whenever the roster changed.
 
 ## Open decisions (§12) — current POC behavior
 

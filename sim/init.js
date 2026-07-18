@@ -159,8 +159,10 @@ export function initRun(seed, rng, P) {
         // officers hold Officer Country and do not evacuate (user note)
         node = officerPost; stayPut = true;
       } else node = rng.pick(soft);
-      const a = makeAgent(FACTION.CIVILIAN, node, graph);
-      a.hp = a.maxHp = P.combat.civilian.hp;
+      // all command-deck officers are armed (user note); they fight in place
+      const armed = stayPut;
+      const a = makeAgent(armed ? FACTION.ARMED : FACTION.CIVILIAN, node, graph);
+      a.hp = a.maxHp = armed ? P.combat.armed.hp : P.combat.civilian.hp;
       a.helpless = helpless;
       a.stayPut = stayPut;
       // ~20% are still working the ship (engineers, medics, techs) and move
@@ -171,14 +173,13 @@ export function initRun(seed, rng, P) {
     }
 
     // the captain and a few officers command from the bridge and never leave
-    // it (user note). The captain carries a sidearm, so he fights if reached.
+    // it (user note). All of them are armed and fight in place if reached.
     const bridge = graph.byId.get('bridge');
     for (let i = 0; i < P.marineDoctrine.bridgeOfficers; i++) {
-      const cap = i === 0;
-      const a = makeAgent(cap ? FACTION.ARMED : FACTION.CIVILIAN, bridge, graph);
-      a.hp = a.maxHp = cap ? P.combat.armed.hp : P.combat.civilian.hp;
+      const a = makeAgent(FACTION.ARMED, bridge, graph);
+      a.hp = a.maxHp = P.combat.armed.hp;
       a.stayPut = true;
-      a.captain = cap;
+      a.captain = i === 0;
       a.hasRadio = true;
       agents.push(a);
     }

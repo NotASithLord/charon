@@ -24,11 +24,16 @@ export class Viz {
     this.overlays = { influence: true, shafts: true, vents: true, calls: true, tracker: false, beliefs: false, labels: true, conns: false };
     this.callRings = []; // {node, t0}
     this.lastCallCount = 0;
+    // per-agent render position keyed by AGENT ID, not buffer slot. The sim
+    // repacks the buffer as agents die/spawn, so slot i holds different agents
+    // over time — interpolating by slot made every agent "fly into position"
+    // whenever the roster changed. Smoothing per id fixes that stutter.
+    this.rpos = new Map();
   }
 
-  setSim(sim) { this.sim = sim; this.callRings = []; this.lastCallCount = 0; }
+  setSim(sim) { this.sim = sim; this.callRings = []; this.lastCallCount = 0; this.rpos = new Map(); }
 
-  draw(interp = 1) {
+  draw(dt = 0.016) {
     const { ctx, sim } = this;
     const g = sim.graph;
     const W = this.canvas.width, H = this.canvas.height;
@@ -52,7 +57,7 @@ export class Viz {
     if (this.overlays.calls) this._callRings(g);
     if (this.overlays.tracker) this._tracker(g);
     if (this.overlays.beliefs) this._beliefs(g);
-    this._agents(interp);
+    this._agents(dt);
     ctx.restore();
   }
 
@@ -257,14 +262,30 @@ export class Viz {
     }
   }
 
-  _agents(interp) {
+  _agents(dt) {
     const { ctx, sim } = this;
     const buf = sim.buffer;
+    // ease each agent's rendered position toward its current sim position,
+    // matched BY ID so buffer repacking never causes a fly-across. New agents
+    // snap into place (no glide from a stale slot / the origin).
+    const k = Math.min(1, dt * 16);
+    const seen = new Set();
+    for (let i = 0; i < buf.count; i++) {
+      const id = buf.id[i];
+      seen.add(id);
+      const tx = buf.posX[i], ty = buf.posY[i];
+      let rp = this.rpos.get(id);
+      if (!rp) { rp = { x: tx, y: ty }; this.rpos.set(id, rp); }
+      else { rp.x += (tx - rp.x) * k; rp.y += (ty - rp.y) * k; }
+    }
+    if (this.rpos.size > buf.count * 2) { // occasional prune of dead ids
+      for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
+    }
     for (let i = 0; i < buf.count; i++) {
       const node = buf.nodeId[i];
       if (!this._visible(node)) continue;
-      const x = buf.prevX[i] + (buf.posX[i] - buf.prevX[i]) * interp;
-      const y = buf.prevY[i] + (buf.posY[i] - buf.prevY[i]) * interp;
+      const rp = this.rpos.get(buf.id[i]);
+      const x = rp.x, y = rp.y;
       const f = buf.faction[i];
       const flags = buf.flags[i];
       const burned = flags & FLAG.BURNED;

@@ -41,7 +41,7 @@ export const PARAMS = {
     reanimateTimeSec: 2,
   },
   flamethrower: { fuelUnits: 100, dps: 50, fuelPerSec: 2, fuelPerCorpse: 1, burnNodeSec: 12 },
-  door: { lockedFraction: 0.15 },   // PLACEHOLDER, per-run graph mutation
+  door: { lockedFraction: 0.25 },   // PLACEHOLDER, per-run graph mutation (visible variety run to run)
   vent: { blockedFraction: 0.30 },  // PLACEHOLDER, per-run
   ambush: { firstStrikeMult: 3.0 }, // PLACEHOLDER, applies to both sides
   motionTracker: { rangeHops: 1 },  // reveals a moving infection form in a vent

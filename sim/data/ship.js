@@ -75,6 +75,9 @@ export const SHIP = {
     { a: 'reactor', b: 'lowerCorr', ambushCorners: 1 },
     { a: 'vehicle', b: 'cargo2', ambushCorners: 1 },
     { a: 'barracks', b: 'corrM', ambushCorners: 2 },
+    // deck-5 -> deck-3 maintenance run that BYPASSES the hangar deck, so the
+    // two hangar ladders aren't a hard chokepoint you can't get around
+    { a: 'lowerCorr', b: 'corrA', ambushCorners: 2 },
   ],
   vents: [
     { a: 'medbay', b: 'cryo', breakable: true },
