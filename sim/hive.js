@@ -99,6 +99,7 @@ export class Hive {
     }
     // any form with LOS resets the record
     const seen = new Set();
+    const observed = new Map(); // node -> shooter weight actually seen this round
     for (const f of sim.agents) {
       if (f.dead || !isActiveFloodForm(f)) continue;
       for (const n of sim.visibleNodes(f.node)) {
@@ -117,6 +118,8 @@ export class Hive {
         // trickle into the last-stand line (per-contact beliefs decay in ~7s,
         // so the hive kept "forgetting" the line and feeding it another form)
         if (shooterW >= 2) this.strongpoints.set(n, { w: shooterW, t: sim.t });
+        const prev = observed.get(n);
+        if (prev === undefined || shooterW > prev) observed.set(n, shooterW);
       }
     }
     // believed strength fields (§13.6): probability mass spreads over nodes
@@ -154,6 +157,10 @@ export class Hive {
     }
     // fold remembered strongpoints into the threat picture (slow ~3 min decay)
     for (const [n, sp] of this.strongpoints) {
+      // eyes on the position beat the memory: a form looked at it THIS round
+      // and the mass of guns is gone (dead or moved on) — drop the fear, or
+      // the muster keeps storming an empty room for minutes
+      if (observed.has(n) && observed.get(n) < 2) { this.strongpoints.delete(n); continue; }
       const age = sim.t - sp.t;
       if (age > 360) { this.strongpoints.delete(n); continue; }
       const s = sp.w * Math.exp(-age / 180);
@@ -671,10 +678,36 @@ export class Hive {
       }
       for (const [target, forms] of staged) {
         const defense = this.believedHumanStr[target] + this.believedHardness[target];
+        const needed = defense * P.swarm.killRatio;
         const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
-        if (defense <= 0.8 || arrived >= defense * P.swarm.killRatio) {
+        if (defense <= 0.8 || arrived >= needed) {
           for (const f of forms) this.assign(f, { kind: TASK.ATTACK, node: target });
           sim.log('rampage', `the muster is up — ${forms.length} forms storm ${g.node(target).name} together`);
+          continue;
+        }
+        // RECRUIT (user rule: "they muster first"): a muster that is short
+        // actively pulls spare combat forms in from across the ship —
+        // waiting for whoever happened to drift into a rampage pocket
+        // deadlocked a 100-form hive outside a 6-marine line forever
+        if (forms.length < needed + 2) {
+          const stage = forms[0].task.node;
+          const spares = combat.filter((c) => !c.task
+            || (c.task.kind === TASK.GUARD && c.task.muster === undefined));
+          const ranked = spares
+            .map((c) => ({ c, d: g.hops(c.node, stage, ['std', 'shaft'], this.bigPass) }))
+            .filter((x) => x.d !== -1)
+            .sort((x, y) => (x.d - y.d) || (x.c.id - y.c.id));
+          let strength = forms.length;
+          for (const { c } of ranked) {
+            if (strength >= needed + 2) break;
+            this.assign(c, { kind: TASK.GUARD, node: stage, muster: target, until: sim.t + 90 });
+            strength++;
+          }
+        }
+        // while the muster is genuinely filling, the early arrivals wait for
+        // the walkers instead of timing out one by one
+        if (forms.length >= needed) {
+          for (const f of forms) f.task.until = Math.max(f.task.until, sim.t + 30);
         }
       }
     }
