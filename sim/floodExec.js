@@ -24,6 +24,9 @@ export function updateFloodTick(sim, dt) {
     }
     if (a.hp <= 0) continue;
 
+    // safety: GRABBING is only legal while a GRAB task is live
+    if (a.state === STATE.GRABBING && a.task?.kind !== TASK.GRAB) { a.state = STATE.IDLE; a.grabTimer = 0; }
+
     // survival reflex: an infection form standing among shooters dives for
     // the safest opening NOW instead of waiting for the 2.5 s strategic
     // brain — the currency is too precious to stand in a fire lane
@@ -60,10 +63,11 @@ export function updateFloodTick(sim, dt) {
     // guns (user note): when local flood strength outweighs the shooters
     // ~2:1, grabs work THROUGH the gunfire and even marines get taken. The
     // swarm eats stomp losses; that's the price of the pile-on.
-    // (parked forms only — yanking a form that is already mid-transit off a
-    // node back to a corpse behind it created an eating carousel at the breach)
+    // (not mid-edge — yanking a form already in transit off a node back to a
+    // corpse behind it created an eating carousel. A queued-but-not-departed
+    // path does NOT block eating: standing in a corpse room beats walking.)
     if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0 && a.state !== STATE.GRABBING
-      && !a.move && !a.path.length
+      && !a.move
       && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
       const here = sim.occupants(a.node);
       let gunsW = 0;
@@ -80,26 +84,12 @@ export function updateFloodTick(sim, dt) {
         if (prey && a.task?.targetId !== prey.id) {
           hive.assign(a, { kind: TASK.GRAB, targetId: prey.id });
         } else if (!prey) {
-          // ALWAYS INFECT (user note): a form never walks past a usable
-          // corpse — it burrows in on the spot and stands up a combat form.
-          // EXCEPT during the opening race (§6.7): the crash site is a
-          // larder, but the sweep is coming — eat only while there's time
-          // on the clock, a few forms at once, and RUN when it's close.
-          // (This is what left the whole pool standing in the hangar chain-
-          // converting bodies instead of evacuating.)
-          let mayEat = true;
-          if (hive.opening) {
-            // even with no fix on the marines, the hive assumes a sweep is
-            // coming — it budgets 45 seconds of smash-and-grab, then runs
-            const timeLeft = hive.sweepEtaSec === Infinity ? 999 : hive.sweepEtaSec;
-            if (timeLeft < 25 || sim.t > 45) mayEat = false;
-            else {
-              const eating = here.reduce((n, x) => n +
-                (x.faction === FACTION.INFECTION && x.task?.kind === TASK.CONVERT ? 1 : 0), 0);
-              if (eating >= 4) mayEat = false; // the rest keep moving to the dens
-            }
-          }
-          const corpse = mayEat ? here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed) : null;
+          // ALWAYS INFECT (user rule, no exceptions): bodies in the room get
+          // burrowed into IMMEDIATELY and IN PARALLEL — each form claims its
+          // own corpse, the 3s conversions all run at once, and every form
+          // that can't claim a body flees. One fast wave, then gone. No
+          // serial grazing window (that read as "sitting on the crash site").
+          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed);
           if (corpse) {
             corpse.claimed = true;
             hive.assign(a, { kind: TASK.CONVERT, corpseId: corpse.id });
@@ -139,7 +129,11 @@ export function updateFloodTick(sim, dt) {
 
       case TASK.GRAB: {
         const target = sim.byId.get(t.targetId);
-        if (!target || target.dead || target.hp <= 0) { a.task = null; break; }
+        if (!target || target.dead || target.hp <= 0) {
+          a.task = null;
+          if (a.state === STATE.GRABBING) { a.state = STATE.IDLE; a.grabTimer = 0; }
+          break;
+        }
         const believed = hive.beliefs.get(t.targetId);
         const goal = sim.visibleNodes(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
         if (a.node === target.node) {

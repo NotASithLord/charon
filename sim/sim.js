@@ -429,14 +429,18 @@ export class Sim {
         }
         // an infection form can SEE shooters through the next doorway; while
         // the pool is precious it will not skitter into standing fire — but
-        // a rich hive spends forms like water (§13.3 RiskAversion)
+        // a rich hive spends forms like water (§13.3 RiskAversion). After a
+        // few refusals it dashes anyway: balking forever at the only exit
+        // pinned whole swarms at the breach (user-reported regression).
         if (a.faction === FACTION.INFECTION && link.kind === 'std' &&
           (this.hive.lastScarcity ?? 3) > 0.8 &&
+          (a.doorBalks = (a.doorBalks ?? 0) + 1) <= 12 &&
           this._occ[step.to].some((h) => h.hp > 0 && !h.dead &&
             (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED))) {
           a.path = [];
           continue;
         }
+        a.doorBalks = 0;
         a.path.shift();
         const base = this.P.edgeTravelSec[link.kind === 'std' ? link.type : link.kind];
         a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: base / this._speedMult(a) };

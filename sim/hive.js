@@ -443,6 +443,7 @@ export class Hive {
         // show node: reachable, far from every den, toward believed humans
         let show = -1, bestScore = -Infinity;
         for (const n of g.nodes) {
+          if (this.staticGarrison(n.idx) > 0) continue; // show yourself NEAR them, never IN their room
           const d = g.hops(decoy.node, n.idx, ['std', 'shaft'], this.bigPass);
           if (d === -1 || d < 2 || d > 5) continue;
           let minDen = Infinity;
@@ -879,6 +880,7 @@ export class Hive {
   // worth trading currency for.
   trySquadWipe(infection, combat, carriers, I) {
     const sim = this.sim, g = sim.graph, P = sim.P.swarm;
+    if (sim.t < 60) return; // no set-piece attacks in the first minute (user rule)
     if (sim.t < (this.squadWipeCooldownUntil ?? 0)) return;
     for (const squad of sim.squads) {
       if (squad.broken) continue;
@@ -926,6 +928,8 @@ export class Hive {
     let best = -1, bestScore = -Infinity;
     for (let n = 0; n < this.sim.graph.n; n++) {
       if (this.believedHumanStr[n] <= 0.05) continue;
+      // rushing the garrison rooms in the first minute is suicide (user rule)
+      if (this.sim.t < 60 && this.staticGarrison(n) > 0) continue;
       const d = this.sim.graph.hops(from, n, ['std', 'shaft'], this.bigPass);
       if (d === -1) continue;
       const s = this.believedHumanStr[n] - d * 0.2;
@@ -938,6 +942,9 @@ export class Hive {
     form.task = task;
     form.path = [];
     form.taskProgress = 0;
+    // a form yanked out of a grab must not stay frozen in GRABBING — that
+    // state parks movement AND blocks eating (the breach-freeze regression)
+    if (form.state === STATE.GRABBING) { form.state = STATE.IDLE; form.grabTimer = 0; }
     if (form.inShaftAmbush !== undefined && task.kind !== TASK.AMBUSH) {
       this.sim.graph.shafts[form.inShaftAmbush]?.ambushers?.delete(form.id);
       form.inShaftAmbush = undefined;

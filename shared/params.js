@@ -95,7 +95,11 @@ export const PARAMS = {
   },
   // §13 decision math
   hive: {
-    I_ref: 40,
+    // Re-anchored from the spec's 40 (user note: "always hoarding makes no
+    // sense") — in the current economy forms are MEANT to be spent on bodies
+    // immediately and carriers replace them, so a modest pool is healthy,
+    // not an emergency. Scarcity 1.0 at ~15 forms.
+    I_ref: 15,
     kS: 1.5,
     scarcityMin: 0.5,
     scarcityMax: 4,
