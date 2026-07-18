@@ -79,6 +79,12 @@
   button:hover { background: #1a2432; cursor: pointer; }
   button.active { background: #23405c; border-color: #3d6a9c; }
   input[type=range] { padding: 0; width: 90px; }
+  input[type=number] {
+    width: 64px; padding: 4px 6px; text-align: right;
+    -moz-appearance: textfield; appearance: textfield;
+  }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   label.chk { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #8a97a8; }
   .dials {
     display: flex; gap: 14px; padding: 6px 12px; background: #0a0d11;
@@ -95,9 +101,9 @@
     <h1>HALO CHARON // SIM</h1>
     <label>seed <input id="seed" size="10" value="charon-1"></label>
     <span title="starting flood at the breach (applies on restart)">
-      <label>inf <input id="startInf" type="number" min="0" max="60" step="1" value="20" style="width:46px"></label>
-      <label>cf <input id="startCf" type="number" min="0" max="20" step="1" value="4" style="width:42px"></label>
-      <label>car <input id="startCar" type="number" min="0" max="6" step="1" value="0" style="width:40px"></label>
+      <label>inf <input id="startInf" type="number" min="0" max="60" step="1" value="20"></label>
+      <label>cf <input id="startCf" type="number" min="0" max="20" step="1" value="4"></label>
+      <label>car <input id="startCar" type="number" min="0" max="6" step="1" value="0"></label>
     </span>
     <button id="randomSeed" title="new random seed">🎲</button>
     <button id="restart">restart ▶</button>

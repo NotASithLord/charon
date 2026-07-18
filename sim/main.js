@@ -116,6 +116,11 @@ document.getElementById('speed').addEventListener('input', (e) => {
   document.getElementById('speedVal').textContent = speed >= 1 ? `${speed}×` : `${speed.toFixed(2)}×`;
 });
 document.getElementById('seed').addEventListener('keydown', (e) => { if (e.key === 'Enter') restart(); });
+for (const id of ['startInf', 'startCf', 'startCar']) {
+  const el = document.getElementById(id);
+  el.addEventListener('focus', () => el.select()); // typing REPLACES the value
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') restart(); });
+}
 document.getElementById('legendToggle').addEventListener('click', (e) => {
   const hidden = document.getElementById('legend').classList.toggle('hidden');
   e.target.classList.toggle('active', !hidden);

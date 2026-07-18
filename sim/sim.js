@@ -71,7 +71,7 @@ export class Sim {
     assignFirstSweep(this);
     this._refreshOccupancy();
     this._computeInfluence();
-    this.log('init', `seed "${this.seed}" — breach at ${graph.node(graph.breachNode).name}, ${agents.filter(isLivingHuman).length} souls aboard`);
+    this.log('init', `seed "${this.seed}" — breach at ${graph.node(graph.breachNode).name}, ${agents.filter(isLivingHuman).length} souls aboard · starting flood: ${this.P.flood.initialInfectionForms} inf / ${this.P.flood.initialCombatForms} cf / ${this.P.flood.initialCarriers} car`);
     this.writeBuffer();
   }
 
