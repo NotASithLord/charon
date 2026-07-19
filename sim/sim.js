@@ -7,7 +7,7 @@ import { cloneParams } from '../shared/params.js';
 import { AgentBuffer, FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
 import { initRun, STATE, makeAgent } from './init.js';
 import { updateHumansTick, strategicSquads, assignFirstSweep } from './humans.js';
-import { Hive, W_FLOOD, W_HUMAN, isActiveFloodForm, isLivingHuman } from './hive.js';
+import { Hive, TASK, W_FLOOD, W_HUMAN, isActiveFloodForm, isLivingHuman } from './hive.js';
 import { updateFloodTick } from './floodExec.js';
 import { resolveCombat, humanDeathToCorpse } from './combat.js';
 import { CommandQueue, CMD } from './commands.js';
@@ -35,6 +35,9 @@ export class Sim {
     this.agents = agents;
     this.squads = squads;
     this.byId = new Map(agents.map((a) => [a.id, a]));
+    // rooms indexed by deck, for the physical-room lookup (_pnodeOf)
+    this._deckRooms = {};
+    for (const n of graph.nodes) (this._deckRooms[n.deck] ??= []).push(n);
 
     this.buffer = new AgentBuffer(512);
     this.commands = new CommandQueue();
@@ -384,6 +387,10 @@ export class Sim {
     this.calls = this.calls.filter((c) => this.t - c.t < this.P.radio.callFadeSec * 2);
   }
 
+  // REAL SPACE LOGIC (user note): occupancy — who is IN a room for sensing,
+  // reactions and combat — is decided by an agent's physical coordinates,
+  // not by the node its pathfinder is bound to. A form ten meters into the
+  // hangar IS in the hangar, even if its "move" hasn't completed yet.
   _refreshOccupancy() {
     const g = this.graph;
     this._occ = Array.from({ length: g.n }, () => []);
@@ -391,12 +398,34 @@ export class Sim {
     this._panicked.fill(0);
     for (const a of this.agents) {
       if (a.dead) continue;
-      this._occ[a.node].push(a);
+      a.pnode = this._pnodeOf(a);
+      this._occ[a.pnode].push(a);
       if (isActiveFloodForm(a) || (a.faction === FACTION.CARRIER && a.hp > 0)) {
-        this._floodAt[a.node] += W_FLOOD[a.faction];
+        this._floodAt[a.pnode] += W_FLOOD[a.faction];
       }
-      if (a.panicked && a.hp > 0) this._panicked[a.node] = 1;
+      if (a.panicked && a.hp > 0) this._panicked[a.pnode] = 1;
     }
+  }
+
+  // A mover inside ducting or a cross-deck crawlway is physically inside the
+  // ship's structure, not in any room — those keep their logical anchor (and
+  // combat.js resolves them in their own shaft/vent groups).
+  _physAnchored(a) {
+    if (!a.move || a.move.layer === 'std') return true;
+    if (a.move.layer === 'vent') return false;
+    const l = a.move.link;
+    return this.graph.node(l.a).deck === this.graph.node(l.b).deck; // same-deck crawl crosses open floor
+  }
+
+  // Which room rect actually contains this body. Prefers the current logical
+  // node (cheap, and stable at shared-wall boundaries), then scans the deck.
+  _pnodeOf(a) {
+    if (!this._physAnchored(a)) return a.node;
+    const inRect = (n) => n.deck === a.deck &&
+      Math.abs(a.x - n.x) <= n.w / 2 + 0.4 && Math.abs(a.y - n.y) <= n.d / 2 + 0.4;
+    if (inRect(this.graph.node(a.node))) return a.node;
+    for (const n of this._deckRooms[a.deck] ?? []) if (inRect(n)) return n.idx;
+    return a.node;
   }
 
   _computeInfluence() {
@@ -405,10 +434,11 @@ export class Sim {
     floodStr.fill(0); humanStr.fill(0); hardness.fill(0);
     for (const a of this.agents) {
       if (a.dead || a.hp <= 0) continue;
-      if (isActiveFloodForm(a) || a.faction === FACTION.CARRIER) floodStr[a.node] += W_FLOOD[a.faction];
+      const n = a.pnode ?? a.node;
+      if (isActiveFloodForm(a) || a.faction === FACTION.CARRIER) floodStr[n] += W_FLOOD[a.faction];
       else if (isLivingHuman(a)) {
-        humanStr[a.node] += W_HUMAN[a.faction];
-        if (a.faction === FACTION.MARINE) hardness[a.node] += 1;
+        humanStr[n] += W_HUMAN[a.faction];
+        if (a.faction === FACTION.MARINE) hardness[n] += 1;
       }
     }
     // diffuse across every real connection (§6.2)
@@ -461,8 +491,19 @@ export class Sim {
       if (a.isPlayer) { a.animTime += dt; continue; }
       // a human currently in a Flood form's grip can't move (§ grabPins)
       if (a.held === this.tickCount) { a.move = null; continue; }
+      // LINE-OF-SIGHT ENGAGEMENT (user note): a form that physically shares
+      // an open space with prey abandons its track and closes on the body
+      // itself — see _spatialSteer
+      if (this._spatialSteer(a, dt)) continue;
       if (a.state === STATE.FIGHT || a.state === STATE.GRABBING || a.state === STATE.COWER || a.state === STATE.AMBUSHING) {
-        if (!a.move) { this._parkDrift(a, dt); continue; }
+        if (!a.move) {
+          // fighters/grabbers/ambushers HOLD where they stand — sliding to a
+          // parking slot at the room's center mid-fight is exactly the "it
+          // all happens at the center" artifact this round removes
+          if (a.state === STATE.COWER) this._parkDrift(a, dt);
+          else a.animTime += dt;
+          continue;
+        }
       }
       if (a.move) {
         a.move.t += dt / a.move.travelSec;
@@ -567,6 +608,13 @@ export class Sim {
           mult *= this.P.speed.chargeMult;
           a.charging = true;
         }
+        // an infection form PURSUING a host keeps its skittering pace through
+        // doorways too — at a walk it loses ground on every room the prey
+        // flees through and the grab never lands (real-space pursuit)
+        if (a.faction === FACTION.INFECTION && a.task?.kind === TASK.GRAB && link.kind === 'std') {
+          mult *= this.P.speed.infectionLunge;
+          a.charging = true;
+        }
         // tiny per-agent pace variation staggers a column longitudinally so
         // simultaneous movers never sit on the exact same interpolation point
         const pace = 1 + ((a.id % 7) - 3) * 0.012;
@@ -576,6 +624,71 @@ export class Sim {
         this._parkDrift(a, dt);
       }
     }
+  }
+
+  // REAL SPACE COMBAT (user note): an enemy is engaged where it physically
+  // IS, the moment both bodies share an open space — inside a room that's
+  // immediate (rooms are convex; nothing blocks the sightline), not when a
+  // pathfinding "move" happens to complete at the room's center. A combat
+  // form abandons its track and runs straight AT its victim's live position;
+  // an infection form with a grab order closes the last meters the same way.
+  // combat.js gates claws/grabs on these same real distances.
+  _spatialSteer(a, dt) {
+    const P = this.P;
+    if (a.isPlayer || a.state === STATE.GRABBING || a.state === STATE.AMBUSHING) return false;
+    if (!this._physAnchored(a)) return false; // inside ducting/a cross-deck crawl
+    const pn = a.pnode ?? a.node;
+    let target = null, stopAt = 0, mps = 0;
+    if (a.faction === FACTION.COMBAT) {
+      if (a.downed || a.hp <= 0 || a.dragging !== -1) return false;
+      const k = a.task?.kind;
+      if (k === TASK.TRANSFORM || k === TASK.DECOY || k === TASK.BAIT) return false; // rooted / playing a role
+      let best = null, bestD = Infinity;
+      for (const h of this._occ[pn]) {
+        if (h.dead || h.hp <= 0) continue;
+        if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
+        const d = Math.hypot(h.x - a.x, h.y - a.y);
+        if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && h.id < (best?.id ?? Infinity))) { bestD = d; best = h; }
+      }
+      if (!best) {
+        if (a.state === STATE.FIGHT) { a.state = STATE.IDLE; a.charging = false; }
+        return false;
+      }
+      target = best;
+      stopAt = P.combat.meleeRangeM * 0.6;
+      a.charging = bestD > P.combat.meleeRangeM; // the whole approach is a sprint (lore)
+      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1);
+      a.state = STATE.FIGHT;
+    } else if (a.faction === FACTION.INFECTION) {
+      if (a.task?.kind !== TASK.GRAB || a.hp <= 0) return false;
+      const t = this.byId.get(a.task.targetId);
+      if (!t || t.dead || t.hp <= 0 || t.deck !== a.deck || (t.pnode ?? t.node) !== pn) return false;
+      if (Math.hypot(t.x - a.x, t.y - a.y) <= P.combat.grabRangeM) return false; // latched — floodExec runs the grab
+      target = t;
+      stopAt = P.combat.grabRangeM * 0.6;
+      mps = P.movement.baseMps * this._speedMult(a) * P.speed.infectionLunge; // skittering leap
+      a.charging = true;
+    } else return false;
+
+    // engaged: the track is abandoned — the fight is HERE, in this room
+    a.move = null;
+    if (a.path.length) a.path = [];
+    const room = this.graph.node(pn);
+    if (a.node !== pn) { a.node = pn; a.deck = room.deck; }
+    const dx = target.x - a.x, dy = target.y - a.y;
+    const dist = Math.hypot(dx, dy);
+    a.heading = Math.atan2(dy, dx);
+    if (dist > stopAt) {
+      const step = Math.min(dist - stopAt, mps * dt);
+      a.x += (dx / dist) * step;
+      a.y += (dy / dist) * step;
+      // stay inside the room's real footprint
+      const hw = Math.max(0.4, room.w / 2 - 0.3), hd = Math.max(0.4, room.d / 2 - 0.3);
+      a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x));
+      a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y));
+    }
+    a.animTime += dt;
+    return true;
   }
 
   // Parked agents each claim their OWN patch of floor (user note: no stacked

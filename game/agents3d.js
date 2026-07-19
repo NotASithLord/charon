@@ -221,7 +221,9 @@ export class Agents3D {
       const occ = sim.occupants(n);
       const shooters = occ.filter((a) => a.hp > 0 && !a.dead && !a.downed &&
         a.faction === FACTION.COMBAT && a.hostArmed);
-      const targets = occ.filter((a) => !a.dead && !a.isPlayer && a.hp > 0 &&
+      // the player is a legitimate target too — incoming fire should be
+      // VISIBLE (tracers converging on you), not silent hp loss
+      const targets = occ.filter((a) => !a.dead && a.hp > 0 &&
         (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
       if (!shooters.length || !targets.length) continue;
       for (const sh of shooters) {

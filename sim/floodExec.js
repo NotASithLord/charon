@@ -32,7 +32,7 @@ export function updateFloodTick(sim, dt) {
     // brain — the currency is too precious to stand in a fire lane
     if (a.faction === FACTION.INFECTION && !a.move && a.state !== STATE.GRABBING
       && (sim.hive.lastScarcity ?? 3) > 0.8) {
-      const hot = sim.occupants(a.node).some((h) => h.hp > 0 && !h.dead &&
+      const hot = sim.occupants(a.pnode ?? a.node).some((h) => h.hp > 0 && !h.dead &&
         (h.faction === FACTION.MARINE || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT)));
       if (hot) {
         let best = null, bestDanger = Infinity;
@@ -69,14 +69,14 @@ export function updateFloodTick(sim, dt) {
     if (a.faction === FACTION.INFECTION && !a.downed && a.hp > 0 && a.state !== STATE.GRABBING
       && !a.move
       && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
-      const here = sim.occupants(a.node);
+      const here = sim.occupants(a.pnode ?? a.node);
       let gunsW = 0;
       for (const h of here) {
         if (h.hp <= 0 || h.dead) continue;
         if (h.faction === FACTION.MARINE) gunsW += 1;
         else if (h.faction === FACTION.ARMED && h.state === STATE.FIGHT) gunsW += 0.6;
       }
-      const overwhelmed = gunsW > 0 && sim.floodStrengthAt(a.node) >= gunsW * sim.P.swarm.overwhelmRatio;
+      const overwhelmed = gunsW > 0 && sim.floodStrengthAt(a.pnode ?? a.node) >= gunsW * sim.P.swarm.overwhelmRatio;
       if (gunsW === 0 || overwhelmed) {
         const prey = here.find((h) => h.hp > 0 && !h.dead &&
           (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED
@@ -111,9 +111,10 @@ export function updateFloodTick(sim, dt) {
         || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)
         || (a.task.kind === TASK.ATTACK && a.task.node === a.node));
       if (!held) {
-        const prey = sim.occupants(a.node).some((h) => h.hp > 0 && !h.dead &&
+        const pn = a.pnode ?? a.node;
+        const prey = sim.occupants(pn).some((h) => h.hp > 0 && !h.dead &&
           (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE));
-        if (prey) hive.assign(a, { kind: TASK.ATTACK, node: a.node });
+        if (prey) hive.assign(a, { kind: TASK.ATTACK, node: pn });
       }
     }
 
@@ -169,18 +170,24 @@ export function updateFloodTick(sim, dt) {
         }
         const believed = hive.beliefs.get(t.targetId);
         const goal = sim.visibleNodes(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
-        if (a.node === target.node) {
-          // it's latched on: pin the victim so they can't run, and take them.
-          // An unarmed civilian is converted almost instantly (user note);
-          // an armed target takes a little longer. Marines/armed-in-a-fight
-          // are still resolved by combat.js (a grab there gets the form
-          // stomped), so this only sticks against the overwhelmed.
+        const samePhys = (a.pnode ?? a.node) === (target.pnode ?? target.node) && a.deck === target.deck;
+        if (samePhys && Math.hypot(target.x - a.x, target.y - a.y) <= sim.P.combat.grabRangeM) {
+          // it has physically REACHED the body (user note: real space logic —
+          // no pinning someone from across a hangar): latch on, pin them, and
+          // take them. An unarmed civilian is converted almost instantly; an
+          // armed target takes a little longer. Marines/armed-in-a-fight are
+          // still resolved by combat.js (a grab there gets the form stomped),
+          // so this only sticks against the overwhelmed.
           a.state = STATE.GRABBING;
           a.move = null; a.path = [];
           if (sim.P.combat.grabPins) target.held = sim.tickCount;
           a.grabTimer += dt;
           const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
           if (a.grabTimer >= need) convertHuman(sim, a, target);
+        } else if (samePhys) {
+          // same open space, not yet in reach: _spatialSteer closes the gap
+          // straight at the victim's live position
+          a.state = STATE.MOVE; a.grabTimer = 0;
         } else {
           a.state = STATE.MOVE; a.grabTimer = 0;
           moveToward(sim, a, goal, hive.safeInfectionPath.bind(hive));
@@ -376,16 +383,28 @@ export function explodeCarrier(sim, a) {
   if (a.dead) return;
   a.dead = true;
   const P = sim.P;
-  for (const h of sim.occupants(a.node)) {
-    if (h.hp > 0 && (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE)) {
+  // real blast reach (user note: real space logic) — the rupture hurts
+  // whoever is physically near it, not "everyone in the room record"; in a
+  // hangar you can be thirty meters clear of the pop
+  for (const h of sim.agents) {
+    if (h.dead || h.hp <= 0 || h.deck !== a.deck) continue;
+    if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
+    if ((h.pnode ?? h.node) !== (a.pnode ?? a.node)) continue; // walls contain the burst
+    if (Math.hypot(h.x - a.x, h.y - a.y) <= P.carrier.explodeRadiusM) {
       sim.hurtHuman(h, P.carrier.explodeDamage);
     }
   }
-  // everything it was carrying spills out at once
+  // everything it was carrying spills out at once, in a ring around the
+  // rupture point — not teleported to the room's center
+  const room = sim.graph.node(a.node);
   const n = a.held ?? 0;
   for (let i = 0; i < n; i++) {
     const f = makeAgent(FACTION.INFECTION, a.node, sim.graph);
     f.hp = f.maxHp = 1;
+    const ang = i * 2.399963;
+    const r = 0.6 + 0.22 * i;
+    f.x = Math.max(room.x - room.w / 2 + 0.4, Math.min(room.x + room.w / 2 - 0.4, a.x + Math.cos(ang) * r));
+    f.y = Math.max(room.y - room.d / 2 + 0.4, Math.min(room.y + room.d / 2 - 0.4, a.y + Math.sin(ang) * r));
     sim.spawn(f);
   }
   sim.stats.formsMinted += n;

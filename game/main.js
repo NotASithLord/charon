@@ -137,9 +137,11 @@ const _rt = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _hit = new THREE.Vector3();
 function shotCandidates() {
-  // same-deck LOS via the sim's rules, plus the far room of any open shaft
-  // whose column the player stands in/near
-  const visible = new Set(sim.visibleNodes(player.agent.node));
+  // REAL SPACE (user note): every flood body on your deck is a candidate —
+  // the wall raycast decides occlusion, not room-graph membership. This is
+  // what makes a form ten meters into the hangar shootable the moment you
+  // can see it, instead of only after its pathfinder "arrives". Plus the far
+  // room of any open vertical shaft whose column you're standing in.
   const out = [];
   const trunk = world.trunkAt(player.deck, player.x, player.z);
   const shaftNode = trunk && trunk.vertical
@@ -147,9 +149,7 @@ function shotCandidates() {
   for (const a of sim.agents) {
     if (a.dead) continue;
     if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
-    const sameDeck = a.deck === player.deck && visible.has(a.node);
-    const viaShaft = shaftNode !== -1 && a.node === shaftNode;
-    if (sameDeck || viaShaft) out.push(a);
+    if (a.deck === player.deck || (shaftNode !== -1 && a.node === shaftNode)) out.push(a);
   }
   return out;
 }

@@ -42,9 +42,10 @@ export function updateHumansTick(sim, dt) {
 }
 
 function floodThreatVisible(sim, a) {
-  // weighted active flood strength across LOS nodes (§5.1)
+  // weighted active flood strength across LOS nodes (§5.1), anchored on the
+  // room the human is PHYSICALLY in (user note: real space logic)
   let s = 0;
-  for (const n of sim.visibleNodes(a.node)) s += sim.floodStrengthAt(n);
+  for (const n of sim.visibleNodes(a.pnode ?? a.node)) s += sim.floodStrengthAt(n);
   return s;
 }
 
@@ -232,7 +233,7 @@ function nearestRoom(sim, from) {
 // --- armed humans (§5.2) ---
 function updateArmed(sim, a, dt) {
   const P = sim.P;
-  const threatHere = sim.floodStrengthAt(a.node);
+  const threatHere = sim.floodStrengthAt(a.pnode ?? a.node);
   const threat = floodThreatVisible(sim, a);
   const cornered = fleeStep(sim, a) === -1 && threat > 0;
 
@@ -247,7 +248,9 @@ function updateArmed(sim, a, dt) {
     // armed officers holding a post fight anything they see; mobile armed crew
     // fight only when cornered or the visible Flood looks weak (§5.2)
     if (a.stayPut || cornered || threatHere <= P.combat.armedBraveryStrength) {
-      a.state = STATE.FIGHT; a.path = [];
+      // stop and shoot WHERE YOU STAND (user note: real space logic) — no
+      // finishing the stroll to the room's center first
+      a.state = STATE.FIGHT; a.path = []; a.move = null;
       return;
     }
   }
@@ -260,7 +263,7 @@ function updateMarineTick(sim, a, dt) {
   // CIC (user note). It fights anything that reaches it but never sweeps,
   // answers calls, or takes orders — a fixed strongpoint.
   if (a.garrison) {
-    a.state = sim.floodStrengthAt(a.node) > 0 ? STATE.FIGHT : STATE.IDLE;
+    a.state = sim.floodStrengthAt(a.pnode ?? a.node) > 0 ? STATE.FIGHT : STATE.IDLE;
     a.path = []; a.move = null;
     if (a.state === STATE.FIGHT && a.hasRadio && sim.tickCount % 60 === 0) sim.emitCall(a);
     return;
@@ -270,8 +273,10 @@ function updateMarineTick(sim, a, dt) {
   if (!squad || squad.broken) { updateArmed(sim, a, dt); return; }
 
   const threat = floodThreatVisible(sim, a);
-  if (sim.floodStrengthAt(a.node) > 0) {
-    a.state = STATE.FIGHT; a.path = []; // stand and fight on contact
+  if (sim.floodStrengthAt(a.pnode ?? a.node) > 0) {
+    // stand and fight ON CONTACT, where you physically are — a marine does
+    // not keep walking to the middle of the hangar with a form on the deck
+    a.state = STATE.FIGHT; a.path = []; a.move = null;
     return;
   }
   if (a.state === STATE.FIGHT) a.state = STATE.MOVE;

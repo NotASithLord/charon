@@ -596,9 +596,12 @@ export class Hive {
     if (K < wantK && (C > K || K === 0)) {
       const target = this.bestCarrierNode();
       if (target !== -1) {
-        // a form raised from the PLAYER never roots into a carrier (game rule)
+        // a form raised from the PLAYER never roots into a carrier (game rule);
+        // a form staged in a LIVE MUSTER is off-limits too — drafting the army
+        // it is trying to raise put the hive in a loop of eating its own
+        // soldiers (raise the dead → draft to carrier → rupture → raise…)
         const spares = combat.filter((c) => !c.fromPlayer
-          && (!c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.ATTACK));
+          && (!c.task || (c.task.kind === TASK.GUARD && c.task.muster === undefined) || c.task.kind === TASK.ATTACK));
         const c = this.nearest(spares, target, ['std', 'shaft'], this.bigPass);
         if (c) {
           if (c.node === target && !c.move && this.localThreat(target) < 0.5) this.assign(c, { kind: TASK.TRANSFORM });
@@ -720,10 +723,38 @@ export class Hive {
           continue;
         }
         // NUMBERS FIRST (user rule): if every combat form the hive owns
-        // still couldn't meet the ratio, waiting is pointless — disband NOW
-        // and go max-breeding until the numbers exist. The flood's advantage
-        // IS numbers; a muster it can't fill is forms not making more forms.
+        // still couldn't meet the ratio, waiting is pointless. But before
+        // giving up: RAISE THE DEAD. Every wave that broke on this line left
+        // its downed in front of it — reanimating that pile (1 infection form
+        // each) is far cheaper than breeding a new army. Only when the pile
+        // plus every living form still can't make the number does the hive
+        // turn to pure breeding.
         if (combat.length < needed) {
+          const raisable = sim.agents.filter((d) => !d.dead && d.faction === FACTION.COMBAT
+            && d.downed && d.damage < 100 && !d.claimed
+            && !sim.occupants(d.pnode ?? d.node).some((h) => h.hp > 0 && !h.dead
+              && (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED)));
+          const medics = infection.filter((f) => !f.task
+            || f.task.kind === TASK.MOVE || f.task.kind === TASK.SCOUT);
+          if (raisable.length > 0) {
+            // the numbers ARE within reach (they're lying on the deck) — this
+            // is not a breeding emergency, it's a recovery operation
+            this._breedUntil = 0;
+            // raise as many as this round's free forms allow — progress every
+            // round beats an all-or-nothing check that throws the pile away
+            // whenever the medics happen to be busy converting elsewhere
+            let k = 0;
+            while (k < raisable.length && k < medics.length && combat.length + k < needed + 2) {
+              const d = raisable[k];
+              d.claimed = true;
+              this.assign(medics[k], { kind: TASK.REANIMATE, targetId: d.id });
+              k++;
+            }
+            if (k) sim.log('hive', `the hive raises its dead — ${k} downed forms reclaimed for the ${g.node(target).name} muster`);
+            // hold the muster together while the dead stand up
+            for (const f of forms) f.task.until = Math.max(f.task.until ?? 0, sim.t + 60);
+            continue;
+          }
           this._musterStart.delete(target);
           this._musterBan.set(target, { until: sim.t + 300, needed });
           this._breedUntil = sim.t + 300;
@@ -780,14 +811,33 @@ export class Hive {
       // bodies and every SAFE one is a guaranteed combat form — multiplying
       // always beats hunting or marching on guns. The muster is built from
       // corpses; nearestBody refuses bodies inside a remembered gun line.
+      // a downed form within a couple of rooms is the LOWEST-hanging body of
+      // all (user rule generalized): raising it is a 2 s conversion that
+      // stands up right where the fighting is, vs a 7 s conversion after a
+      // walk across the ship
+      const closeDowned = sim.agents.find((d) => !d.dead && d.faction === FACTION.COMBAT
+        && d.downed && d.damage < 100 && !d.claimed
+        && sim.nodesNear(f.node, 2).includes(d.pnode ?? d.node)
+        && !sim.occupants(d.pnode ?? d.node).some((h) => h.hp > 0 && !h.dead
+          && (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED)));
+      if (closeDowned) {
+        closeDowned.claimed = true;
+        this.assign(f, { kind: TASK.REANIMATE, targetId: closeDowned.id });
+        continue;
+      }
       const body = this.nearestBody(f, bodies);
       if (body) { body.claimed = true; this.assign(f, { kind: TASK.CONVERT, corpseId: body.id }); continue; }
       const grab = this.bestGrab(f, riskAversion, null, S);
       if (grab) { this.assign(f, grab); continue; }
       // reanimate a downed form: cheaper than a fresh conversion (§13.3) —
-      // but not one lying in the marines' kill zone
+      // but not one lying under a shooter's boots. "Kill zone" is judged in
+      // REAL SPACE: a body in a room no living shooter physically occupies is
+      // fair game even right outside a hard line — that pile of downed forms
+      // in front of a last stand is the hive's cheapest army.
       const downed = sim.agents.find((d) => !d.dead && d.faction === FACTION.COMBAT && d.downed && d.damage < 100 && !d.claimed
-        && this.believedHardness[d.node] <= 0.5);
+        && (this.believedHardness[d.node] <= 0.5
+          || !sim.occupants(d.pnode ?? d.node).some((h) => h.hp > 0 && !h.dead
+            && (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED))));
       if (downed && 2.0 - S * 1.0 > 0) {
         downed.claimed = true;
         this.assign(f, { kind: TASK.REANIMATE, targetId: downed.id });
@@ -1083,8 +1133,12 @@ export class Hive {
         if (d !== -1 && d <= P.isolationHops) { isolated = false; break; }
       }
       if (!isolated) continue;
-      // muster: every form within musterHops
-      const squadW = members.length;
+      // muster: every form within musterHops. Odds are sized against EVERYONE
+      // believed to be holding that ground — a "squad" standing on a last-
+      // stand line with three dozen armed crew is not an 8-gun target, and
+      // sizing against the squad alone fed wave after wave into the grinder.
+      const squadW = Math.max(members.length,
+        this.believedHumanStr[bel.node] + this.believedHardness[bel.node]);
       const muster = [];
       let musterW = 0;
       for (const f of [...combat, ...infection]) {

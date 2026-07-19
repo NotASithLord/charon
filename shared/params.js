@@ -47,7 +47,8 @@ export const PARAMS = {
     firstIncubationSec: 6,     // first form seats quickly
     maxInfectionForms: 8,      // top limit — the skin can't hold more; it ruptures
     seekOrExplodeFraction: 0.85, // near-full: waddle toward prey so the pop lands on someone
-    explodeDamage: 20,         // to humans in node
+    explodeDamage: 20,         // to humans within the rupture radius
+    explodeRadiusM: 7,         // real blast reach — a rupture across a hangar misses you
     transformSec: 4,           // time for a combat form to root into a carrier
     productionBackpressure: 130, // pause minting above this many live infection forms
   },
@@ -152,6 +153,13 @@ export const PARAMS = {
     corpseConvertSec: 7,       // infection form + body -> combat form
     grabPins: true,            // a grabbed target is held in place (can't flee)
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
+    // REAL SPACE COMBAT (user note): claws and grabs land at arm's reach,
+    // measured in actual meters — not "anywhere inside the same room record"
+    meleeRangeM: 2.2,          // combat-form claws/lunge reach
+    grabRangeM: 1.4,           // an infection form must actually reach the body (a short leap latches)
+    stompRangeM: 4.0,          // boots/point-fire kill skittering forms only up close
+    rifleFalloffM: 12,         // full NPC rifle effect inside this — beyond it, a dark
+    rifleFarFactor: 0.5,       // ship and a sprinting target halve effective fire
   },
   marineDoctrine: {
     firstSweepDelaySec: 10,    // muster time before the crash sweep launches (§5.3)
@@ -170,9 +178,15 @@ export const PARAMS = {
     infection: 0.9, combatForm: 1.25,
     carrier: 0.55, // lore: a slow, blundering waddle — people underestimate it
     drag: 0.5,
-    // lore: combat forms sprint/leap when they close on prey — a charging
-    // form crosses the last stretch at nearly triple a walking human's pace
-    chargeMult: 1.8,
+    // lore: combat forms don't jog at prey — they SPRINT, as fast as a
+    // sprinting Spartan (~6.3 m/s at this multiplier). Real-space combat
+    // made the approach cost real seconds of incoming fire, so the charge
+    // must be game-fast or every open-room assault dies crossing the floor.
+    chargeMult: 3.6,
+    // lore: an infection form closing on a host doesn't walk — it SKITTERS
+    // and leaps (~4.4 m/s). Must comfortably beat civilianFlee or no grab
+    // ever lands in open space (grabs now require physical reach).
+    infectionLunge: 3.5,
   },
   // REAL DISTANCES (user note): the map is laid out in meters and travel
   // time = distance / speed — the foundation for the navigable 3D map.

@@ -9,11 +9,21 @@ import { explodeCarrier } from './floodExec.js';
 export function resolveCombat(sim, dt) {
   const P = sim.P;
 
-  // --- group agents by location key (node, or mid-shaft/vent link) ---
+  // --- group agents by PHYSICAL location (user note: real space logic) ---
+  // A body is in the room its coordinates are in (a.pnode), the moment it's
+  // through the door — not when its pathfinder finishes at the room center.
+  // Vent crawlers and cross-deck shaft crawlers are inside the ship's
+  // structure and resolve in their own duct/shaft groups; a same-deck shaft
+  // crawl crosses open floor, so those movers count as physically present.
   const groups = new Map();
   for (const a of sim.agents) {
     if (a.dead) continue;
-    const key = a.move && a.move.layer !== 'std' ? `L${a.move.layer}${a.move.link.i}` : `N${a.node}`;
+    let key;
+    if (a.move && a.move.layer === 'vent') key = `Lvent${a.move.link.i}`;
+    else if (a.move && a.move.layer === 'shaft'
+      && sim.graph.node(a.move.link.a).deck !== sim.graph.node(a.move.link.b).deck) {
+      key = `Lshaft${a.move.link.i}`;
+    } else key = `N${a.pnode ?? a.node}`;
     let g = groups.get(key);
     if (!g) groups.set(key, (g = []));
     g.push(a);
@@ -129,11 +139,13 @@ export function resolveCombat(sim, dt) {
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
       }
-      const gunDps = shooters.reduce((s, a) => s + (a.faction === FACTION.MARINE ? P.combat.marine.dps : P.combat.armed.dps), 0)
-        - (flamer ? P.combat.marine.dps : 0);
-
-      // focus fire: combat forms, then carriers (deterministic by id)
-      let pool = gunDps * dt;
+      // focus fire: combat forms, then carriers (deterministic by id).
+      // REAL RANGE (user note: real space logic): effective fire falls off
+      // past rifleFalloffM — a sprinting form in a dark ship soaks up far
+      // less accurate fire crossing a hangar than it does at the muzzle.
+      const gunners = shooters.filter((s) => s !== flamer);
+      const dpsOf = (s) => s.faction === FACTION.MARINE ? P.combat.marine.dps : P.combat.armed.dps;
+      let gunSec = dt;   // seconds of firing time left in this slice
       let flamePool = flameDps * dt;
       const targets = [...combatForms, ...carriers].sort((a, b) => a.id - b.id);
       for (const t of targets) {
@@ -142,17 +154,24 @@ export function resolveCombat(sim, dt) {
           flamePool -= d;
           hurtFloodForm(sim, t, d, true);
         }
-        if (t.hp > 0 && pool > 0) {
-          const d = Math.min(pool, t.hp);
-          pool -= d;
-          hurtFloodForm(sim, t, d, false);
+        if (t.hp > 0 && gunSec > 0 && gunners.length) {
+          const rate = gunners.reduce((s, g) =>
+            s + dpsOf(g) * (Math.hypot(g.x - t.x, g.y - t.y) <= P.combat.rifleFalloffM ? 1 : P.combat.rifleFarFactor), 0);
+          if (rate > 0) {
+            const d = Math.min(rate * gunSec, t.hp);
+            gunSec -= d / rate;
+            hurtFloodForm(sim, t, d, false);
+          }
         }
-        if (pool <= 0 && flamePool <= 0) break;
+        if (gunSec <= 0 && flamePool <= 0) break;
       }
-      // stomp infection forms (they're fragile, §6.6)
+      // stomp infection forms (they're fragile, §6.6) — but only the ones
+      // that have actually closed with a shooter (real space: you boot or
+      // point-fire what's at your feet, not a form skittering 30m away)
       let stomps = shooters.reduce((s, a) => s + (a.faction === FACTION.MARINE ? P.combat.marine.stompPerSec : P.combat.armed.stompPerSec), 0) * dt;
       for (const f of [...infForms].sort((a, b) => a.id - b.id)) {
         if (stomps <= 0) break;
+        if (!shooters.some((s) => Math.hypot(s.x - f.x, s.y - f.y) <= P.combat.stompRangeM)) continue;
         if (sim.rng.chance(Math.min(1, stomps))) { sim.removeAgent(f); sim.stats.infectionFormsKilled++; }
         stomps -= 1;
       }
@@ -167,24 +186,33 @@ export function resolveCombat(sim, dt) {
       }
     }
 
-    // flood attacks: combat forms focus armed targets first. A form whose
-    // host carried a weapon fires it too (lore) — wildly, but it adds up.
+    // flood attacks — REAL REACH (user note): claws only land on a victim
+    // the form has physically closed with (meleeRangeM); a hosted weapon
+    // fires across the room. Each form fights the nearest body (shooters
+    // preferred on near-ties), so a pack spreads across a line instead of
+    // resolving as one abstract damage pool at the room's center.
     if (combatForms.length) {
       const victims = group.filter((a) => a.hp > 0 && !a.dead &&
-        (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN))
-        .sort((a, b) => (rank(a) - rank(b)) || (a.id - b.id));
+        (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
       if (victims.length) {
+        let fired = false;
+        for (const f of [...combatForms].sort((a, b) => a.id - b.id)) {
+          let best = null, bestScore = Infinity;
+          for (const v of victims) {
+            if (v.hp <= 0 || v.dead) continue;
+            const d = Math.hypot(v.x - f.x, v.y - f.y);
+            const score = d + rank(v) * 0.5 + v.id * 1e-6;
+            if (score < bestScore) { bestScore = score; best = v; }
+          }
+          if (!best) break;
+          let dmg = 0;
+          if (Math.hypot(best.x - f.x, best.y - f.y) <= P.combat.meleeRangeM) dmg += P.combat.combatForm.dps;
+          if (f.hostArmed) { dmg += P.combat.hostWeaponDps; fired = true; }
+          if (dmg > 0) sim.hurtHuman(best, dmg * dt);
+        }
         // a hosted weapon firing is gunfire too — the ship hears it, and
         // renderers get a marked tick to show the flood visibly shooting
-        if (combatForms.some((f) => f.hostArmed)) sim.gunfireAt(node);
-        let pool = combatForms.reduce((s, f) =>
-          s + P.combat.combatForm.dps + (f.hostArmed ? P.combat.hostWeaponDps : 0), 0) * dt;
-        for (const v of victims) {
-          if (pool <= 0) break;
-          const d = Math.min(pool, v.hp);
-          pool -= d;
-          sim.hurtHuman(v, d);
-        }
+        if (fired) sim.gunfireAt(node);
       }
     }
     // threatened carriers detonate early (§6.6)
