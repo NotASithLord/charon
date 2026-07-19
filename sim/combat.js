@@ -135,13 +135,15 @@ export function resolveCombat(sim, dt) {
       }
     }
 
-    // flood attacks: combat forms focus armed targets first
+    // flood attacks: combat forms focus armed targets first. A form whose
+    // host carried a weapon fires it too (lore) — wildly, but it adds up.
     if (combatForms.length) {
       const victims = group.filter((a) => a.hp > 0 && !a.dead &&
         (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN))
         .sort((a, b) => (rank(a) - rank(b)) || (a.id - b.id));
       if (victims.length) {
-        let pool = combatForms.length * P.combat.combatForm.dps * dt;
+        let pool = combatForms.reduce((s, f) =>
+          s + P.combat.combatForm.dps + (f.hostArmed ? P.combat.hostWeaponDps : 0), 0) * dt;
         for (const v of victims) {
           if (pool <= 0) break;
           const d = Math.min(pool, v.hp);
@@ -208,5 +210,8 @@ export function humanDeathToCorpse(sim, a) {
   corpse.state = STATE.DEAD;
   corpse.damage = 15; // shot up a little, still carrier food
   corpse.x = a.x; corpse.y = a.y;
+  // the host's weapon falls with the body — a combat form raised from it
+  // picks the weapon back up (lore)
+  corpse.wasArmed = a.faction === FACTION.ARMED || a.faction === FACTION.MARINE;
   sim.spawn(corpse);
 }

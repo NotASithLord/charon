@@ -71,7 +71,7 @@ export class Sim {
     assignFirstSweep(this);
     this._refreshOccupancy();
     this._computeInfluence();
-    this.log('init', `seed "${this.seed}" — breach at ${graph.node(graph.breachNode).name}, ${agents.filter(isLivingHuman).length} souls aboard · starting flood: ${this.P.flood.initialInfectionForms} inf / ${this.P.flood.initialCombatForms} cf / ${this.P.flood.initialCarriers} car`);
+    this.log('init', `seed "${this.seed}" — breach at ${graph.node(graph.breachNode).name}, ${agents.filter(isLivingHuman).length} souls aboard · flood ${this.P.flood.initialInfectionForms}i/${this.P.flood.initialCombatForms}c/${this.P.flood.initialCarriers}k · marines ${this.P.marines.squads}×${this.P.marines.squadSize} + ${this.P.marines.patrols} patrols + ${this.P.marines.garrison} garrison · ${this.P.crew.civilians} civ / ${this.P.crew.armedCrew} armed · ${this.P.bodies.eventCorpses} bodies`);
     this.writeBuffer();
   }
 
@@ -452,6 +452,7 @@ export class Sim {
           a.node = a.move.to;
           a.deck = to.deck;
           a.move = null;
+          a.charging = false;
           a.firstStruckIn = undefined;
           if (a.state === STATE.MOVE) a.state = a.path.length ? STATE.MOVE : STATE.IDLE;
         }
@@ -486,7 +487,16 @@ export class Sim {
         }
         a.doorBalks = 0;
         a.path.shift();
-        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, this._speedMult(a)) };
+        let mult = this._speedMult(a);
+        // lore: a combat form closing on prey doesn't walk — it CHARGES,
+        // sprinting/leaping the last stretch (renderers get FLAG.CHARGING)
+        a.charging = false;
+        if (a.faction === FACTION.COMBAT && a.dragging === -1 && link.kind === 'std'
+          && this._occ[step.to].some((h) => isLivingHuman(h))) {
+          mult *= this.P.speed.chargeMult;
+          a.charging = true;
+        }
+        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, mult) };
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
         this._parkDrift(a, dt);
@@ -557,6 +567,8 @@ export class Sim {
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;
       if (a.move && a.move.layer === 'shaft') flags |= FLAG.IN_SHAFT;
+      if (a.hostArmed) flags |= FLAG.ARMED_HOST;
+      if (a.charging) flags |= FLAG.CHARGING;
       b.flags[i] = flags;
       i++;
     }

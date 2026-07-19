@@ -177,7 +177,8 @@ export function updateFloodTick(sim, dt) {
           a.taskProgress += dt;
           if (a.taskProgress >= sim.P.combat.corpseConvertSec) {
             body.dead = true;
-            spawnCombatForm(sim, a.node);
+            const cf = spawnCombatForm(sim, a.node);
+            cf.hostArmed = body.wasArmed === true; // the host's weapon comes up with it
             sim.stats.conversions++; sim.stats.conversionsRound++;
             sim.removeAgent(a); // the infection form is spent (§6.6)
             sim.log('convert', `a corpse rises as a combat form in ${sim.graph.node(a.node).name}`);
@@ -378,7 +379,8 @@ function convertHuman(sim, form, target) {
     if (sim.rng.chance(0.5)) sim.emitCall(target);
   }
   target.dead = true;
-  spawnCombatForm(sim, target.node);
+  const cf = spawnCombatForm(sim, target.node);
+  cf.hostArmed = target.faction === FACTION.ARMED || target.faction === FACTION.MARINE;
   sim.removeAgent(form); // 1 infection form spent on a living host (§6.6)
   sim.stats.conversions++; sim.stats.conversionsRound++;
   sim.stats.humansConverted++;

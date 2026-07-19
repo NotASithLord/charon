@@ -9,9 +9,10 @@ const canvas = document.getElementById('canvas');
 const statsEl = document.getElementById('stats');
 const logEl = document.getElementById('log');
 
-// starting-force composition is an init-time difficulty lever (user note):
-// infection forms, combat forms, and carriers each set independently,
-// applied on restart
+// SCENARIO inputs (user note): exact counts, no fractions — what you set is
+// what you get; only starting positions re-roll each run. Applied on restart.
+const SCENARIO_IDS = ['startInf', 'startCf', 'startCar', 'inSquads', 'inSquadSize',
+  'inPatrols', 'inGarrison', 'inCivilians', 'inArmed', 'inMaint', 'inBodies', 'inBreachBodies'];
 function swarmOverrides() {
   const num = (id, lo, hi, dflt) => {
     const v = Number(document.getElementById(id).value);
@@ -22,6 +23,21 @@ function swarmOverrides() {
       initialInfectionForms: num('startInf', 0, 60, 20),
       initialCombatForms: num('startCf', 0, 20, 4),
       initialCarriers: num('startCar', 0, 6, 0),
+    },
+    marines: {
+      squads: num('inSquads', 0, 8, 4),
+      squadSize: num('inSquadSize', 1, 8, 4),
+      patrols: num('inPatrols', 0, 6, 3),
+      garrison: num('inGarrison', 0, 12, 6),
+    },
+    crew: {
+      civilians: num('inCivilians', 0, 200, 96),
+      armedCrew: num('inArmed', 0, 60, 21),
+      lowerMaintenance: num('inMaint', 0, 30, 10),
+    },
+    bodies: {
+      eventCorpses: num('inBodies', 0, 400, 150),
+      breachCorpses: num('inBreachBodies', 0, 40, 10),
     },
   };
 }
@@ -135,7 +151,7 @@ document.getElementById('speed').addEventListener('input', (e) => {
   document.getElementById('speedVal').textContent = speed >= 1 ? `${speed}×` : `${speed.toFixed(2)}×`;
 });
 document.getElementById('seed').addEventListener('keydown', (e) => { if (e.key === 'Enter') restart(); });
-for (const id of ['startInf', 'startCf', 'startCar']) {
+for (const id of SCENARIO_IDS) {
   const el = document.getElementById(id);
   el.addEventListener('focus', () => el.select()); // typing REPLACES the value
   el.addEventListener('keydown', (e) => { if (e.key === 'Enter') restart(); });

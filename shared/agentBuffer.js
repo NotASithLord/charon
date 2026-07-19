@@ -18,6 +18,8 @@ export const FLAG = {
   BURNED: 1 << 7,    // damage >= 100 (permanently out of the economy)
   FLAMER: 1 << 8,    // carries the ship's one flamethrower
   IN_SHAFT: 1 << 9,
+  ARMED_HOST: 1 << 10, // combat form whose host carried a weapon (render with gun)
+  CHARGING: 1 << 11,   // combat form in a lunge/charge burst (render sprint/leap)
 };
 
 // Anim clip table (§9). Index = animClip in the buffer.

@@ -13,11 +13,14 @@ export const SHIP = {
   deckHeightM: 4.2,
   nodes: [
     // ---- deck 1 · command ----
-    { id: 'bridge', name: 'Bridge', deck: 1, foreAft: 0.05, type: 'room', capacity: 6, w: 12, d: 8, roles: ['command'] },
-    { id: 'cic', name: 'CIC', deck: 1, foreAft: 0.12, type: 'room', capacity: 8, w: 14, d: 10, roles: ['command', 'comms'] },
-    { id: 'officer', name: 'Officer Country', deck: 1, foreAft: 0.18, type: 'room', capacity: 8, w: 14, d: 8, roles: ['quarters', 'soft'] },
-    { id: 'signal', name: 'Signal Room', deck: 1, foreAft: 0.24, type: 'room', capacity: 5, w: 10, d: 7, roles: ['systems', 'comms'] },
-    { id: 'd1corr', name: 'Command Corridor', deck: 1, foreAft: 0.13, type: 'corridor', capacity: 6, w: 34, d: 3, roles: ['artery'] },
+    // Lore (Charon-class exterior): the bridge sits atop the dorsal midship
+    // superstructure beside the MAC shaft — not in the bow. The whole command
+    // deck rides above the habitation deck's fore section.
+    { id: 'bridge', name: 'Bridge', deck: 1, foreAft: 0.30, type: 'room', capacity: 6, w: 12, d: 8, roles: ['command'] },
+    { id: 'cic', name: 'CIC', deck: 1, foreAft: 0.37, type: 'room', capacity: 8, w: 14, d: 10, roles: ['command', 'comms'] },
+    { id: 'officer', name: 'Officer Country', deck: 1, foreAft: 0.44, type: 'room', capacity: 8, w: 14, d: 8, roles: ['quarters', 'soft'] },
+    { id: 'signal', name: 'Signal Room', deck: 1, foreAft: 0.50, type: 'room', capacity: 5, w: 10, d: 7, roles: ['systems', 'comms'] },
+    { id: 'd1corr', name: 'Command Corridor', deck: 1, foreAft: 0.38, type: 'corridor', capacity: 6, w: 34, d: 3, roles: ['artery'] },
     // ---- deck 2 · habitation ----
     { id: 'crewA', name: 'Crew Quarters A', deck: 2, foreAft: 0.30, type: 'room', capacity: 14, w: 16, d: 10, roles: ['quarters', 'soft'] },
     { id: 'crewB', name: 'Crew Quarters B', deck: 2, foreAft: 0.42, type: 'room', capacity: 14, w: 16, d: 10, roles: ['quarters', 'soft'] },

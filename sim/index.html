@@ -93,6 +93,9 @@
   .dial { display: flex; align-items: center; gap: 6px; }
   .dial span.val { color: #7fd1a0; min-width: 34px; }
   .dial span.name { color: #6a7686; }
+  .grp { display: inline-flex; align-items: center; gap: 6px; color: #6a7686; }
+  .grp label { display: inline-flex; align-items: center; gap: 3px; color: #8a97a8; }
+  input.cnt { width: 46px; padding: 3px 5px; }
   #deckBtns button { padding: 3px 7px; }
 </style>
 </head>
@@ -100,11 +103,6 @@
   <header>
     <h1>HALO CHARON // SIM</h1>
     <label>seed <input id="seed" size="10" value="charon-1"></label>
-    <span title="starting flood at the breach (applies on restart)">
-      <label>inf <input id="startInf" type="number" min="0" max="60" step="1" value="20"></label>
-      <label>cf <input id="startCf" type="number" min="0" max="20" step="1" value="4"></label>
-      <label>car <input id="startCar" type="number" min="0" max="6" step="1" value="0"></label>
-    </span>
     <button id="randomSeed" title="new random seed">🎲</button>
     <button id="restart">restart ▶</button>
     <button id="pause">pause ⏸</button>
@@ -126,6 +124,29 @@
     </span>
     <button id="legendToggle" class="active">legend</button>
   </header>
+  <div class="dials" title="exact counts — what you set is what you get; positions re-roll each run (applies on restart / Enter)">
+    <b style="color:#6a7686">SCENARIO</b>
+    <span class="grp">flood:
+      <label>infection <input class="cnt" id="startInf" type="number" min="0" max="60" value="20"></label>
+      <label>combat <input class="cnt" id="startCf" type="number" min="0" max="20" value="4"></label>
+      <label>carriers <input class="cnt" id="startCar" type="number" min="0" max="6" value="0"></label>
+    </span>
+    <span class="grp">marines:
+      <label>squads <input class="cnt" id="inSquads" type="number" min="0" max="8" value="4"></label>
+      <label>× size <input class="cnt" id="inSquadSize" type="number" min="1" max="8" value="4"></label>
+      <label>patrols <input class="cnt" id="inPatrols" type="number" min="0" max="6" value="3"></label>
+      <label>garrison <input class="cnt" id="inGarrison" type="number" min="0" max="12" value="6"></label>
+    </span>
+    <span class="grp">crew:
+      <label>civilians <input class="cnt" id="inCivilians" type="number" min="0" max="200" value="96"></label>
+      <label>armed <input class="cnt" id="inArmed" type="number" min="0" max="60" value="21"></label>
+      <label>maint <input class="cnt" id="inMaint" type="number" min="0" max="30" value="10"></label>
+    </span>
+    <span class="grp">bodies:
+      <label>ship <input class="cnt" id="inBodies" type="number" min="0" max="400" value="150"></label>
+      <label>breach <input class="cnt" id="inBreachBodies" type="number" min="0" max="40" value="10"></label>
+    </span>
+  </div>
   <div class="dials">
     <b style="color:#6a7686">MASTER DIALS</b>
     <span class="dial"><span class="name">belief decay λ</span><input id="dialLambda" type="range" min="0.02" max="0.4" step="0.01" value="0.1"><span class="val" id="dialLambdaV">0.10</span></span>

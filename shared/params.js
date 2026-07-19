@@ -8,15 +8,28 @@ export const PARAMS = {
     tickHz: 15,               // movement/sense tick
     strategicTickSec: 2.5,    // one "infection round"
   },
-  npc: {
-    count: 140,               // PLACEHOLDER within 100-200
-    corpsesFromEvent: 150,    // from the portal event
-    marineFraction: 0.11,     // of npc.count -> ~15 marines -> 3-4 squads (the ship is running light)
-    armedFraction: 0.15,      // armed (non-marine) crew
+  // WHAT YOU SET IS WHAT YOU GET (user note): force composition is explicit
+  // counts — squads, squad sizes, civilians, bodies — no fractions to decode.
+  // Only WHERE everyone starts (plus which doors jam, which vents collapse,
+  // which rooms lose power) rolls fresh each run.
+  crew: {
+    civilians: 96,            // unarmed crew sheltering / working the ship
+    armedCrew: 21,            // crew carrying sidearms (not marines)
+    lowerMaintenance: 10,     // unarmed maintenance crew roaming decks 4-5 fixing systems
     brigPrisoners: 2,
     medbayWounded: 6,
-    lowerMaintenance: 10,     // unarmed maintenance crew roaming decks 4-5 fixing systems
     radio: { civilian: 0.35, armed: 0.7, marine: 1.0 }, // hasRadio fraction
+  },
+  marines: {
+    squads: 4,                // line squads
+    squadSize: 4,             // marines per line squad
+    patrols: 3,               // roaming pair patrols walking the whole ship
+    patrolSize: 2,
+    garrison: 6,              // permanent Command Corridor guard detail
+  },
+  bodies: {
+    eventCorpses: 150,        // portal-event dead scattered through the ship
+    breachCorpses: 10,        // fresh dead at the breach (±50% roll on placement)
   },
   // DIFFICULTY LEVERS (user direction): without the player in the loop the
   // flood should win most runs — the marines alone can't hold the ship. Tune
@@ -25,7 +38,6 @@ export const PARAMS = {
     initialInfectionForms: 20, // difficulty lever — live input in the sim UI
     initialCombatForms: 4,     // difficulty lever — live input in the sim UI
     initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
-    breachCorpses: 10,         // fresh corpses spawned at the breach
   },
   // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling
   // carrier and only spill out when it RUPTURES — under fire, or at the top
@@ -133,6 +145,7 @@ export const PARAMS = {
     // it downs its first marine (marineHp/cfDps): with 2 marines it's a
     // coin-flip whether they kill it clean or trade one, 3 win clean, 1 loses.
     combatForm: { hp: 63, dps: 20, hpJitter: 0.18 }, // spawn hp varies ±18% -> real 50/50 at 2v1
+    hostWeaponDps: 5,          // lore: a combat form fires its host's weapon (wildly)
     carrierHp: 40,
     infectionGrabSec: 8,       // time to convert an armed/overwhelmed target
     civilianGrabSec: 7,        // burrowing in takes real seconds now (user note)
@@ -142,9 +155,6 @@ export const PARAMS = {
   },
   marineDoctrine: {
     firstSweepDelaySec: 5,     // muster time before the crash sweep launches (§5.3)
-    patrols: 3,                // roaming pair patrols walking the whole ship (user note)
-    patrolSize: 2,
-    commandGarrison: 6,        // permanent marines holding the corridor into the top deck (never move)
     officers: 4,               // officer civilians who stay put in Officer Country
     bridgeOfficers: 3,         // captain + officers who never leave the bridge
     sweepDwellSec: 25,         // min pause at each cleared room — slow, methodical (+ jitter)
@@ -157,7 +167,12 @@ export const PARAMS = {
   },
   speed: { // multipliers on movement.baseMps (relative ratios are user-set)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.0,
-    infection: 0.9, combatForm: 1.25, carrier: 0.8, drag: 0.5,
+    infection: 0.9, combatForm: 1.25,
+    carrier: 0.55, // lore: a slow, blundering waddle — people underestimate it
+    drag: 0.5,
+    // lore: combat forms sprint/leap when they close on prey — a charging
+    // form crosses the last stretch at nearly triple a walking human's pace
+    chargeMult: 1.8,
   },
   // REAL DISTANCES (user note): the map is laid out in meters and travel
   // time = distance / speed — the foundation for the navigable 3D map.

@@ -73,37 +73,35 @@ export function initRun(seed, rng, P) {
     if (rng.chance(P.power.unstableFraction)) graph.unpowered[n.idx] = 1;
   }
 
-  // --- 6. populate NPCs ---
+  // --- 6. populate NPCs. EXPLICIT COUNTS (user note): squads, squad sizes,
+  // civilians and bodies are exactly what the inputs say — the only thing
+  // that rolls fresh each run is WHERE everyone starts. ---
   const agents = [];
-  const marineCount = Math.round(P.npc.count * P.npc.marineFraction);
-  const armedCount = Math.round(P.npc.count * P.npc.armedFraction);
-  const civCount = P.npc.count - marineCount - armedCount;
+  const M = P.marines;
 
-  // marine squads of 3-5; 1-2 squads guaranteed in the barracks
+  // marine line squads: M.squads squads of M.squadSize each; the first one
+  // or two berth in the barracks, the rest wake up in random crew spaces
   const squads = [];
   {
     const barracks = graph.byId.get('barracks');
-    const sizes = [];
-    let left = marineCount;
-    while (left > 0) { const s = Math.min(left, 3 + rng.int(3)); sizes.push(s); left -= s; }
     const eligible = graph.nodes
       .filter((n) => !n.roles.includes('command') && n.type !== 'corridor'
         && !n.roles.includes('crash_candidate')) // squads berth in crew spaces, not cargo holds
       .map((n) => n.idx);
-    const barracksSquads = Math.min(sizes.length, 1 + (rng.chance(0.5) ? 1 : 0));
-    sizes.forEach((size, si) => {
+    const barracksSquads = Math.min(M.squads, 1 + (rng.chance(0.5) ? 1 : 0));
+    for (let si = 0; si < M.squads; si++) {
       const node = si < barracksSquads ? barracks : rng.pick(eligible);
       const squad = { id: si, members: [], objective: null, morale: 1, respondingTo: null, phase1: false };
-      for (let m = 0; m < size; m++) {
+      for (let m = 0; m < M.squadSize; m++) {
         const a = makeAgent(FACTION.MARINE, node, graph);
         a.hp = a.maxHp = P.combat.marine.hp;
-        a.hasRadio = rng.chance(P.npc.radio.marine);
+        a.hasRadio = rng.chance(P.crew.radio.marine);
         a.squad = si;
         squad.members.push(a.id);
         agents.push(a);
       }
       squads.push(squad);
-    });
+    }
     // the ship's ONE flamethrower goes to a member of the first barracks squad
     const flamerSquad = squads[0];
     if (flamerSquad) {
@@ -113,13 +111,13 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // permanent top-deck garrison (user note): six marines standing guard on
-  // the Command Corridor — the one way into the command deck — at all times.
+  // permanent top-deck garrison (user note): marines standing guard on the
+  // Command Corridor — the one way into the command deck — at all times.
   // They never sweep, never answer calls, never take orders; they just hold
   // the chokepoint. Not part of any squad, exempt from all squad logic.
   {
     const post = graph.byId.get('d1corr');
-    for (let i = 0; i < P.marineDoctrine.commandGarrison; i++) {
+    for (let i = 0; i < M.garrison; i++) {
       const a = makeAgent(FACTION.MARINE, post, graph);
       a.hp = a.maxHp = P.combat.marine.hp;
       a.hasRadio = true;
@@ -129,22 +127,22 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // roaming pair patrols (user note): three 2-marine details, in ADDITION to
-  // the squads, walking a fixed circuit of the whole ship. They answer
-  // distress calls like any squad, then pick the round back up. Staggered
-  // thirds around the loop so the ship always has coverage somewhere.
+  // roaming pair patrols (user note): marine details, in ADDITION to the
+  // squads, walking a fixed circuit of the whole ship. They answer distress
+  // calls like any squad, then pick the round back up. Staggered around the
+  // loop so the ship always has coverage somewhere.
   {
     const route = ['d1corr', 'd2corrF', 'mess', 'd2corrA', 'corrM', 'corrF', 'maintF',
       'hangar', 'hangarA', 'vehicle', 'cargo1', 'lowerCorr', 'eng', 'lowerCorr',
       'hangarA', 'corrA', 'corrM'].map((id) => graph.byId.get(id));
-    for (let p = 0; p < P.marineDoctrine.patrols; p++) {
-      const leg = Math.floor((p * route.length) / P.marineDoctrine.patrols);
+    for (let p = 0; p < M.patrols; p++) {
+      const leg = Math.floor((p * route.length) / Math.max(1, M.patrols));
       const node = route[leg];
       const squad = {
         id: squads.length, members: [], objective: null, morale: 1,
         respondingTo: null, phase1: false, patrol: true, patrolNo: p + 1, route, leg,
       };
-      for (let m = 0; m < P.marineDoctrine.patrolSize; m++) {
+      for (let m = 0; m < M.patrolSize; m++) {
         const a = makeAgent(FACTION.MARINE, node, graph);
         a.hp = a.maxHp = P.combat.marine.hp;
         a.hasRadio = true;
@@ -156,22 +154,24 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // armed humans: armory + corridors
+  // armed crew: armory + corridors + living spaces
   {
     const armory = graph.byId.get('armory');
     const corridors = graph.nodes.filter((n) => n.type === 'corridor').map((n) => n.idx);
     const softRooms = graph.nodes.filter((n) => n.roles.includes('soft')).map((n) => n.idx);
+    const armedCount = P.crew.armedCrew;
     for (let i = 0; i < armedCount; i++) {
       const node = i < Math.ceil(armedCount * 0.4) ? armory
         : i < Math.ceil(armedCount * 0.7) ? rng.pick(corridors) : rng.pick(softRooms);
       const a = makeAgent(FACTION.ARMED, node, graph);
       a.hp = a.maxHp = P.combat.armed.hp;
-      a.hasRadio = rng.chance(P.npc.radio.armed);
+      a.hasRadio = rng.chance(P.crew.radio.armed);
       agents.push(a);
     }
   }
 
-  // civilians: quarters/soft/mess; helpless in brig + medbay
+  // civilians: quarters/soft/mess; prisoners and wounded are explicit counts
+  // on top, as are the stay-put officers
   {
     const soft = graph.nodes
       .filter((n) => n.roles.includes('soft') || n.roles.includes('quarters'))
@@ -179,24 +179,33 @@ export function initRun(seed, rng, P) {
     const brig = graph.byId.get('brig');
     const medbay = graph.byId.get('medbay');
     const officerPost = graph.byId.get('officer');
-    for (let i = 0; i < civCount; i++) {
-      let node, helpless = false, stayPut = false;
-      if (i < P.npc.brigPrisoners) { node = brig; helpless = true; }
-      else if (i < P.npc.brigPrisoners + P.npc.medbayWounded) { node = medbay; helpless = true; }
-      else if (i < P.npc.brigPrisoners + P.npc.medbayWounded + P.marineDoctrine.officers) {
-        // officers hold Officer Country and do not evacuate (user note)
-        node = officerPost; stayPut = true;
-      } else node = rng.pick(soft);
-      // all command-deck officers are armed (user note); they fight in place
-      const armed = stayPut;
-      const a = makeAgent(armed ? FACTION.ARMED : FACTION.CIVILIAN, node, graph);
-      a.hp = a.maxHp = armed ? P.combat.armed.hp : P.combat.civilian.hp;
-      a.helpless = helpless;
-      a.stayPut = stayPut;
+    for (let i = 0; i < P.crew.brigPrisoners; i++) {
+      const a = makeAgent(FACTION.CIVILIAN, brig, graph);
+      a.hp = a.maxHp = P.combat.civilian.hp;
+      a.helpless = true;
+      agents.push(a);
+    }
+    for (let i = 0; i < P.crew.medbayWounded; i++) {
+      const a = makeAgent(FACTION.CIVILIAN, medbay, graph);
+      a.hp = a.maxHp = P.combat.civilian.hp;
+      a.helpless = true;
+      agents.push(a);
+    }
+    // officers hold Officer Country, armed, and do not evacuate (user note)
+    for (let i = 0; i < P.marineDoctrine.officers; i++) {
+      const a = makeAgent(FACTION.ARMED, officerPost, graph);
+      a.hp = a.maxHp = P.combat.armed.hp;
+      a.stayPut = true;
+      a.hasRadio = true;
+      agents.push(a);
+    }
+    for (let i = 0; i < P.crew.civilians; i++) {
+      const a = makeAgent(FACTION.CIVILIAN, rng.pick(soft), graph);
+      a.hp = a.maxHp = P.combat.civilian.hp;
       // ~20% are still working the ship (engineers, medics, techs) and move
       // with purpose; the rest shelter in place (user note)
-      a.worker = !helpless && !stayPut && rng.chance(P.civilian.workerFraction);
-      a.hasRadio = stayPut || a.worker || (!helpless && rng.chance(P.npc.radio.civilian));
+      a.worker = rng.chance(P.civilian.workerFraction);
+      a.hasRadio = a.worker || rng.chance(P.crew.radio.civilian);
       agents.push(a);
     }
 
@@ -215,12 +224,12 @@ export function initRun(seed, rng, P) {
     // unarmed maintenance crew working the LOWER decks (user note): they roam
     // decks 4-5 fixing systems — moving bodies right where the outbreak lives
     const lowerNodes = graph.nodes.filter((n) => n.deck >= 4).map((n) => n.idx);
-    for (let i = 0; i < P.npc.lowerMaintenance; i++) {
+    for (let i = 0; i < P.crew.lowerMaintenance; i++) {
       const a = makeAgent(FACTION.CIVILIAN, rng.pick(lowerNodes), graph);
       a.hp = a.maxHp = P.combat.civilian.hp;
       a.worker = true;
       a.lowerDecks = true; // their work orders keep them on decks 4-5
-      a.hasRadio = rng.chance(P.npc.radio.civilian);
+      a.hasRadio = rng.chance(P.crew.radio.civilian);
       agents.push(a);
     }
   }
@@ -238,12 +247,13 @@ export function initRun(seed, rng, P) {
       return w;
     });
     const totalW = weights.reduce((a, b) => a + b, 0);
-    for (let i = 0; i < P.npc.corpsesFromEvent; i++) {
+    for (let i = 0; i < P.bodies.eventCorpses; i++) {
       let r = rng.next() * totalW, node = graph.n - 1;
       for (let k = 0; k < weights.length; k++) { r -= weights[k]; if (r <= 0) { node = k; break; } }
       const c = makeAgent(FACTION.CORPSE, node, graph);
       c.state = STATE.DEAD;
       c.hp = 0; c.damage = 0; // fully convertible
+      c.wasArmed = rng.chance(0.25); // some of the dead were carrying weapons
       scatterInRoom(c, graph.node(node), rng);
       corpses.push(c);
     }
@@ -273,10 +283,11 @@ export function initRun(seed, rng, P) {
   }
   // the crash site's fresh dead are random too (user note): ~50%-160% of the
   // configured baseline, so the opening larder varies run to run
-  const freshDead = Math.max(2, Math.round(P.flood.breachCorpses * rng.range(0.5, 1.6)));
+  const freshDead = Math.max(2, Math.round(P.bodies.breachCorpses * rng.range(0.5, 1.6)));
   for (let i = 0; i < freshDead; i++) {
     const c = makeAgent(FACTION.CORPSE, breach, graph);
     c.state = STATE.DEAD; c.hp = 0; c.damage = 0;
+    c.wasArmed = rng.chance(0.25);
     scatterInRoom(c, graph.node(breach), rng);
     corpses.push(c);
   }

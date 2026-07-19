@@ -381,10 +381,26 @@ export class Viz {
         ctx.fillRect(x - r, y - r, r * 2, r * 2); // marines read as squares
       } else if (f === FACTION.COMBAT) {
         const r = rr(0.65, 3.2);
+        // lore: a charging form leaves a motion streak (sprint/lunge burst)
+        if (flags & FLAG.CHARGING) {
+          const h = buf.headingR[i];
+          ctx.strokeStyle = 'rgba(192,57,43,0.4)';
+          ctx.lineWidth = this._lw(2);
+          ctx.beginPath();
+          ctx.moveTo(x - Math.cos(h) * r * 3.2, y - Math.sin(h) * r * 3.2);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
         ctx.fillStyle = color;
         ctx.beginPath(); // spiked triangle
         ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.9, y + r * 0.8); ctx.lineTo(x - r * 0.9, y + r * 0.8);
         ctx.closePath(); ctx.fill();
+        // lore: hosts that carried weapons still do — render the gun
+        if (flags & FLAG.ARMED_HOST) {
+          ctx.strokeStyle = '#e0e6ee';
+          ctx.lineWidth = this._lw(1.2);
+          ctx.beginPath(); ctx.moveTo(x - r, y + r * 0.2); ctx.lineTo(x + r, y + r * 0.2); ctx.stroke();
+        }
       } else if (f === FACTION.CARRIER) {
         // the belly swells with what it carries (user note: game-accurate —
         // it accumulates inside and only ruptures under fire or at the limit)
