@@ -131,39 +131,41 @@ export function resolveCombat(sim, dt) {
 
     if (shooters.length && anyFlood) {
       sim.gunfireAt(node);
-      // flamethrower: kills are permanent (damage -> 100) and the node burns
+      // flamethrower: a continuous stream — kills are permanent, the node burns
       const flamer = shooters.find((s) => s.flamer && s.fuel > 0);
-      let flameDps = 0;
-      if (flamer) {
-        flameDps = P.flamethrower.dps;
+      const targets = [...combatForms, ...carriers].sort((a, b) => a.id - b.id);
+      if (flamer && targets.length) {
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
-      }
-      // focus fire: combat forms, then carriers (deterministic by id).
-      // REAL RANGE (user note: real space logic): effective fire falls off
-      // past rifleFalloffM — a sprinting form in a dark ship soaks up far
-      // less accurate fire crossing a hangar than it does at the muzzle.
-      const gunners = shooters.filter((s) => s !== flamer);
-      const dpsOf = (s) => s.faction === FACTION.MARINE ? P.combat.marine.dps : P.combat.armed.dps;
-      let gunSec = dt;   // seconds of firing time left in this slice
-      let flamePool = flameDps * dt;
-      const targets = [...combatForms, ...carriers].sort((a, b) => a.id - b.id);
-      for (const t of targets) {
-        if (flamePool > 0) {
+        let flamePool = P.flamethrower.dps * dt;
+        for (const t of targets) {
+          if (flamePool <= 0) break;
           const d = Math.min(flamePool, t.hp);
           flamePool -= d;
           hurtFloodForm(sim, t, d, true);
         }
-        if (t.hp > 0 && gunSec > 0 && gunners.length) {
-          const rate = gunners.reduce((s, g) =>
-            s + dpsOf(g) * (Math.hypot(g.x - t.x, g.y - t.y) <= P.combat.rifleFalloffM ? 1 : P.combat.rifleFarFactor), 0);
-          if (rate > 0) {
-            const d = Math.min(rate * gunSec, t.hp);
-            gunSec -= d / rate;
-            hurtFloodForm(sim, t, d, false);
-          }
+      }
+      // HALO-STANDARD RIFLES (user note): each shooter fires DISCRETE aimed
+      // shots on its own cadence and ROLLS to hit — accuracy drops past
+      // rifleFalloffM (a sprinting form in a dark ship is a hard target).
+      // Deterministic: cadence is sim-time, rolls come from the seeded RNG,
+      // so lockstep multiplayer holds. Nearest combat form first; a carrier
+      // only draws fire when no combat form is standing.
+      for (const s of shooters) {
+        if (s === flamer) continue;
+        if (sim.t < (s.nextShotAt ?? 0)) continue;
+        let best = null, bestD = Infinity;
+        for (const t of targets) {
+          if (t.hp <= 0 || t.dead) continue;
+          const d = Math.hypot(t.x - s.x, t.y - s.y) + (t.faction === FACTION.CARRIER ? 1000 : 0);
+          if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; }
         }
-        if (gunSec <= 0 && flamePool <= 0) break;
+        if (!best) break;
+        const gun = s.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
+        s.nextShotAt = sim.t + 1 / gun.rof;
+        const range = Math.hypot(best.x - s.x, best.y - s.y);
+        const acc = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
+        if (sim.rng.chance(acc)) hurtFloodForm(sim, best, gun.dmg, false);
       }
       // stomp infection forms (they're fragile, §6.6) — but only the ones
       // that have actually closed with a shooter (real space: you boot or
@@ -205,10 +207,23 @@ export function resolveCombat(sim, dt) {
             if (score < bestScore) { bestScore = score; best = v; }
           }
           if (!best) break;
-          let dmg = 0;
-          if (Math.hypot(best.x - f.x, best.y - f.y) <= P.combat.meleeRangeM) dmg += P.combat.combatForm.dps;
-          if (f.hostArmed) { dmg += P.combat.hostWeaponDps; fired = true; }
-          if (dmg > 0) sim.hurtHuman(best, dmg * dt);
+          const range = Math.hypot(best.x - f.x, best.y - f.y);
+          // MELEE IS THE FLOOD'S WEAPON (user rule: >90% of hosts died
+          // unarmed): sprint/leap to arm's reach, then a heavy SWIPE on a
+          // cooldown — discrete hits that knock chunks off armor, with a
+          // real recovery gap between swings to shoot it in
+          if (range <= P.combat.meleeRangeM && sim.t >= (f.nextSwingAt ?? 0)) {
+            f.nextSwingAt = sim.t + P.combat.combatForm.swing.cooldownSec;
+            sim.hurtHuman(best, P.combat.combatForm.swing.dmg);
+          }
+          // the armed minority spray the host's weapon one-handed (lore) —
+          // discrete wild shots, mostly missing
+          if (f.hostArmed && sim.t >= (f.nextHostShotAt ?? 0)) {
+            f.nextHostShotAt = sim.t + 1 / P.combat.hostGun.rof;
+            fired = true;
+            const acc = range <= P.combat.rifleFalloffM ? P.combat.hostGun.accNear : P.combat.hostGun.accFar;
+            if (sim.rng.chance(acc)) sim.hurtHuman(best, P.combat.hostGun.dmg);
+          }
         }
         // a hosted weapon firing is gunfire too — the ship hears it, and
         // renderers get a marked tick to show the flood visibly shooting

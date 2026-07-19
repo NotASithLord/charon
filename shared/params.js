@@ -30,6 +30,9 @@ export const PARAMS = {
   bodies: {
     eventCorpses: 150,        // portal-event dead scattered through the ship
     breachCorpses: 10,        // fresh dead at the breach (±50% roll on placement)
+    // the vast majority of the dead were NOT carrying weapons (user rule):
+    // a form raised from them fights with claws alone — sprint, leap, swipe
+    armedFraction: 0.08,
   },
   // DIFFICULTY LEVERS (user direction): without the player in the loop the
   // flood should win most runs — the marines alone can't hold the ship. Tune
@@ -138,15 +141,31 @@ export const PARAMS = {
   combat: {
     // Weighted (§7 support) so a combat form is a serious threat: 1 marine
     // almost certainly loses, 2 trade roughly even (one marine down for the
-    // kill), 3 win reliably. See combat.js focus-fire model.
-    marine:   { hp: 45, dps: 14, stompPerSec: 0.4 }, // stomp = infection-form kills/s
-    armed:    { hp: 30, dps: 9, stompPerSec: 0.2 },
+    // kill), 3 win reliably.
+    // HALO-STANDARD COMBAT (user note): open-room fights are DISCRETE
+    // deterministic events, not damage drizzle — each shooter fires aimed
+    // shots on its own cadence and ROLLS to hit (accuracy drops past
+    // rifleFalloffM); each combat form lands heavy SWIPES on a cooldown.
+    // All rolls go through the seeded sim RNG, so lockstep holds.
+    // The bare `dps` numbers are the NOMINAL sustained rates — they still
+    // drive the hive's planning estimates and the cramped shaft/ambush
+    // pools, and the gun/swing numbers below are tuned to average out to
+    // them (e.g. marine 3 rof x 6.5 dmg x 0.72 acc ~= 14 dps).
+    marine:   { hp: 45, dps: 14, stompPerSec: 0.4,   // stomp = infection-form kills/s
+                gun: { rof: 3, dmg: 6.5, accNear: 0.72, accFar: 0.32 } },
+    armed:    { hp: 30, dps: 9, stompPerSec: 0.2,
+                gun: { rof: 2, dmg: 6.5, accNear: 0.70, accFar: 0.30 } },
     civilian: { hp: 20 },
     // Tuned so a combat form's death (2*marineDps) lands right at the moment
     // it downs its first marine (marineHp/cfDps): with 2 marines it's a
     // coin-flip whether they kill it clean or trade one, 3 win clean, 1 loses.
-    combatForm: { hp: 63, dps: 20, hpJitter: 0.18 }, // spawn hp varies ±18% -> real 50/50 at 2v1
-    hostWeaponDps: 5,          // lore: a combat form fires its host's weapon (wildly)
+    // swing: 18 dmg / 0.9 s = the same 20 dps sustained, delivered in chunks.
+    combatForm: { hp: 63, dps: 20, hpJitter: 0.18,   // spawn hp varies ±18% -> real 50/50 at 2v1
+                  swing: { dmg: 18, cooldownSec: 0.9 } },
+    hostWeaponDps: 5,          // nominal (shaft pools / hive estimates)
+    // the armed MINORITY of forms spray the host's weapon one-handed and
+    // wildly (lore) — suppressive noise more than marksmanship
+    hostGun: { rof: 2, dmg: 5, accNear: 0.35, accFar: 0.15 },
     carrierHp: 40,
     infectionGrabSec: 8,       // time to convert an armed/overwhelmed target
     civilianGrabSec: 7,        // burrowing in takes real seconds now (user note)

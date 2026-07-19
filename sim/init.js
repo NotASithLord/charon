@@ -254,7 +254,7 @@ export function initRun(seed, rng, P) {
       const c = makeAgent(FACTION.CORPSE, node, graph);
       c.state = STATE.DEAD;
       c.hp = 0; c.damage = 0; // fully convertible
-      c.wasArmed = rng.chance(0.25); // some of the dead were carrying weapons
+      c.wasArmed = rng.chance(P.bodies.armedFraction); // the vast majority died unarmed (user rule)
       scatterInRoom(c, graph.node(node), rng);
       corpses.push(c);
     }
@@ -288,7 +288,7 @@ export function initRun(seed, rng, P) {
   for (let i = 0; i < freshDead; i++) {
     const c = makeAgent(FACTION.CORPSE, breach, graph);
     c.state = STATE.DEAD; c.hp = 0; c.damage = 0;
-    c.wasArmed = rng.chance(0.25);
+    c.wasArmed = rng.chance(P.bodies.armedFraction);
     scatterInRoom(c, graph.node(breach), rng);
     corpses.push(c);
   }
