@@ -18,6 +18,7 @@ npm run serve          # python http.server on :8000 (any static server works)
 
 | Page | What it is | Needs |
 |---|---|---|
+| `/game/` | **The 3D game**: first-person survivor inside the live sim — WASD + mouse, E takes a rifle, click fires, pads move you between decks. `?seed=name` picks the ship | any modern browser (WebGL) |
 | `/sim/` | Full ship sim, top-down schematic, live master dials, seed replay | any modern browser (Canvas 2D) |
 | `/vat/` | VAT crowd renderer, 3 LOD tiers, §1 gate capture | WebGPU (Chrome/Edge 113+, Safari 18+) |
 | `/fused/` | Build step 9: VAT renderer fed by the live sim agent buffer | WebGPU |
