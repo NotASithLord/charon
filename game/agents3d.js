@@ -7,6 +7,7 @@ import * as THREE from './vendor/three.module.js';
 import { FACTION, FLAG } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
 import { carryGeometry } from './rifle-model.js';
+import { characterParts } from './characters.js';
 
 const CAP = 512;
 
@@ -27,11 +28,27 @@ export class Agents3D {
     this.rpos = new Map(); // id -> smoothed {x, y(z-sim), deck}
     this.playerId = -1;
 
-    this.civ = makeInstanced(scene, new THREE.CapsuleGeometry(0.28, 0.95, 4, 8), 0xd8d8d8);
-    this.armed = makeInstanced(scene, new THREE.CapsuleGeometry(0.28, 0.95, 4, 8), 0xd8b23a);
-    this.marine = makeInstanced(scene, new THREE.CapsuleGeometry(0.34, 1.0, 4, 8), 0x3f78d0, 0x14335f, 0.6);
-    this.infection = makeInstanced(scene, new THREE.SphereGeometry(0.34, 10, 8), 0x37d055, 0x1d8a33, 0.8);
-    this.combat = makeInstanced(scene, new THREE.CapsuleGeometry(0.42, 1.0, 4, 8), 0xa8352a, 0x5c130c, 0.7);
+    // REAL SKINS (user note): converted Halo character meshes — H2 marines/
+    // crew/infection form, H3 flood combat forms (civilian + ODST hosts) —
+    // drawn as one InstancedMesh per texture group, feet at y=0. The
+    // carrier keeps its procedural swelling body (no source mesh exists),
+    // corpses stay simple boxes.
+    const mkSet = (name) => characterParts(name).map((p) => {
+      const mat = new THREE.MeshStandardMaterial({
+        map: p.texture, roughness: 0.78, metalness: 0.06, side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      scene.add(mesh);
+      return mesh;
+    });
+    this.civSet = mkSet('civilian');
+    this.armedSet = mkSet('crew_armed');
+    this.marineSet = mkSet('marine');
+    this.infectionSet = mkSet('infection');
+    this.combatCivSet = mkSet('combat_civ');
+    this.combatOdstSet = mkSet('combat_odst');
     this.carrier = makeInstanced(scene, new THREE.SphereGeometry(0.72, 12, 10), 0x9a5cc0, 0x5b2a80, 0.7);
     this.corpse = makeInstanced(scene, new THREE.BoxGeometry(1.5, 0.28, 0.55), 0x5a5a5a);
     // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
@@ -74,7 +91,8 @@ export class Agents3D {
     const { sim, world } = this;
     const buf = sim.buffer;
     const k = Math.min(1, dt * 14);
-    const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combat: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0 };
+    const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0 };
+    const stamp = (set, i) => { for (const mesh of set) mesh.setMatrixAt(i, this._m); };
 
     const seen = new Set();
     for (let i = 0; i < buf.count; i++) {
@@ -109,37 +127,38 @@ export class Agents3D {
       }
       const downed = flags & FLAG.DOWNED;
       if (downed) { // downed combat forms lie flat
-        this._e.set(Math.PI / 2, heading, 0);
+        this._e.set(-Math.PI / 2, heading, 0);
         this._q.setFromEuler(this._e);
-        this._m.compose(this._p.set(wx, elev + 0.3, wz), this._q, this._s.set(1, 1, 1));
-        this.combat.setMatrixAt(counts.combat++, this._m);
+        this._m.compose(this._p.set(wx, elev + 0.25, wz), this._q, this._s.set(1, 1, 1));
+        if (flags & FLAG.ARMED_HOST) stamp(this.combatOdstSet, counts.combatOdst++);
+        else stamp(this.combatCivSet, counts.combatCiv++);
         continue;
       }
 
       switch (f) {
         case FACTION.CIVILIAN: {
-          this._pose(wx, elev + 0.85, wz, heading, 1, 1, 1);
-          this.civ.setMatrixAt(counts.civ++, this._m);
+          this._pose(wx, elev, wz, heading, 1, 1, 1);
+          stamp(this.civSet, counts.civ++);
           break;
         }
         case FACTION.ARMED: {
-          this._pose(wx, elev + 0.85, wz, heading, 1, 1, 1);
-          this.armed.setMatrixAt(counts.armed++, this._m);
+          this._pose(wx, elev, wz, heading, 1, 1, 1);
+          stamp(this.armedSet, counts.armed++);
           this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           break;
         }
         case FACTION.MARINE: {
-          this._pose(wx, elev + 0.9, wz, heading, 1, 1, 1);
-          this.marine.setMatrixAt(counts.marine++, this._m);
+          this._pose(wx, elev, wz, heading, 1, 1, 1);
+          stamp(this.marineSet, counts.marine++);
           this._rifleAt(wx, elev + 1.25, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           break;
         }
         case FACTION.INFECTION: {
           const pulse = 1 + Math.sin(this.sim.t * 7 + id) * 0.15;
-          this._pose(wx, elev + 0.32, wz, heading, pulse, pulse, pulse);
-          this.infection.setMatrixAt(counts.infection++, this._m);
+          this._pose(wx, elev, wz, heading, pulse, pulse, pulse);
+          stamp(this.infectionSet, counts.infection++);
           break;
         }
         case FACTION.COMBAT: {
@@ -147,12 +166,14 @@ export class Agents3D {
           // charge: lean hard forward, stretched stride
           this._e.set(charging ? 0.55 : 0.18, heading, 0);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(wx, elev + 0.95, wz), this._q,
+          this._m.compose(this._p.set(wx, elev, wz), this._q,
             this._s.set(1, charging ? 1.1 : 1, charging ? 1.35 : 1));
-          this.combat.setMatrixAt(counts.combat++, this._m);
           if (flags & FLAG.ARMED_HOST) {
+            stamp(this.combatOdstSet, counts.combatOdst++);
             this._rifleAt(wx, elev + 1.1, wz, heading);
             this.rifle.setMatrixAt(counts.rifle++, this._m);
+          } else {
+            stamp(this.combatCivSet, counts.combatCiv++);
           }
           break;
         }
@@ -252,8 +273,12 @@ export class Agents3D {
     this.floodFlash.count = counts.floodFlash;
     this.floodFlash.instanceMatrix.needsUpdate = true;
 
-    for (const [mesh, c] of [[this.civ, counts.civ], [this.armed, counts.armed], [this.marine, counts.marine],
-    [this.infection, counts.infection], [this.combat, counts.combat], [this.carrier, counts.carrier],
+    for (const [set, c] of [[this.civSet, counts.civ], [this.armedSet, counts.armed],
+    [this.marineSet, counts.marine], [this.infectionSet, counts.infection],
+    [this.combatCivSet, counts.combatCiv], [this.combatOdstSet, counts.combatOdst]]) {
+      for (const mesh of set) { mesh.count = c; mesh.instanceMatrix.needsUpdate = true; }
+    }
+    for (const [mesh, c] of [[this.carrier, counts.carrier],
     [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash]]) {
       mesh.count = c;
       mesh.instanceMatrix.needsUpdate = true;

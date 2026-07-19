@@ -37,7 +37,7 @@ const OUT = join(ROOT, 'dist', 'dwapp');
 const TMP = join(ROOT, 'dist', '.dwapp-tmp');
 
 const TARGETS = [
-  { name: 'game', dir: 'game', assets: 'game/assets/rifle', title: 'HALO CHARON // GAME' },
+  { name: 'game', dir: 'game', assets: 'game/assets', title: 'HALO CHARON // GAME' },
   { name: 'sim', dir: 'sim', title: 'Halo Charon — Sim Harness' },
   { name: 'fused', dir: 'fused', title: 'Halo Charon — Fused' },
 ];
@@ -54,7 +54,9 @@ const buildTarget = async (t) => {
   const entryLines = [];
   if (t.assets) {
     const assetDir = join(ROOT, t.assets);
-    const names = (await readdir(assetDir)).filter((n) => n.endsWith('.png'));
+    const names = (await readdir(assetDir, { recursive: true }))
+      .map((n) => n.split('\\').join('/'))
+      .filter((n) => n.endsWith('.png'));
     const map = {};
     for (const n of names) {
       map[`${t.assets.replace(`${t.dir}/`, '')}/${n}`] = dataUri(await readFile(join(assetDir, n)));

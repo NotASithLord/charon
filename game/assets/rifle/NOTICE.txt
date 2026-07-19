@@ -5,7 +5,15 @@ non-commercial fan project (github.com/NotASithLord/first-strike), which
 sourced them under Microsoft's Game Content Usage Rules for non-commercial
 fan creations.
 
-Halo: Combat Evolved (c) Microsoft Corporation. This project is a free,
-strictly non-commercial fan project, not endorsed by or affiliated with
-Microsoft. If this project ever moves toward anything commercial, these
-files must be swapped out first.
+The character meshes and textures in ../characters/ and
+../../characters-data.js (Halo 2 marine, female marine, and infection form;
+Halo 3 flood combat forms, civilian and ODST hosts) were converted by
+scripts/convert-h3-assets.mjs from H3EK source art carried in the
+Blackandfan H3EK-Tags repository (github.com/Blackandfan/H3EK-Tags), under
+the same Microsoft Game Content Usage Rules for non-commercial fan
+creations.
+
+Halo (c) Microsoft Corporation. This project is a free, strictly
+non-commercial fan project, not endorsed by or affiliated with Microsoft.
+If this project ever moves toward anything commercial, these files must be
+swapped out first.
