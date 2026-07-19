@@ -29,9 +29,12 @@ scene.add(new THREE.AmbientLight(0x7d879e, 1.1));
 const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
 scene.add(lamp);
 
-// --- boot ---
+// --- boot: random ship every run unless a seed is pinned in the URL
+// (?seed=... for a reproducible one), starting flood kept light (10
+// infection forms, no combat forms/carriers yet) ---
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
-const sim = new Sim(seedFromUrl || 'charon-1');
+const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
+const sim = new Sim(seed, { flood: { initialInfectionForms: 10, initialCombatForms: 0, initialCarriers: 0 } });
 const world = new World(scene, sim.graph);
 const agents = new Agents3D(scene, sim, world);
 
