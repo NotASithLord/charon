@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HALO CHARON // GAME</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #05070a; overflow: hidden; }
+  body { font: 13px/1.4 "SF Mono", "Cascadia Code", Consolas, monospace; color: #c8d2e0; }
+  #c { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hud { position: absolute; z-index: 5; pointer-events: none; }
+  #topbar { top: 12px; left: 14px; }
+  #topbar b { color: #e8eef7; font-size: 15px; }
+  #room { color: #7fd1a0; font-size: 15px; font-weight: 700; }
+  #vitals { top: 12px; right: 430px; text-align: right; }
+  #hp { font-size: 16px; font-weight: 700; color: #7fd1a0; }
+  #hp.low { color: #ff6a4d; }
+  #crosshair {
+    top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border: 1px solid rgba(255,255,255,0.65); border-radius: 50%;
+  }
+  /* the activity log: prominent, long, always visible (user note) */
+  #logwrap {
+    top: 0; right: 0; bottom: 0; width: 410px;
+    background: linear-gradient(to left, rgba(7,10,14,0.92), rgba(7,10,14,0.78));
+    border-left: 1px solid #1c2430; padding: 12px 14px 14px;
+    display: flex; flex-direction: column;
+  }
+  #logwrap h2 { font-size: 12px; color: #6a7686; letter-spacing: 1.5px; margin-bottom: 8px; }
+  #log { flex: 1; overflow-y: auto; font-size: 13.5px; line-height: 1.5; }
+  #log .ev { padding: 1.5px 0; color: #9aa7b8; }
+  #log .t { color: #4a5568; }
+  #log .ev-hive, #log .ev-carrier { color: #7fd1a0; }
+  #log .ev-rampage { color: #ff6a4d; font-weight: 700; }
+  #log .ev-convert { color: #b15fd9; }
+  #log .ev-radio { color: #6aa4f0; }
+  #log .ev-combat { color: #d0a24a; }
+  #log .ev-ambush, #log .ev-bait { color: #ffd23f; }
+  #log .ev-end { color: #fff; font-weight: 700; }
+  #overlay {
+    position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(4, 6, 9, 0.88); text-align: center; cursor: pointer;
+  }
+  #overlay h1 { font-size: 28px; color: #e8eef7; letter-spacing: 2px; }
+  #overlay p { color: #8a97a8; max-width: 520px; }
+  #overlay .keys { color: #6a7686; font-size: 12px; }
+  #overlay.hidden { display: none; }
+  #pinned {
+    top: 58%; left: 50%; transform: translateX(-50%);
+    color: #ff6a4d; font-weight: 700; font-size: 18px; display: none;
+  }
+</style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="hud" id="topbar"><b>UNSC CHARON</b> · <span id="clock">0:00</span> · <span id="room">—</span></div>
+  <div class="hud" id="vitals"><div id="hp">HP 20</div><div id="deckLabel">DECK —</div></div>
+  <div class="hud" id="crosshair"></div>
+  <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
+  <div class="hud" id="logwrap">
+    <h2>SHIP ACTIVITY</h2>
+    <div id="log"></div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">HALO CHARON</h1>
+    <p id="ovText">You are a lone crew member aboard the frigate Charon. Something hit the hangar deck.
+      The ship's marines, crew — and whatever came aboard — act entirely on their own. Survive.</p>
+    <p class="keys">click to enter · WASD move · SHIFT run · mouse look · glowing pads = lifts &amp; ladders · ESC frees the mouse</p>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

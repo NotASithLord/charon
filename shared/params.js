@@ -154,11 +154,11 @@ export const PARAMS = {
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
   },
   marineDoctrine: {
-    firstSweepDelaySec: 5,     // muster time before the crash sweep launches (§5.3)
+    firstSweepDelaySec: 10,    // muster time before the crash sweep launches (§5.3)
     officers: 4,               // officer civilians who stay put in Officer Country
     bridgeOfficers: 3,         // captain + officers who never leave the bridge
-    sweepDwellSec: 25,         // min pause at each cleared room — slow, methodical (+ jitter)
-    sweepDwellJitterSec: 15,
+    sweepDwellSec: 15,         // min pause at each cleared room (+ jitter)
+    sweepDwellJitterSec: 10,
   },
   civilian: {
     fleeHearingHops: 1,        // only bolt from trouble this close (was ship-wide)

@@ -120,6 +120,11 @@ export class ShipGraph {
         if (exitA + entryB >= L) doorDist = L / 2;  // rects touch/overlap
         doorDist = Math.min(L - 0.5, Math.max(0.5, doorDist));
         l.door = { x: a.x + dx / L * doorDist, y: a.y + dy / L * doorDist };
+        // the doorway SPAN: where the walk leaves rect A and enters rect B —
+        // the walkable throat between the two footprints (3D layer collision)
+        const tA = Math.min(exitA, doorDist), tB = Math.max(L - entryB, doorDist);
+        l.doorA = { x: a.x + dx / L * tA, y: a.y + dy / L * tA };
+        l.doorB = { x: a.x + dx / L * tB, y: a.y + dy / L * tB };
         const lenA = doorDist, lenB = L - doorDist;
         l.flipT = lenA / (lenA + lenB);
         l.horizM = Math.max(3, lenA + lenB);

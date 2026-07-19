@@ -5,7 +5,7 @@
 import { RNG } from '../shared/rng.js';
 import { cloneParams } from '../shared/params.js';
 import { AgentBuffer, FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
-import { initRun, STATE } from './init.js';
+import { initRun, STATE, makeAgent } from './init.js';
 import { updateHumansTick, strategicSquads, assignFirstSweep } from './humans.js';
 import { Hive, W_FLOOD, W_HUMAN, isActiveFloodForm, isLivingHuman } from './hive.js';
 import { updateFloodTick } from './floodExec.js';
@@ -120,6 +120,21 @@ export class Sim {
     this.commands.enqueue(cmd, this.tickCount + this.P.net.inputDelayTicks, peerId);
   }
 
+  // THE PLAYER (3D slice): a real agent in the sim — the flood can see,
+  // hunt, grab and convert them; marines and civilians treat them as crew.
+  // Position is driven externally by the game each tick, so strict lockstep
+  // determinism pauses while a live player is attached (their movement is an
+  // input stream; the multiplayer path feeds it through the command queue).
+  attachPlayer(nodeIdx) {
+    const a = makeAgent(FACTION.CIVILIAN, nodeIdx, this.graph);
+    a.hp = a.maxHp = this.P.combat.civilian.hp;
+    a.isPlayer = true;
+    a.hasRadio = true;
+    this.spawn(a);
+    this.log('radio', 'a lone survivor is moving through the ship (you)');
+    return a;
+  }
+
   emitCall(agent) {
     const call = { id: this.callSeq++, node: agent.node, t: this.t, faction: agent.faction, byId: agent.id, rolled: new Set() };
     this.calls.push(call);
@@ -130,7 +145,7 @@ export class Sim {
 
   log(type, msg, node = -1) {
     this.events.push({ t: this.t, type, msg, node });
-    if (this.events.length > 400) this.events.splice(0, 100);
+    if (this.events.length > 1600) this.events.splice(0, 200);
   }
 
   spawn(a) {
@@ -405,6 +420,8 @@ export class Sim {
     const g = this.graph;
     for (const a of this.agents) {
       if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) continue;
+      // the player's body is moved by the game, not the pathfinder
+      if (a.isPlayer) { a.animTime += dt; continue; }
       // a human currently in a Flood form's grip can't move (§ grabPins)
       if (a.held === this.tickCount) { a.move = null; continue; }
       if (a.state === STATE.FIGHT || a.state === STATE.GRABBING || a.state === STATE.COWER || a.state === STATE.AMBUSHING) {

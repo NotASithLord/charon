@@ -104,7 +104,13 @@ export class Viz {
   }
 
   _lw(px) { return px / this.s; }  // constant on-screen line width
-  _font(px) { return `${px / this.s}px monospace`; }
+  // constant on-screen font size: scale by the canvas's device-pixel ratio,
+  // or hidpi screens render text at half the intended size (user note:
+  // room names were unreadable)
+  _font(px) {
+    const dpr = this.canvas.clientWidth ? this.canvas.width / this.canvas.clientWidth : 1;
+    return `${(px * dpr) / this.s}px monospace`;
+  }
 
   _visible(nodeIdx) {
     return this.deckFilter === 0 || this.sim.graph.node(nodeIdx).deck === this.deckFilter;
@@ -251,8 +257,8 @@ export class Viz {
         ctx.fillRect(x0, y0, n.w, n.d);
       }
       if (this.overlays.labels) {
-        ctx.fillStyle = '#5b6b82';
-        ctx.font = this._font(9.5);
+        ctx.fillStyle = '#7e90aa';
+        ctx.font = this._font(12);
         ctx.textAlign = 'center';
         const above = n.type === 'corridor' ? n.y + this._lw(3) : y0 - this._lw(3);
         ctx.fillText(n.name, n.x, above);
@@ -698,7 +704,7 @@ export function renderStats(sim, el) {
     : `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('');
 }
 
-export function renderLog(sim, el, maxLines = 80) {
+export function renderLog(sim, el, maxLines = 300) {
   // only rebuild when something new arrived — rewriting every frame made the
   // log impossible to scroll
   const stamp = sim.events.length + ':' + (sim.events[sim.events.length - 1]?.t ?? 0);

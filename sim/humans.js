@@ -10,6 +10,7 @@ import { humanPass, marinePass } from './graph.js';
 export function updateHumansTick(sim, dt) {
   for (const a of sim.agents) {
     if (a.dead || a.hp <= 0) continue;
+    if (a.isPlayer) continue; // the player thinks for themselves
     // last-stand fallback: survivors who heard the call make for the command
     // deck whenever they aren't actively fighting or fleeing something seen
     if (a.fallbackNode !== undefined && a.node !== a.fallbackNode
