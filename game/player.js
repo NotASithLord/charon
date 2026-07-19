@@ -23,6 +23,9 @@ export class Player {
     this.keys = new Set();
     this.padCooldown = 0;
     this.locked = false;
+    this.armed = false;
+    this._eLatch = false;
+    this._armoryIdx = sim.graph.byId.get('armory');
 
     this.agent = sim.attachPlayer(startNode);
     this._syncAgent();
@@ -65,6 +68,16 @@ export class Player {
       }
     }
 
+    // E — take a weapon (armory rack, or from the armed dead)
+    if (this.keys.has('KeyE') && !this._eLatch) {
+      this._eLatch = true;
+      const src = this.weaponSource();
+      if (src) {
+        this.sim.playerArm(this.agent, src === 'armory' ? null : src);
+        this.armed = true;
+      }
+    } else if (!this.keys.has('KeyE')) this._eLatch = false;
+
     // lift/ladder pads
     if (this.padCooldown === 0) {
       const pad = this.world.padNear(this.deck, this.x, this.z);
@@ -102,6 +115,20 @@ export class Player {
     a.deck = this.deck;
     a.node = this.world.roomAt(this.deck, sx, sy, a.node);
     a.heading = Math.atan2(-Math.cos(this.yaw), -Math.sin(this.yaw));
+  }
+
+  // what weapon (if any) is in reach: 'armory' | a corpse agent | null
+  weaponSource() {
+    if (this.armed || this.dead) return null;
+    if (this.agent.node === this._armoryIdx && this.sim.armoryStock > 0) return 'armory';
+    const [sx, sy] = this.world.worldToSim(this.x, this.z, this.deck);
+    for (const c of this.sim.agents) {
+      if (c.dead || c.faction !== 6 || !c.wasArmed || c.damage >= 100) continue;
+      if (c.deck !== this.deck && this.sim.graph.node(c.node).deck !== this.deck) continue;
+      const dx = c.x - sx, dy = c.y - sy;
+      if (dx * dx + dy * dy < 2.2 * 2.2) return c;
+    }
+    return null;
   }
 
   cameraPose() {

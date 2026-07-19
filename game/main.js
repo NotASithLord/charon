@@ -5,6 +5,7 @@
 
 import * as THREE from './vendor/three.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
+import { hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf, CLEAR_H } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
@@ -90,6 +91,42 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// --- the rifle: hitscan through the sim's own damage model. Shooting is
+// LOUD — it marks gunfire in your room, and the ship reacts ---
+let lastFire = 0;
+const _dir = new THREE.Vector3();
+const _hit = new THREE.Vector3();
+function fireRifle() {
+  if (!player.armed || player.dead || !player.locked) return;
+  const now = performance.now();
+  if (now - lastFire < 170) return;
+  lastFire = now;
+  camera.getWorldDirection(_dir);
+  const origin = camera.position;
+  const visible = new Set(sim.visibleNodes(player.agent.node));
+  let best = null, bestT = 35;
+  for (const a of sim.agents) {
+    if (a.dead) continue;
+    if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue; // flood only
+    if (a.deck !== player.deck || !visible.has(a.node)) continue;
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
+    _hit.set(wx, cy, wz).sub(origin);
+    const t = _hit.dot(_dir);
+    if (t < 0.05 || t > bestT) continue; // point-blank counts — fight off a grabber
+    const px = origin.x + _dir.x * t - wx, py = origin.y + _dir.y * t - cy, pz = origin.z + _dir.z * t - wz;
+    const r = a.faction === 3 ? 0.5 : a.faction === 5 ? 1.0 : 0.7;
+    if (px * px + py * py + pz * pz < r * r) { best = a; bestT = t; }
+  }
+  sim.gunfireAt(player.agent.node);
+  const end = new THREE.Vector3().copy(origin).addScaledVector(_dir, best ? bestT : 30);
+  const muzzle = new THREE.Vector3().copy(origin).addScaledVector(_dir, 0.5);
+  muzzle.y -= 0.15;
+  agents.playerShot(muzzle, end);
+  if (best) hurtFloodForm(sim, best, 7, false);
+}
+canvas.addEventListener('mousedown', (e) => { if (e.button === 0) fireRifle(); });
+
 // --- main loop: fixed-step sim, per-frame player + render ---
 let acc = 0;
 let shownLost = false;
@@ -140,6 +177,15 @@ function frame(now) {
   const hpEl = el('hp');
   hpEl.textContent = ghost ? `IT ${hp}` : `HP ${hp}`;
   hpEl.classList.toggle('low', hp <= 8 || !!ghost);
+  el('weapon').textContent = ghost ? '' : (player.armed ? 'MA5 RIFLE' : 'UNARMED');
+  const src = player.dead ? null : player.weaponSource();
+  const hint = el('hint');
+  if (src) {
+    hint.textContent = src === 'armory'
+      ? `E — take a rifle from the rack (${sim.armoryStock} left)`
+      : 'E — take the rifle from the dead';
+    hint.style.display = 'block';
+  } else hint.style.display = 'none';
   el('pinned').style.display = player.pinned && !player.dead ? 'block' : 'none';
   renderLog();
 

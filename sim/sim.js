@@ -46,6 +46,7 @@ export class Sim {
     this.burnOrderNode = -1; // last DESIGNATE_BURN target (companion §2.2)
     this.lastStand = false;
     this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison).length;
+    this.armoryStock = this.P.armory.stock; // rifles on the rack, first come first served
     this.outcome = null;
 
     this.stats = {
@@ -133,6 +134,18 @@ export class Sim {
     this.spawn(a);
     this.log('radio', 'a lone survivor is moving through the ship (you)');
     return a;
+  }
+
+  // the player takes up a rifle — from the armory rack or from a corpse
+  // that died holding one (game rule: the survivor can fight back)
+  playerArm(a, corpse = null) {
+    if (corpse) corpse.wasArmed = false; // a form raised from it won't get the gun
+    else this.armoryStock = Math.max(0, this.armoryStock - 1);
+    a.faction = FACTION.ARMED;
+    a.hp = a.maxHp = Math.max(a.hp, this.P.combat.armed.hp);
+    this.log('combat', corpse
+      ? 'the survivor takes a rifle from the dead (you)'
+      : `the survivor arms up at the armory (you — ${this.armoryStock} rifles left)`);
   }
 
   emitCall(agent) {
@@ -330,7 +343,6 @@ export class Sim {
   _checkSelfArming() {
     if (this._armingRolled || !this.floodKnown) return;
     this._armingRolled = true;
-    this.armoryStock = this.P.armory.stock;
     const armory = this.graph.byId.get('armory');
     let n = 0;
     for (const a of this.agents) {

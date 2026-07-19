@@ -49,6 +49,12 @@ export class Agents3D {
     this._s = new THREE.Vector3();
     this._p = new THREE.Vector3();
     this._e = new THREE.Euler();
+    this._playerShots = []; // {ax,ay,az,bx,by,bz,ttl}
+  }
+
+  // transient tracer for the player's own rifle
+  playerShot(from, to) {
+    this._playerShots.push({ ax: from.x, ay: from.y, az: from.z, bx: to.x, by: to.y, bz: to.z, ttl: 0.09 });
   }
 
   update(dt) {
@@ -180,6 +186,14 @@ export class Agents3D {
           this.flash.setMatrixAt(counts.flash++, this._m);
         }
       }
+    }
+    // the player's own shots (short-lived tracers from the muzzle)
+    this._playerShots = this._playerShots.filter((s) => (s.ttl -= dt) > 0);
+    for (const s of this._playerShots) {
+      if (seg >= 255) break;
+      pos.setXYZ(seg * 2, s.ax, s.ay, s.az);
+      pos.setXYZ(seg * 2 + 1, s.bx, s.by, s.bz);
+      seg++;
     }
     this.tracers.geometry.setDrawRange(0, seg * 2);
     pos.needsUpdate = true;
