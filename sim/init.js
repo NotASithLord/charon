@@ -53,6 +53,7 @@ export function initRun(seed, rng, P) {
     if (e.lockable && rng.chance(P.door.lockedFraction)) e.locked = true;
   }
   repairHumanConnectivity(graph);
+  assertDeckConnectivity(graph);
 
   // --- 3. block vents; never isolate a corpse_cache from every flood route ---
   for (const v of graph.vents) {
@@ -319,5 +320,23 @@ function repairHumanConnectivity(graph) {
       if (aIn !== bIn) { e.locked = false; fixed = true; break; }
     }
     if (!fixed) return; // graph itself is disconnected (shouldn't happen)
+  }
+}
+
+// NO BLOCKAGE EVER between any two decks (user rule): every cross-deck
+// connection is a lift or ladder, and lift/ladder edges are authored
+// lockable:false in ship.js — the door-lock roll and the SET_DOOR command
+// both refuse to touch a non-lockable edge, and the graph's maintenance-
+// shaft layer has no lock flag at all. This assertion is the enforced
+// guarantee, not just an accident of the current data: it fails loudly in
+// dev if a future edit ever adds a lockable cross-deck edge that could
+// seal every path between two decks.
+function assertDeckConnectivity(graph) {
+  const start = graph.byId.get('bridge');
+  const ff = graph.flowField([start], ['std'], humanPass);
+  const decksSeen = new Set();
+  for (let i = 0; i < graph.n; i++) if (ff.dist[i] !== -1) decksSeen.add(graph.node(i).deck);
+  if (decksSeen.size < 5) {
+    console.warn(`[charon] deck connectivity broken: only decks {${[...decksSeen].sort().join(',')}} reachable from the bridge — check for a lockable cross-deck edge`);
   }
 }

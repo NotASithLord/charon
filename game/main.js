@@ -11,6 +11,7 @@ import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
 import { MA5 } from './fps-data.js';
+import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
 
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -49,22 +50,23 @@ player.onAmmoTaken = (src) => {
   else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
 };
 
-// simple viewmodel: MA5 silhouette parented to the camera
+// MA5 viewmodel — the real ported first-strike asset (game/rifle-model.js),
+// at first-strike's exact CE reference placement (js/main.js gunTune),
+// translated for Three's -Z-forward camera convention (their engine is
+// +Z-forward; only the forward axis flips, right/up match 1:1).
+const rifleMesh = buildRifleViewmodel();
 const viewmodel = new THREE.Group();
-{
-  const m = new THREE.MeshStandardMaterial({ color: 0x2c333e, roughness: 0.5, metalness: 0.6 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.13, 0.62), m);
-  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.3), new THREE.MeshStandardMaterial({ color: 0x1a1e26 }));
-  barrel.position.set(0, 0.02, -0.44);
-  const mag = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.1), m);
-  mag.position.set(0, -0.13, -0.05);
-  viewmodel.add(body, barrel, mag);
-  viewmodel.position.set(0.26, -0.24, -0.5);
-  camera.add(viewmodel);
-}
+viewmodel.add(rifleMesh);
+viewmodel.position.set(GUN_TUNE.x, GUN_TUNE.y, -GUN_TUNE.z);
+viewmodel.rotation.set(GUN_TUNE.rx, GUN_TUNE.ry, GUN_TUNE.rz);
+viewmodel.scale.setScalar(GUN_TUNE.s);
+camera.add(viewmodel);
 scene.add(camera);
 const muzzleFlash = new THREE.PointLight(0xffd9a0, 0, 7, 2);
 scene.add(muzzleFlash);
+const wallSpark = new THREE.PointLight(0xffb060, 0, 4, 2.4);
+scene.add(wallSpark);
+const wallRay = new THREE.Raycaster();
 
 // --- HUD ---
 const el = (id) => document.getElementById(id);
@@ -152,6 +154,14 @@ function shotCandidates() {
   return out;
 }
 
+// real physics for shots (user note): a bullet stops at the nearest solid
+// wall or CLOSED door before it ever reaches an agent standing behind it —
+// no shooting through bulkheads. Doors mid-slide count as solid too.
+function solidsForShot() {
+  const doors = world.doors.filter((d) => d.open01 < 0.92).map((d) => d.mesh);
+  return world.wallMeshes.length || doors.length ? world.wallMeshes.concat(doors) : [];
+}
+
 function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   camera.getWorldDirection(_dir);
   _rt.crossVectors(_dir, camera.up).normalize();
@@ -159,7 +169,14 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   _dir.addScaledVector(_rt, Math.cos(offAng) * offRad)
     .addScaledVector(_up, Math.sin(offAng) * offRad).normalize();
   const origin = camera.position;
-  let best = null, bestT = maxDist;
+
+  wallRay.set(origin, _dir);
+  wallRay.far = maxDist;
+  wallRay.near = 0.05;
+  const wallHits = wallRay.intersectObjects(solidsForShot(), false);
+  const wallT = wallHits.length ? wallHits[0].distance : Infinity;
+
+  let best = null, bestT = Math.min(maxDist, wallT);
   for (const a of shotCandidates()) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
     const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
@@ -171,13 +188,18 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
     if (px * px + py * py + pz * pz < r * r) { best = a; bestT = t; }
   }
   sim.gunfireAt(player.agent.node);
-  const end = new THREE.Vector3().copy(origin).addScaledVector(_dir, best ? bestT : Math.min(30, maxDist));
-  const muzzle = new THREE.Vector3().copy(origin).addScaledVector(_dir, 0.5);
-  muzzle.y -= 0.15;
+  const hitWallInstead = !best && wallT < maxDist;
+  const travel = best ? bestT : (hitWallInstead ? wallT : Math.min(30, maxDist));
+  const end = new THREE.Vector3().copy(origin).addScaledVector(_dir, travel);
+  // the real muzzle tip (first-strike RIFLE_MUZZLE, carried through the
+  // viewmodel's actual world transform) rather than an eyeball offset
+  rifleMesh.updateWorldMatrix(true, false);
+  const muzzle = RIFLE_MUZZLE.clone().applyMatrix4(rifleMesh.matrixWorld);
   agents.playerShot(muzzle, end);
   muzzleFlash.position.copy(muzzle);
   muzzleFlash.intensity = 8;
   if (best) hurtFloodForm(sim, best, dmg, false);
+  else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }
   return !!best;
 }
 
@@ -205,10 +227,11 @@ function frame(now) {
     else if (ev.t === 'melee_hit') traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage);
   }
   muzzleFlash.intensity *= Math.exp(-14 * dtReal);
+  wallSpark.intensity *= Math.exp(-10 * dtReal);
   // viewmodel kick + reload dip
-  viewmodel.position.z = -0.5 + weapon.recoil * 1.6;
-  viewmodel.position.y = -0.24 - (weapon.reloading ? 0.16 : 0) - (weapon.meleeT > 0 ? 0.1 : 0);
-  viewmodel.rotation.x = weapon.recoil * 2 + (weapon.meleeT > 0 ? -0.5 : 0);
+  viewmodel.position.z = -GUN_TUNE.z + weapon.recoil * 1.6;
+  viewmodel.position.y = GUN_TUNE.y - (weapon.reloading ? 0.16 : 0) - (weapon.meleeT > 0 ? 0.1 : 0);
+  viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + (weapon.meleeT > 0 ? -0.5 : 0);
 
   acc += dtReal;
   let guard = 0;
@@ -263,16 +286,22 @@ function frame(now) {
   el('armorBar').style.width = `${ghost ? 0 : player.armor / 50 * 100}%`;
   el('hpText').textContent = ghost ? `IT ${hp}` : `${Math.ceil(player.armor)} | ${hp}`;
   el('ammo').textContent = ghost ? '' : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`);
+  rifleMesh.userData.setAmmoDigits?.(weapon.mag);
   const src = player.dead ? null : player.ammoSource();
   const hint = el('hint');
   if (src) {
     hint.textContent = src === 'armory'
       ? `E — strip mags from the rack (${sim.armoryStock} rifles)` : 'E — take mags off the dead';
     hint.style.display = 'block';
+  } else if (player.climb) {
+    hint.textContent = player.climb.toDeck < player.climb.fromDeck ? 'climbing up…' : 'climbing down…';
+    hint.style.display = 'block';
   } else {
     const trunk = player.dead ? null : world.trunkAt(player.deck, player.x, player.z);
     if (trunk) {
-      hint.textContent = trunk.vertical ? 'LOOK up/down + W — climb the ladder' : 'LOOK up/down + W — take the stairs';
+      const up = player.deck === trunk.lowerDeck;
+      const kind = trunk.vertical ? 'ladder' : 'stairs';
+      hint.textContent = `W — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
       hint.style.display = 'block';
     } else hint.style.display = 'none';
   }

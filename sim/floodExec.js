@@ -98,6 +98,25 @@ export function updateFloodTick(sim, dt) {
       }
     }
 
+    // OPPORTUNISTIC AGGRESSION (user note): a combat form doesn't wait on the
+    // 2.5s strategic brain to notice a human sharing its own room right now —
+    // it commits to the fight the SAME tick it arrives, instead of sailing
+    // through on some earlier errand while a human (the player included)
+    // watches it seemingly ignore them until it happens to reach the node
+    // it was already walking to. Damage was always instant (per-node, task-
+    // independent, §7); this is what makes the form's BEHAVIOR match that.
+    if (a.faction === FACTION.COMBAT && a.state !== STATE.GRABBING) {
+      const held = a.task && (a.task.kind === TASK.TRANSFORM || a.task.kind === TASK.AMBUSH
+        || a.task.kind === TASK.BAIT || a.task.kind === TASK.DECOY
+        || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)
+        || (a.task.kind === TASK.ATTACK && a.task.node === a.node));
+      if (!held) {
+        const prey = sim.occupants(a.node).some((h) => h.hp > 0 && !h.dead &&
+          (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE));
+        if (prey) hive.assign(a, { kind: TASK.ATTACK, node: a.node });
+      }
+    }
+
     const t = a.task;
     if (!t) continue;
     switch (t.kind) {

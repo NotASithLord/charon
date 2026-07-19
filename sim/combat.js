@@ -69,6 +69,38 @@ export function resolveCombat(sim, dt) {
         else sim.hurtHuman(foe, dps * dt);
       }
     }
+
+    // --- PASSING COMBAT (user note): a shaft is a cramped crawlway, not a
+    // "track" two hostiles can glide past each other on unnoticed — anyone
+    // sharing the segment fights immediately, exactly like node combat,
+    // even if neither side is a parked ambusher (that case, above, gets the
+    // first-strike bonus instead; this is the general "we just met" case).
+    const shooters = group.filter((a) => a.hp > 0 && !a.dead &&
+      (a.faction === FACTION.MARINE || (a.faction === FACTION.ARMED && a.state === STATE.FIGHT)));
+    const combatForms = group.filter((a) => a.faction === FACTION.COMBAT && !a.downed && a.hp > 0 && !a.dead);
+    const carriers = group.filter((a) => a.faction === FACTION.CARRIER && a.hp > 0 && !a.dead);
+    const humans = group.filter((a) => a.hp > 0 && !a.dead &&
+      (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
+    if (shooters.length && (combatForms.length || carriers.length)) {
+      sim.gunfireAt(shaft.a); sim.gunfireAt(shaft.b);
+      let pool = shooters.reduce((s, a) => s + (a.faction === FACTION.MARINE ? P.combat.marine.dps : P.combat.armed.dps), 0) * dt;
+      for (const t of [...combatForms, ...carriers].sort((a, b) => a.id - b.id)) {
+        if (pool <= 0) break;
+        const d = Math.min(pool, t.hp);
+        pool -= d;
+        hurtFloodForm(sim, t, d, false);
+      }
+    }
+    if (combatForms.length && humans.length) {
+      let pool = combatForms.reduce((s, f) =>
+        s + P.combat.combatForm.dps + (f.hostArmed ? P.combat.hostWeaponDps : 0), 0) * dt;
+      for (const v of humans.sort((a, b) => (rank(a) - rank(b)) || (a.id - b.id))) {
+        if (pool <= 0) break;
+        const d = Math.min(pool, v.hp);
+        pool -= d;
+        sim.hurtHuman(v, d);
+      }
+    }
   }
 
   // --- node combat ---
@@ -142,6 +174,9 @@ export function resolveCombat(sim, dt) {
         (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN))
         .sort((a, b) => (rank(a) - rank(b)) || (a.id - b.id));
       if (victims.length) {
+        // a hosted weapon firing is gunfire too — the ship hears it, and
+        // renderers get a marked tick to show the flood visibly shooting
+        if (combatForms.some((f) => f.hostArmed)) sim.gunfireAt(node);
         let pool = combatForms.reduce((s, f) =>
           s + P.combat.combatForm.dps + (f.hostArmed ? P.combat.hostWeaponDps : 0), 0) * dt;
         for (const v of victims) {

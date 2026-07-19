@@ -1,11 +1,13 @@
 // The ODST — first-person controller with the first-strike movement feel
-// (exponential accel, gravity, jump), ballistic-armor-over-health, and REAL
-// vertical traversal: ladder shafts are climbed (look up/down + move), open
-// hatches can be fallen through, stairwell trunks switch decks at the
-// landing. No teleport pads. The player is a live sim agent: the flood
-// hunts them, grabs pin them, conversion takes them.
+// (exponential accel, gravity, jump), ballistic-armor-over-health, and real
+// vertical shafts (not teleport pads): stand at a ladder/stairwell and press
+// W to climb it. Direction is never ambiguous (user note: no more guessing
+// whether looking up/down goes up or down) — a shaft only ever has ONE other
+// end from wherever you're standing, so W always takes you there, with a
+// brief climb animation instead of an instant cut. The player is a live sim
+// agent: the flood hunts them, grabs pin them, conversion takes them.
 
-import { elevOf, CLEAR_H, DECK_H } from './world.js';
+import { elevOf, CLEAR_H } from './world.js';
 import { ODST } from './fps-data.js';
 
 export class Player {
@@ -21,11 +23,13 @@ export class Player {
     this.vx = 0; this.vz = 0; this.vy = 0;
     this.onGround = true;
     this.climbing = false;
+    this.climb = null; // active climb transition, see _startClimb
     this.yaw = -Math.PI / 2; this.pitch = 0;
     this.keys = new Set();
     this.locked = false;
     this.armed = true; // ODST loadout: you board with the MA5
     this._eLatch = false;
+    this._wLatch = false;
     this._armoryIdx = sim.graph.byId.get('armory');
 
     // armor over health (first-strike shield model, ODST-flavored)
@@ -77,32 +81,26 @@ export class Player {
       if (src && this.onAmmoTaken) this.onAmmoTaken(src);
     } else if (!this.keys.has('KeyE')) this._eLatch = false;
 
-    const trunk = this.world.trunkAt(this.deck, this.x, this.z);
-    const wantFwd = this.keys.has('KeyW') ? 1 : 0;
-    const wantBack = this.keys.has('KeyS') ? 1 : 0;
+    const wantFwd = this.keys.has('KeyW');
 
-    // --- climbing (real shafts, user rule: no portals) ---
-    this.climbing = false;
-    if (trunk && this.locked && !this.pinned) {
-      const steep = Math.abs(this.pitch) > 0.35;
-      const dir = this.pitch > 0 ? 1 : -1; // looking up climbs up
-      if (steep && (wantFwd || wantBack)) {
-        this.climbing = true;
-        this.vy = ODST.climbSpeed * dir * (wantFwd ? 1 : -1);
-        this.vx = 0; this.vz = 0;
-        // hold the column while on the ladder
-        const cx = trunk.vertical ? trunk.x : (this.deck === trunk.lowerDeck ? trunk.low.x : trunk.high.x);
-        const cz = trunk.vertical ? trunk.z : (this.deck === trunk.lowerDeck ? trunk.low.z : trunk.high.z);
-        this.x += (cx - this.x) * Math.min(1, dt * 6);
-        this.z += (cz - this.z) * Math.min(1, dt * 6);
+    // --- climbing: press W at a shaft, arrive at its only other end ---
+    this.climbing = !!this.climb;
+    if (this.climb) {
+      this._stepClimb(dt);
+    } else {
+      const trunk = this.world.trunkAt(this.deck, this.x, this.z);
+      if (trunk && this.locked && !this.pinned && wantFwd && !this._wLatch) {
+        this._startClimb(trunk);
+        this._wLatch = true;
       }
     }
+    if (!wantFwd) this._wLatch = false;
 
     // --- walking (first-strike accel model) ---
     if (!this.climbing && this.locked && !this.pinned) {
       let fx = 0, fz = 0;
       if (wantFwd) fz += 1;
-      if (wantBack) fz -= 1;
+      if (this.keys.has('KeyS')) fz -= 1;
       if (this.keys.has('KeyA')) fx -= 1;
       if (this.keys.has('KeyD')) fx += 1;
       const sprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
@@ -125,55 +123,56 @@ export class Player {
         this.onGround = false;
       }
       this.vy -= ODST.gravity * dt;
-    } else if (!this.climbing) {
-      this.vx = 0; this.vz = 0;
-      this.vy -= ODST.gravity * dt;
-    }
 
-    // --- integrate horizontal with wall slide ---
-    this._move(this.vx * dt, this.vz * dt);
+      // --- integrate horizontal with wall slide ---
+      this._move(this.vx * dt, this.vz * dt);
 
-    // --- integrate vertical: floors, hatches, deck transitions ---
-    let footY = elevOf(this.deck) + this.h + this.vy * dt;
-    const overHole = trunk && trunk.vertical
-      && Math.abs(this.x - trunk.x) < 0.9 && Math.abs(this.z - trunk.z) < 0.9;
-    // arriving on the deck above
-    if (trunk && this.deck === trunk.lowerDeck && footY >= trunk.highElev - 0.02) {
-      if (trunk.vertical) {
-        this.deck = trunk.upperDeck;
-      } else {
-        this.deck = trunk.upperDeck;
-        this.x = trunk.high.x; this.z = trunk.high.z; // the switchback landing
-        footY = elevOf(this.deck);
-        this.vy = 0;
-      }
+      // --- integrate vertical: floor only (falling through an open hatch
+      // is not a traversal method here — climbing is explicit, via W) ---
+      let footY = elevOf(this.deck) + this.h + this.vy * dt;
+      this.h = footY - elevOf(this.deck);
+      if (this.h <= 0) { this.h = 0; this.vy = 0; this.onGround = true; }
+      else this.onGround = false;
+      if (this.h > CLEAR_H - 1.85) { this.h = CLEAR_H - 1.85; this.vy = Math.min(0, this.vy); }
     }
-    // dropping/climbing to the deck below
-    if (trunk && this.deck === trunk.upperDeck && footY < elevOf(this.deck) - 0.05) {
-      if (trunk.vertical && overHole) {
-        this.deck = trunk.lowerDeck;
-      } else if (!trunk.vertical && this.climbing) {
-        this.deck = trunk.lowerDeck;
-        this.x = trunk.low.x; this.z = trunk.low.z;
-        footY = elevOf(this.deck);
-        this.vy = 0;
-      }
-    }
-    this.h = footY - elevOf(this.deck);
-    // floor: solid unless standing over an open hatch
-    const floorOpen = overHole && trunk && this.deck === trunk.upperDeck;
-    if (this.h <= 0 && !floorOpen && !(this.climbing && this.vy < 0)) {
-      this.h = 0; this.vy = 0; this.onGround = true;
-    } else if (this.h <= 0 && this.climbing) {
-      this.h = 0; this.vy = 0; this.onGround = true;
-    } else {
-      this.onGround = false;
-    }
-    // ceiling: open above only while the shaft continues upward
-    const ceil = trunk && this.deck !== trunk.upperDeck ? DECK_H + CLEAR_H : CLEAR_H;
-    if (this.h > ceil - 1.85) { this.h = ceil - 1.85; this.vy = Math.min(0, this.vy); }
 
     this._syncAgent();
+  }
+
+  // Begin a climb: figure out the shaft's OTHER end from wherever we're
+  // standing (there is only ever one) and animate straight to it. Direction
+  // is never a guess (user note) — up if you're on the lower deck, down if
+  // you're on the upper one, full stop.
+  _startClimb(trunk) {
+    const fromDeck = this.deck;
+    const atLower = fromDeck === trunk.lowerDeck;
+    const toDeck = atLower ? trunk.upperDeck : trunk.lowerDeck;
+    let tx, tz;
+    if (trunk.vertical) { tx = trunk.x; tz = trunk.z; }
+    else { const dest = atLower ? trunk.high : trunk.low; tx = dest.x; tz = dest.z; }
+    const rise = Math.abs(trunk.highElev - trunk.lowElev);
+    this.climb = {
+      fromDeck, toDeck, fromX: this.x, fromZ: this.z, tx, tz,
+      t: 0, dur: Math.max(0.5, Math.min(2.2, rise / ODST.climbSpeed)),
+      worldY: elevOf(fromDeck) + this.h,
+    };
+    this.vx = this.vz = this.vy = 0;
+  }
+
+  _stepClimb(dt) {
+    const c = this.climb;
+    c.t += dt;
+    const p = Math.min(1, c.t / c.dur);
+    const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+    this.x = c.fromX + (c.tx - c.fromX) * ease;
+    this.z = c.fromZ + (c.tz - c.fromZ) * ease;
+    c.worldY = elevOf(c.fromDeck) + (elevOf(c.toDeck) - elevOf(c.fromDeck)) * ease;
+    if (p >= 1) {
+      this.deck = c.toDeck;
+      this.x = c.tx; this.z = c.tz;
+      this.h = 0;
+      this.climb = null;
+    }
   }
 
   _move(mx, mz) {
@@ -211,9 +210,7 @@ export class Player {
   }
 
   cameraPose() {
-    return {
-      x: this.x, y: elevOf(this.deck) + this.h + ODST.eyeHeight, z: this.z,
-      yaw: this.yaw, pitch: this.pitch,
-    };
+    const y = this.climb ? this.climb.worldY : elevOf(this.deck) + this.h;
+    return { x: this.x, y: y + ODST.eyeHeight, z: this.z, yaw: this.yaw, pitch: this.pitch };
   }
 }

@@ -1,0 +1,11 @@
+MA5 rifle mesh + textures (body.png, display.png, compass.png, number-*.png)
+and the vertex data in ../rifle-model-data.js are the Halo: Combat Evolved
+first-person assault rifle asset, carried over from the FIRST STRIKE
+non-commercial fan project (github.com/NotASithLord/first-strike), which
+sourced them under Microsoft's Game Content Usage Rules for non-commercial
+fan creations.
+
+Halo: Combat Evolved (c) Microsoft Corporation. This project is a free,
+strictly non-commercial fan project, not endorsed by or affiliated with
+Microsoft. If this project ever moves toward anything commercial, these
+files must be swapped out first.

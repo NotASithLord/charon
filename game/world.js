@@ -50,6 +50,7 @@ export class World {
     this.scene = scene;
     this.trunks = []; // vertical circulation, see _buildTrunks
     this.doors = [];  // sliding door panels, see _buildDoors
+    this.wallMeshes = []; // solid vertical geometry — raycast target for "real physics" shots (user note)
     this._bandC = graph.deckBands.map((b) => (b.y0 + b.y1) / 2);
     this._build();
   }
@@ -184,6 +185,7 @@ export class World {
           if (run.horiz) wall.position.set((a + b) / 2, elev + CLEAR_H / 2, run.fixed);
           else wall.position.set(run.fixed, elev + CLEAR_H / 2, (a + b) / 2);
           this.scene.add(wall);
+          this.wallMeshes.push(wall);
         }
       }
     }
@@ -202,16 +204,17 @@ export class World {
       const ang = -Math.atan2(dz, dx);
       const hl = Math.max(0.001, Math.hypot(dx, dz));
       const px = -dz / hl, pz = dx / hl;
-      const mk = (geo, mat, ox, oy, oz) => {
+      const mk = (geo, mat, ox, oy, oz, solid) => {
         const m = new THREE.Mesh(geo, mat);
         m.position.set(cx + ox, elev + oy, cz + oz);
         m.rotation.y = ang;
         this.scene.add(m);
+        if (solid) this.wallMeshes.push(m);
       };
-      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matWall, 0, -0.06, 0);
-      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matCeil, 0, CLEAR_H - 0.25, 0);
-      mk(new THREE.BoxGeometry(len, CLEAR_H, 0.12), matWall, px * DOOR_W / 2, CLEAR_H / 2, pz * DOOR_W / 2);
-      mk(new THREE.BoxGeometry(len, CLEAR_H, 0.12), matWall, -px * DOOR_W / 2, CLEAR_H / 2, -pz * DOOR_W / 2);
+      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matWall, 0, -0.06, 0, false);
+      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matCeil, 0, CLEAR_H - 0.25, 0, false);
+      mk(new THREE.BoxGeometry(len, CLEAR_H, 0.12), matWall, px * DOOR_W / 2, CLEAR_H / 2, pz * DOOR_W / 2, true);
+      mk(new THREE.BoxGeometry(len, CLEAR_H, 0.12), matWall, -px * DOOR_W / 2, CLEAR_H / 2, -pz * DOOR_W / 2, true);
     }
 
     this._buildDoors();

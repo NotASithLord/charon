@@ -6,6 +6,7 @@
 import * as THREE from './vendor/three.module.js';
 import { FACTION, FLAG } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
+import { carryGeometry } from './rifle-model.js';
 
 const CAP = 512;
 
@@ -33,16 +34,28 @@ export class Agents3D {
     this.combat = makeInstanced(scene, new THREE.CapsuleGeometry(0.42, 1.0, 4, 8), 0xa8352a, 0x5c130c, 0.7);
     this.carrier = makeInstanced(scene, new THREE.SphereGeometry(0.72, 12, 10), 0x9a5cc0, 0x5b2a80, 0.7);
     this.corpse = makeInstanced(scene, new THREE.BoxGeometry(1.5, 0.28, 0.55), 0x5a5a5a);
-    this.rifle = makeInstanced(scene, new THREE.BoxGeometry(0.9, 0.09, 0.09), 0xd7dee8);
+    // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
+    // call for every carried rifle on the ship (marines, armed crew, armed
+    // combat forms) — see game/rifle-model.js
+    this.rifle = makeInstanced(scene, carryGeometry(), 0xc9d4e2);
 
-    // combat FX: tracers + muzzle flashes
+    // combat FX: tracers + muzzle flashes. Flood fire (a hostArmed combat
+    // form emptying its stolen rifle) gets its own sickly-green tracer so
+    // it visibly reads as THEM shooting, not human gunfire.
     const tGeo = new THREE.BufferGeometry();
     tGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(256 * 6), 3));
     this.tracers = new THREE.LineSegments(tGeo,
       new THREE.LineBasicMaterial({ color: 0xffe08c, transparent: true, opacity: 0.85 }));
     this.tracers.frustumCulled = false;
     scene.add(this.tracers);
+    const fGeo = new THREE.BufferGeometry();
+    fGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(128 * 6), 3));
+    this.floodTracers = new THREE.LineSegments(fGeo,
+      new THREE.LineBasicMaterial({ color: 0x9dff6a, transparent: true, opacity: 0.85 }));
+    this.floodTracers.frustumCulled = false;
+    scene.add(this.floodTracers);
     this.flash = makeInstanced(scene, new THREE.SphereGeometry(0.14, 6, 5), 0xfff2c8, 0xffdf8a, 3.0);
+    this.floodFlash = makeInstanced(scene, new THREE.SphereGeometry(0.13, 6, 5), 0xd8ffc0, 0x8fef5a, 3.0);
 
     this._m = new THREE.Matrix4();
     this._q = new THREE.Quaternion();
@@ -197,6 +210,45 @@ export class Agents3D {
     }
     this.tracers.geometry.setDrawRange(0, seg * 2);
     pos.needsUpdate = true;
+
+    // flood gunfire (user note: armed forms should be VISIBLY shooting) —
+    // hostArmed combat forms firing their stolen rifles at humans in the room
+    const fpos = this.floodTracers.geometry.attributes.position;
+    let fseg = 0;
+    counts.floodFlash = 0;
+    for (let n = 0; n < g.n && fseg < 125; n++) {
+      if (sim.tickCount - sim.gunfireTick[n] > 2) continue;
+      const occ = sim.occupants(n);
+      const shooters = occ.filter((a) => a.hp > 0 && !a.dead && !a.downed &&
+        a.faction === FACTION.COMBAT && a.hostArmed);
+      const targets = occ.filter((a) => !a.dead && !a.isPlayer && a.hp > 0 &&
+        (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
+      if (!shooters.length || !targets.length) continue;
+      for (const sh of shooters) {
+        if (fseg >= 125) break;
+        if ((sh.id + sim.tickCount) % 3 === 0) continue;
+        const t = targets[(sh.id + (sim.tickCount >> 1)) % targets.length];
+        const sr = this.rpos.get(sh.id), tr = this.rpos.get(t.id);
+        if (!sr || !tr) continue;
+        const [sx, sz] = this.world.simToWorld(sr.x, sr.y, sr.deck);
+        const [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
+        const ey = elevOf(sr.deck) + 1.05, ty = elevOf(tr.deck) + 0.9;
+        fpos.setXYZ(fseg * 2, sx, ey, sz);
+        fpos.setXYZ(fseg * 2 + 1, tx, ty, tz);
+        fseg++;
+        if (counts.floodFlash < CAP) {
+          const dx = tx - sx, dz = tz - sz, dl = Math.hypot(dx, dz) || 1;
+          const fs = 0.7 + ((sh.id + sim.tickCount) % 2) * 0.5;
+          this._m.compose(this._p.set(sx + dx / dl * 0.6, ey, sz + dz / dl * 0.6),
+            this._q.identity(), this._s.set(fs, fs, fs));
+          this.floodFlash.setMatrixAt(counts.floodFlash++, this._m);
+        }
+      }
+    }
+    this.floodTracers.geometry.setDrawRange(0, fseg * 2);
+    fpos.needsUpdate = true;
+    this.floodFlash.count = counts.floodFlash;
+    this.floodFlash.instanceMatrix.needsUpdate = true;
 
     for (const [mesh, c] of [[this.civ, counts.civ], [this.armed, counts.armed], [this.marine, counts.marine],
     [this.infection, counts.infection], [this.combat, counts.combat], [this.carrier, counts.carrier],
