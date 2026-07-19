@@ -178,18 +178,49 @@ export class ShipGraph {
     return { dist, next, nextLink, targets: new Set(targets) };
   }
 
-  // Shortest path from -> to as [{to, link, layer}] steps, or null.
+  // Reference walking seconds to cross a link (faction-agnostic, 1.4 m/s).
+  // Pathing MUST weigh real time, not hops: with authored distances a
+  // "one-hop" 48 m maintenance shaft is a 90-second crawl that hop-count
+  // BFS preferred over two 15-second corridor hops — which marched whole
+  // packs into shafts and read as "the flood spawns and never moves".
+  linkCost(l) {
+    const run = l.horizM + l.vertM;
+    if (l.kind === 'shaft') return run * 1.35 / 0.7;
+    if (l.kind === 'vent') return run * 1.35 / 0.55;
+    if (l.type === 'lift') return l.horizM / 1.4 + 10;
+    if (l.type === 'ladder') return l.horizM / 1.4 + l.vertM / 0.5;
+    return run / 1.4 + (l.type === 'blastdoor' ? 2.5 : 0.8);
+  }
+
+  // Fastest path from -> to as [{to, link, layer}] steps, or null.
+  // Dijkstra over real travel time (deterministic: min-cost, ties by index).
   path(from, to, layers, passFn) {
     if (from === to) return [];
-    const ff = this.flowField([to], layers, passFn);
-    if (ff.dist[from] === -1) return null;
+    const n = this.n;
+    const dist = new Float64Array(n).fill(Infinity);
+    const done = new Uint8Array(n);
+    const next = new Int32Array(n).fill(-1);
+    const nextLink = new Array(n).fill(null);
+    dist[to] = 0;
+    for (;;) {
+      let u = -1, best = Infinity;
+      for (let i = 0; i < n; i++) if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
+      if (u === -1) break;
+      done[u] = 1;
+      if (u === from) break;
+      for (const { to: v, link } of this.neighbors(u, layers, passFn)) {
+        const c = dist[u] + this.linkCost(link);
+        if (c < dist[v] - 1e-9) { dist[v] = c; next[v] = u; nextLink[v] = link; }
+      }
+    }
+    if (!Number.isFinite(dist[from])) return null;
     const steps = [];
     let cur = from;
     while (cur !== to) {
-      const nxt = ff.next[cur];
-      const link = ff.nextLink[cur];
-      const layer = link.kind;
-      steps.push({ to: nxt, link, layer });
+      const nxt = next[cur];
+      const link = nextLink[cur];
+      if (nxt === -1) return null;
+      steps.push({ to: nxt, link, layer: link.kind });
       cur = nxt;
     }
     return steps;
