@@ -8,6 +8,7 @@
 
 import * as THREE from './vendor/three.module.js';
 import { DOORS } from './fps-data.js';
+import { RNG } from '../shared/rng.js';
 
 export const DECK_H = 4.2;      // deck-to-deck (matches ship data)
 export const CLEAR_H = 3.0;     // floor-to-ceiling clear height
@@ -45,9 +46,15 @@ function rectMinusHoles(x0, z0, x1, z1, holes) {
 }
 
 export class World {
-  constructor(scene, graph) {
+  constructor(scene, graph, seed = 'fx') {
     this.graph = graph;
     this.scene = scene;
+    // FLICKERING LIGHTS (user note): every room rolls its light fixture's
+    // state ONCE per run from the game seed — steady, breathing, faulty
+    // strobe, or dead — so each ship has its own broken places. Unpowered
+    // rooms never roll steady. Render-only randomness (own RNG stream).
+    this._fxRng = new RNG(String(seed) + ':lights');
+    this.roomLights = []; // per node idx: {mat, mode, phase, lvl}
     this.trunks = []; // vertical circulation, see _buildTrunks
     this.doors = [];  // sliding door panels, see _buildDoors
     this.doorEvents = []; // door open starts, drained by the game for audio
@@ -145,6 +152,23 @@ export class World {
       const sign = this._label(n.name);
       sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
       this.scene.add(sign);
+
+      // ceiling light strip with a per-run seeded state
+      {
+        const roll = this._fxRng.next();
+        const mode = g.unpowered[n.idx]
+          ? (roll < 0.45 ? 'dead' : 'harsh')
+          : roll < 0.6 ? 'steady' : roll < 0.78 ? 'soft' : roll < 0.9 ? 'harsh' : 'dead';
+        const lmat = new THREE.MeshStandardMaterial({
+          color: 0x8fa4c8, emissive: 0xbfd8ff,
+          emissiveIntensity: mode === 'dead' ? 0.04 : 1.25, roughness: 0.4, metalness: 0.3,
+        });
+        const strip = new THREE.Mesh(
+          new THREE.BoxGeometry(Math.min(3.4, n.w * 0.55), 0.07, 0.55), lmat);
+        strip.position.set(wx, elev + CLEAR_H - 0.06, wz);
+        this.scene.add(strip);
+        this.roomLights[n.idx] = { mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1 };
+      }
 
       // walls with door openings, inset half a thickness (no z-fighting)
       const sides = { N: [], S: [], W: [], E: [] };
@@ -438,6 +462,27 @@ export class World {
   }
 
   // called by main each frame with positions of things that move
+  // current light level of a room, 0..1 (drives its fixture AND the player's
+  // lamp when standing in it)
+  lightLevel(idx) {
+    return this.roomLights[idx]?.lvl ?? 1;
+  }
+
+  updateLights(t) {
+    for (const L of this.roomLights) {
+      if (!L) continue;
+      if (L.mode === 'steady') { L.lvl = 1; continue; }
+      if (L.mode === 'dead') { L.lvl = 0.04; continue; }
+      if (L.mode === 'soft') {
+        L.lvl = 0.72 + 0.28 * Math.sin(t * 1.7 + L.phase) * Math.sin(t * 0.9 + L.phase * 2);
+      } else { // harsh: strobing dropouts
+        const s = Math.sin(t * 13 + L.phase) * Math.sin(t * 7.3 + L.phase * 1.7);
+        L.lvl = s > -0.25 ? 0.55 + 0.45 * Math.abs(s) : 0.05;
+      }
+      L.mat.emissiveIntensity = 1.25 * L.lvl;
+    }
+  }
+
   updateDoors(dt, movers) {
     const r2 = DOORS.openRadius * DOORS.openRadius;
     for (const d of this.doors) {

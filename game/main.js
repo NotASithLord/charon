@@ -12,6 +12,8 @@ import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
 import { MA5, FRAG } from './fps-data.js';
 import { GameAudio } from './audio.js';
+import { FireFX } from './fx.js';
+import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
 
 const canvas = document.getElementById('c');
@@ -38,7 +40,7 @@ scene.add(lamp);
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
 const sim = new Sim(seed, { flood: { initialInfectionForms: 20, initialCombatForms: 0, initialCarriers: 0 } });
-const world = new World(scene, sim.graph);
+const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
 
 // spawn: Security on deck 3 — an ODST detail with a fireteam
@@ -47,6 +49,38 @@ agents.playerId = player.agent.id;
 const fireteam = sim.attachPlayerSquad(player.agent, 3);
 const audio = new GameAudio();
 canvas.addEventListener('click', () => audio.ensure());
+
+// FIRE (user note): seeded per run — the crash site always burns, plus a
+// few damaged spots that differ every seed; the sim's own flamethrower
+// burns light up live below. Render-only randomness (own RNG stream).
+const fire = new FireFX(scene);
+{
+  const frng = new RNG(seed + ':fires');
+  const br = sim.graph.node(sim.graph.breachNode);
+  const [bx, bz] = world.simToWorld(
+    br.x + frng.range(-br.w / 4, br.w / 4), br.y + frng.range(-br.d / 4, br.d / 4), br.deck);
+  fire.add('breach', bx, bz, elevOf(br.deck), 1.7);
+  const candidates = sim.graph.nodes.filter((n) => n.idx !== sim.graph.breachNode && n.deck >= 3);
+  const count = 2 + Math.floor(frng.next() * 3); // 2-4 extra fires, seeded
+  for (let i = 0; i < count && candidates.length; i++) {
+    const n = candidates.splice(Math.floor(frng.next() * candidates.length), 1)[0];
+    const [fx2, fz2] = world.simToWorld(
+      n.x + frng.range(-n.w / 3, n.w / 3), n.y + frng.range(-n.d / 3, n.d / 3), n.deck);
+    fire.add(`amb${i}`, fx2, fz2, elevOf(n.deck), 0.6 + frng.next() * 0.6);
+  }
+}
+// live flamethrower burns from the sim
+function syncBurnFires() {
+  for (let n = 0; n < sim.graph.n; n++) {
+    const key = `burn${n}`;
+    const burning = sim.graph.burningUntil[n] > sim.t;
+    if (burning && !fire.fires.has(key)) {
+      const nd = sim.graph.node(n);
+      const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
+      fire.add(key, wx, wz, elevOf(nd.deck), 1.2);
+    } else if (!burning && fire.fires.has(key)) fire.remove(key);
+  }
+}
 
 const weapon = new HeldWeapon(MA5);
 player.onAmmoTaken = (src) => {
@@ -396,6 +430,9 @@ function soundSweep(now) {
       if (d < 18) { audio.play('chitter', { x: wx, z: wz }, 0.8); chitterAt = now; break; }
     }
   }
+  // fire crackle from the nearest burning site
+  const nf = fire.nearest(player.x, player.z, elevOf(player.deck));
+  if (nf && nf.d < 17) audio.play('crackle', { x: nf.x, z: nf.z }, 0.85, 'crackle', 420);
   // door hisses
   for (const ev of world.doorEvents) {
     if (ev.deck === player.deck) audio.play('door', { x: ev.x, z: ev.z }, 0.7, 'door', 120);
@@ -456,10 +493,12 @@ function frame(now) {
   // light red and pulsing; an unpowered compartment flickers your lamp
   const hemiPulse = sim.lastStand ? (Math.sin(now * 0.004) + 1) / 2 : 0;
   hemi.color.setRGB(0.62 + hemiPulse * 0.35, 0.70 - hemiPulse * 0.4, 0.82 - hemiPulse * 0.55);
-  const unpowered = sim.graph.unpowered[player.agent.node] === 1;
-  lamp.intensity = unpowered
-    ? 15 * (0.45 + 0.55 * Math.abs(Math.sin(now * 0.013) * Math.sin(now * 0.0073)))
-    : 15;
+  // seeded room lighting: your lamp follows the room fixture's state, so a
+  // faulty compartment strobes around you and a dead one goes near-black
+  world.updateLights(now * 0.001);
+  lamp.intensity = 15 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  syncBurnFires();
+  fire.update(dtReal, player.x, player.z);
 
   // hit feedback fades
   if (hitFlash > 0) { hitFlash = Math.max(0, hitFlash - dtReal * 5); el('hitmarker').style.opacity = hitFlash.toFixed(2); }
