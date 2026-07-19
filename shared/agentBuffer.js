@@ -9,6 +9,7 @@ export const FACTION = {
 
 export const FLAG = {
   HAS_RADIO: 1 << 0,
+  FLINCH: 1 << 12,   // just-hurt: renderers jerk the body
   HELPLESS: 1 << 1,
   REANIMATABLE: 1 << 2,
   DOWNED: 1 << 3,

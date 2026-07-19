@@ -10,7 +10,8 @@ import { World, elevOf } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
-import { MA5 } from './fps-data.js';
+import { MA5, FRAG } from './fps-data.js';
+import { GameAudio } from './audio.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
 
 const canvas = document.getElementById('c');
@@ -25,7 +26,8 @@ scene.fog = new THREE.Fog(0x05070a, 18, 60);
 
 const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 220);
 
-scene.add(new THREE.HemisphereLight(0x9fb2d0, 0x141821, 1.4));
+const hemi = new THREE.HemisphereLight(0x9fb2d0, 0x141821, 1.4);
+scene.add(hemi);
 scene.add(new THREE.AmbientLight(0x7d879e, 1.1));
 const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
 scene.add(lamp);
@@ -42,11 +44,13 @@ const agents = new Agents3D(scene, sim, world);
 // spawn: Security on deck 3 — an ODST detail with a fireteam
 const player = new Player(canvas, world, sim, sim.graph.byId.get('security'));
 agents.playerId = player.agent.id;
-sim.attachPlayerSquad(player.agent, 3);
+const fireteam = sim.attachPlayerSquad(player.agent, 3);
+const audio = new GameAudio();
+canvas.addEventListener('click', () => audio.ensure());
 
 const weapon = new HeldWeapon(MA5);
 player.onAmmoTaken = (src) => {
-  if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; sim.log('combat', `you strip mags from the rack (${sim.armoryStock} rifles left)`); }
+  if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; frags = Math.min(8, frags + 2); sim.log('combat', `you strip mags and frags from the rack (${sim.armoryStock} rifles left)`); }
   else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
 };
 
@@ -127,10 +131,52 @@ resize();
 let fireHeld = false, reloadPressed = false, meleePressed = false;
 canvas.addEventListener('mousedown', (e) => { if (e.button === 0) fireHeld = true; });
 window.addEventListener('mouseup', (e) => { if (e.button === 0) fireHeld = false; });
+let fragPressed = false;
+let frags = FRAG.count;
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') reloadPressed = true;
   if (e.code === 'KeyF') meleePressed = true;
+  if (e.code === 'KeyG') fragPressed = true;
+  // FIRETEAM ORDERS (review P1): the sim's command layer, on your keys
+  if (!player.dead && player.locked) {
+    if (e.code === 'Digit1') setOrder('follow');
+    else if (e.code === 'Digit2') setOrder('hold');
+    else if (e.code === 'Digit3') setOrder('advance');
+  }
 });
+
+function setOrder(kind) {
+  const lead = fireteam.members.map((id) => sim.byId.get(id)).find((m) => m && !m.dead);
+  if (!lead) return;
+  if (kind === 'follow') {
+    fireteam.order = { kind: 'order:escort', entityId: player.agent.id };
+    sim.log('radio', 'fireteam: on me');
+  } else if (kind === 'hold') {
+    fireteam.order = { kind: 'order:guard', node: lead.node };
+    sim.log('radio', `fireteam: hold ${sim.graph.node(lead.node).name}`);
+  } else {
+    // advance: send them at the room you're looking at (ray to nearest room
+    // center in your facing cone, this deck)
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    let best = -1, bestScore = Infinity;
+    for (const n of sim.graph.nodes) {
+      if (n.deck !== player.deck || n.idx === player.agent.node) continue;
+      const [nx, nz] = world.simToWorld(n.x, n.y, n.deck);
+      const dx = nx - player.x, dz = nz - player.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 60) continue;
+      const dot = (dx * fx + dz * fz) / (d || 1);
+      if (dot < 0.55) continue;
+      const score = d * (2 - dot);
+      if (score < bestScore) { bestScore = score; best = n.idx; }
+    }
+    if (best !== -1) {
+      fireteam.order = { kind: 'order:move', node: best };
+      sim.log('radio', `fireteam: advance to ${sim.graph.node(best).name}`);
+    }
+  }
+  el('order').textContent = `FIRETEAM: ${kind.toUpperCase()}`;
+}
 
 const _dir = new THREE.Vector3();
 const _rt = new THREE.Vector3();
@@ -198,9 +244,163 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   agents.playerShot(muzzle, end);
   muzzleFlash.position.copy(muzzle);
   muzzleFlash.intensity = 8;
-  if (best) hurtFloodForm(sim, best, dmg, false);
-  else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }
+  if (best) {
+    hurtFloodForm(sim, best, dmg, false, player.agent.id);
+    hitFlash = 1;
+    audio.play('tick', null, 0.5, 'tick', 40);
+  } else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }
   return !!best;
+}
+
+// --- grenades (review P1): a real lofted frag with bounces and a fuse.
+// The blast goes through sim.explodeAt — walls contain it, corpses shred,
+// the ship hears it, and survivors hold the grudge. ---
+const liveFrags = [];
+const fragGeo = new THREE.SphereGeometry(0.09, 8, 6);
+const fragMat = new THREE.MeshStandardMaterial({ color: 0x39443a, roughness: 0.5, metalness: 0.6 });
+const boomLight = new THREE.PointLight(0xffc890, 0, 22, 1.6);
+scene.add(boomLight);
+let shake = 0;
+let hitFlash = 0;
+let dmgFlash = 0, dmgAngle = 0, lastSinceHit = 99;
+
+function throwFrag() {
+  if (frags <= 0 || player.dead || !player.locked) return;
+  frags--;
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const mesh = new THREE.Mesh(fragGeo, fragMat);
+  const pose = player.cameraPose();
+  mesh.position.set(pose.x + dir.x * 0.45, pose.y - 0.15, pose.z + dir.z * 0.45);
+  scene.add(mesh);
+  liveFrags.push({
+    mesh,
+    vx: dir.x * FRAG.throwSpeed, vy: dir.y * FRAG.throwSpeed + FRAG.upBoost, vz: dir.z * FRAG.throwSpeed,
+    fuse: FRAG.fuseS, deck: player.deck,
+  });
+  audio.play('clack', null, 0.6);
+}
+
+const fragRay = new THREE.Raycaster();
+function stepFrags(dt) {
+  for (let i = liveFrags.length - 1; i >= 0; i--) {
+    const f = liveFrags[i];
+    f.vy -= FRAG.gravity * dt;
+    const p = f.mesh.position;
+    const nx = p.x + f.vx * dt, ny = p.y + f.vy * dt, nz = p.z + f.vz * dt;
+    // wall bounce: cast along this frame's motion
+    const mv = new THREE.Vector3(nx - p.x, ny - p.y, nz - p.z);
+    const dist = mv.length();
+    if (dist > 1e-6) {
+      fragRay.set(p, mv.clone().normalize());
+      fragRay.far = dist + 0.09;
+      const hit = fragRay.intersectObjects(solidsForShot(), false)[0];
+      if (hit) {
+        const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+        const v = new THREE.Vector3(f.vx, f.vy, f.vz);
+        v.sub(n.multiplyScalar(2 * v.dot(n))).multiplyScalar(FRAG.bounce);
+        f.vx = v.x; f.vy = v.y; f.vz = v.z;
+        audio.play('bounce', { x: p.x, z: p.z }, 0.7, 'bounce', 60);
+      } else { p.set(nx, ny, nz); }
+    }
+    // floor bounce
+    const floor = elevOf(f.deck) + 0.09;
+    if (p.y < floor) {
+      p.y = floor;
+      if (Math.abs(f.vy) > 1.2) audio.play('bounce', { x: p.x, z: p.z }, 0.6, 'bounce', 60);
+      f.vy = -f.vy * FRAG.bounce;
+      f.vx *= 0.7; f.vz *= 0.7;
+    }
+    f.fuse -= dt;
+    if (f.fuse <= 0) {
+      const [sx, sy] = world.worldToSim(p.x, p.z, f.deck);
+      sim.explodeAt(f.deck, sx, sy, FRAG.radiusM, FRAG.damage, player.agent.id);
+      boomLight.position.set(p.x, elevOf(f.deck) + 1.2, p.z);
+      boomLight.intensity = 60;
+      shake = Math.min(1, shake + 1.2 / (1 + Math.hypot(p.x - player.x, p.z - player.z) / 6));
+      audio.play('boom', { x: p.x, z: p.z }, 1.2);
+      scene.remove(f.mesh);
+      liveFrags.splice(i, 1);
+      el('frags').textContent = `${frags} FRAG`;
+    }
+  }
+}
+
+// --- motion tracker (review P0): the classic 25 m sweep. Moving contacts
+// only — hold still and you vanish from it, exactly like the games. ---
+const trk = el('tracker').getContext('2d');
+function drawTracker() {
+  const R = 75, RANGE = 25;
+  trk.clearRect(0, 0, 150, 150);
+  trk.fillStyle = 'rgba(10,16,22,0.75)';
+  trk.beginPath(); trk.arc(R, R, 74, 0, Math.PI * 2); trk.fill();
+  trk.strokeStyle = 'rgba(110,160,210,0.35)';
+  for (const rr of [25, 50, 74]) { trk.beginPath(); trk.arc(R, R, rr, 0, Math.PI * 2); trk.stroke(); }
+  const pov = player.dead ? ghostAlive() : player.agent;
+  if (!pov) return;
+  const [px, pz] = [player.x, player.z];
+  const cos = Math.cos(-player.yaw), sin = Math.sin(-player.yaw);
+  const buf = sim.buffer;
+  for (let i = 0; i < buf.count; i++) {
+    if (buf.id[i] === player.agent.id) continue;
+    const fbuf = buf.faction[i];
+    if (fbuf === 6) continue;
+    if (buf.animClip[i] === 0 || buf.animClip[i] === 4) continue; // still or dead = invisible
+    const deck = buf.posZ[i];
+    if (Math.abs(deck - player.deck) > 1) continue;
+    const [wx, wz] = world.simToWorld(buf.posX[i], buf.posY[i], deck);
+    const dx = wx - px, dz = wz - pz;
+    const d = Math.hypot(dx, dz);
+    if (d > RANGE) continue;
+    // rotate into tracker space (up = facing)
+    const rx = dx * cos - dz * sin, rz = dx * sin + dz * cos;
+    const tx = R + (rx / RANGE) * 70, ty = R + (rz / RANGE) * 70;
+    const hostile = fbuf === 3 || fbuf === 4 || fbuf === 5;
+    trk.fillStyle = hostile ? 'rgba(255,72,56,0.95)' : 'rgba(255,214,64,0.95)';
+    if (deck === player.deck) {
+      trk.beginPath(); trk.arc(tx, ty, 3.4, 0, Math.PI * 2); trk.fill();
+    } else {
+      trk.strokeStyle = trk.fillStyle;
+      trk.beginPath(); trk.arc(tx, ty, 3.2, 0, Math.PI * 2); trk.stroke();
+    }
+  }
+  // you
+  trk.fillStyle = '#cfe0ff';
+  trk.beginPath(); trk.moveTo(R, R - 5); trk.lineTo(R - 4, R + 4); trk.lineTo(R + 4, R + 4); trk.fill();
+}
+
+// --- positional sound sweep: voice the sim's own senses ---
+let chitterAt = 0;
+function soundSweep(now) {
+  const g = sim.graph;
+  for (let n = 0; n < g.n; n++) {
+    if (sim.tickCount - sim.gunfireTick[n] > 1 || sim.gunfireTick[n] < 5) continue;
+    const nd = g.node(n);
+    if (Math.abs(nd.deck - player.deck) > 1) continue;
+    const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
+    audio.play(nd.deck === player.deck ? 'shotFar' : 'thud', { x: wx, z: wz }, 0.8, `gun${n}`, 160);
+  }
+  for (let n = 0; n < g.n; n++) {
+    if (sim.tickCount - sim.screamTick[n] > 1 || sim.screamTick[n] < 5) continue;
+    const nd = g.node(n);
+    if (Math.abs(nd.deck - player.deck) > 1) continue;
+    const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
+    audio.play('scream', { x: wx, z: wz }, 0.7, `scr${n}`, 700);
+  }
+  // nearest infection form chitters at you
+  if (now - chitterAt > 900) {
+    for (const a of sim.agents) {
+      if (a.dead || a.faction !== 3 || a.deck !== player.deck) continue;
+      const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+      const d = Math.hypot(wx - player.x, wz - player.z);
+      if (d < 18) { audio.play('chitter', { x: wx, z: wz }, 0.8); chitterAt = now; break; }
+    }
+  }
+  // door hisses
+  for (const ev of world.doorEvents) {
+    if (ev.deck === player.deck) audio.play('door', { x: ev.x, z: ev.z }, 0.7, 'door', 120);
+  }
+  world.doorEvents.length = 0;
 }
 
 // --- main loop ---
@@ -223,9 +423,14 @@ function frame(now) {
   }, wevents);
   reloadPressed = false; meleePressed = false;
   for (const ev of wevents) {
-    if (ev.t === 'fire') traceShot(ev.offAng, ev.offRad);
-    else if (ev.t === 'melee_hit') traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage);
+    if (ev.t === 'fire') { traceShot(ev.offAng, ev.offRad); audio.play('shot', null, 0.9); }
+    else if (ev.t === 'melee_hit') { traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage); audio.play('thud', null, 0.8); }
+    else if (ev.t === 'reload_start') audio.play('clack', null, 0.7);
+    else if (ev.t === 'dry') audio.play('clack', null, 0.4);
   }
+  if (fragPressed) { throwFrag(); fragPressed = false; el('frags').textContent = `${frags} FRAG`; }
+  stepFrags(dtReal);
+  boomLight.intensity *= Math.exp(-7 * dtReal);
   muzzleFlash.intensity *= Math.exp(-14 * dtReal);
   wallSpark.intensity *= Math.exp(-10 * dtReal);
   // viewmodel kick + reload dip
@@ -242,6 +447,41 @@ function frame(now) {
   if (guard >= 60) acc = 0;
 
   agents.update(dtReal);
+  soundSweep(now);
+  drawTracker();
+  audio.setListener(player.x, player.z, player.yaw);
+  audio.alarm(sim.lastStand && !ended);
+
+  // ALARM + POWER STATES (review P2 slice): the last stand turns the ship's
+  // light red and pulsing; an unpowered compartment flickers your lamp
+  const hemiPulse = sim.lastStand ? (Math.sin(now * 0.004) + 1) / 2 : 0;
+  hemi.color.setRGB(0.62 + hemiPulse * 0.35, 0.70 - hemiPulse * 0.4, 0.82 - hemiPulse * 0.55);
+  const unpowered = sim.graph.unpowered[player.agent.node] === 1;
+  lamp.intensity = unpowered
+    ? 15 * (0.45 + 0.55 * Math.abs(Math.sin(now * 0.013) * Math.sin(now * 0.0073)))
+    : 15;
+
+  // hit feedback fades
+  if (hitFlash > 0) { hitFlash = Math.max(0, hitFlash - dtReal * 5); el('hitmarker').style.opacity = hitFlash.toFixed(2); }
+  // directional damage: the moment armor takes a hit, point at the attacker
+  if (player.sinceHit < lastSinceHit) {
+    const src2 = sim.byId.get(player.agent.lastHurtBy);
+    if (src2 && !src2.dead) {
+      const [ax, az] = world.simToWorld(src2.x, src2.y, src2.deck);
+      const bearing = Math.atan2(ax - player.x, -(az - player.z));
+      dmgAngle = bearing + player.yaw;
+      dmgFlash = 1;
+      if (src2.faction === 4 || src2.faction === 3) audio.play('thud', { x: ax, z: az }, 0.9, 'hurt', 150);
+    } else dmgFlash = 1;
+  }
+  lastSinceHit = player.sinceHit;
+  if (dmgFlash > 0) {
+    dmgFlash = Math.max(0, dmgFlash - dtReal * 1.6);
+    const dd = el('dmgdir');
+    dd.style.opacity = dmgFlash.toFixed(2);
+    dd.style.transform = `rotate(${(-dmgAngle * 180 / Math.PI).toFixed(1)}deg)`;
+  }
+  shake = Math.max(0, shake - dtReal * 3);
 
   // sliding doors open for ANY movement near them (user rule)
   doorMovers.length = 0;
@@ -269,8 +509,8 @@ function frame(now) {
     const pose = player.cameraPose();
     camera.position.set(pose.x, pose.y, pose.z);
     camera.rotation.set(0, 0, 0);
-    camera.rotateY(pose.yaw);
-    camera.rotateX(pose.pitch);
+    camera.rotateY(pose.yaw + (shake > 0 ? Math.sin(now * 0.09) * 0.02 * shake : 0));
+    camera.rotateX(pose.pitch + (shake > 0 ? Math.sin(now * 0.11) * 0.018 * shake : 0));
     lamp.position.set(pose.x, pose.y + 0.2, pose.z);
     viewmodel.visible = !player.dead;
   }

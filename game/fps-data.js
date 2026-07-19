@@ -38,6 +38,17 @@ export const ODST = {
   climbSpeed: 2.6,
 };
 
+export const FRAG = {
+  count: 4,          // you board with four
+  throwSpeed: 15,    // m/s out of the hand
+  upBoost: 3.2,      // lofted arc
+  gravity: 22,
+  fuseS: 2.1,        // cooked from release
+  bounce: 0.42,      // velocity kept on impact
+  radiusM: 4.5,
+  damage: 70,        // sim explodeAt payload (falls off to edge)
+};
+
 export const DOORS = {
   openRadius: 2.6,   // any body this close slides the door open
   slideSpeed: 4.5,   // m/s of panel travel

@@ -224,13 +224,23 @@ export function initRun(seed, rng, P) {
 
     // unarmed maintenance crew working the LOWER decks (user note): they roam
     // decks 4-5 fixing systems — moving bodies right where the outbreak lives
+    // REPAIR DETAILS (user rule): the lower-deck crew spawn ALIVE and AT
+    // WORK — distributed across the machinery spaces they're trying to keep
+    // running (engineering, reactor, life support, workshops), not scattered
+    // through random compartments. worker=true keeps them making purposeful
+    // trips between systems until the outbreak reaches them.
+    const repairRooms = graph.nodes.filter((n) => n.deck >= 4
+      && ['power', 'engineering', 'systems', 'maintenance'].some((r) => n.roles.includes(r)))
+      .map((n) => n.idx);
     const lowerNodes = graph.nodes.filter((n) => n.deck >= 4).map((n) => n.idx);
     for (let i = 0; i < P.crew.lowerMaintenance; i++) {
-      const a = makeAgent(FACTION.CIVILIAN, rng.pick(lowerNodes), graph);
+      const node = repairRooms.length ? repairRooms[i % repairRooms.length] : rng.pick(lowerNodes);
+      const a = makeAgent(FACTION.CIVILIAN, node, graph);
       a.hp = a.maxHp = P.combat.civilian.hp;
       a.worker = true;
       a.lowerDecks = true; // their work orders keep them on decks 4-5
       a.hasRadio = rng.chance(P.crew.radio.civilian);
+      scatterInRoom(a, graph.node(node), rng);
       agents.push(a);
     }
   }

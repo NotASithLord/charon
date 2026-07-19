@@ -50,6 +50,8 @@ export class World {
     this.scene = scene;
     this.trunks = []; // vertical circulation, see _buildTrunks
     this.doors = [];  // sliding door panels, see _buildDoors
+    this.doorEvents = []; // door open starts, drained by the game for audio
+    this.props = [];  // cover geometry rects (sim coords) — block walking
     this.wallMeshes = []; // solid vertical geometry — raycast target for "real physics" shots (user note)
     this._bandC = graph.deckBands.map((b) => (b.y0 + b.y1) / 2);
     this._build();
@@ -110,6 +112,8 @@ export class World {
 
     // ---- vertical circulation first (its hatches cut the decks) ----
     this._buildTrunks();
+    this._propMat = new THREE.MeshStandardMaterial({ map: wallTexBase, color: 0x7d8aa5, roughness: 0.8, metalness: 0.45 });
+    this._propMatB = new THREE.MeshStandardMaterial({ color: 0x4f5c46, roughness: 0.9, metalness: 0.2 });
     const floorHoles = new Map(); // nodeIdx -> holes in its FLOOR
     const ceilHoles = new Map();  // nodeIdx -> holes in its CEILING
     for (const t of this.trunks) {
@@ -218,6 +222,7 @@ export class World {
     }
 
     this._buildDoors();
+    this._buildProps();
   }
 
   // ---- REAL SHAFTS (user note: the portal mechanisms end here) ----
@@ -348,6 +353,60 @@ export class World {
 
   // ---- sliding doors (user note): panels that open for ANY movement near
   // them and close behind it; locked doors stay shut and read red ----
+  // COVER & CLUTTER (review P1): crates, consoles and tables sized to the
+  // room's role, hugging the walls so the sim's center-of-room traffic stays
+  // clear. Each prop is REAL: it blocks bullets (wallMeshes) and blocks the
+  // player's movement (isWalkable via this.props). Placement is a pure hash
+  // of the room index — deterministic, no RNG drawn.
+  _buildProps() {
+    const g = this.graph;
+    const KITS = {
+      cargo: { n: 5, w: 1.5, h: 1.15 }, maintenance: { n: 3, w: 1.1, h: 1.0 },
+      engineering: { n: 3, w: 1.2, h: 1.3 }, power: { n: 3, w: 1.2, h: 1.3 },
+      systems: { n: 2, w: 1.1, h: 1.2 }, armory: { n: 2, w: 1.3, h: 1.0 },
+      mess: { n: 3, w: 1.4, h: 0.85 }, quarters: { n: 3, w: 1.0, h: 0.6 },
+      hangar: { n: 4, w: 1.7, h: 1.3 }, medbay: { n: 2, w: 1.1, h: 0.85 },
+      vehicles: { n: 3, w: 1.6, h: 1.2 },
+    };
+    for (const n of g.nodes) {
+      if (n.type === 'corridor') continue;
+      const kit = Object.keys(KITS).find((k) => n.roles.includes(k));
+      if (!kit) continue;
+      const { n: count, w: pw, h: ph } = KITS[kit];
+      const h0 = (n.idx * 2654435761) >>> 0;
+      const [wx, wz] = this.simToWorld(n.x, n.y, n.deck);
+      const elev = elevOf(n.deck);
+      for (let i = 0; i < count; i++) {
+        const hh = (h0 ^ (i * 40503)) >>> 0;
+        // wall-hugging slots: walk the perimeter, skip spots near doors
+        const side = (hh >>> 2) % 4;
+        const t = 0.18 + ((hh >>> 6) % 100) / 156; // 0.18..0.82 along the wall
+        const inset = pw / 2 + 0.3;
+        let px, pz;
+        if (side === 0) { px = wx - n.w / 2 + inset; pz = wz - n.d / 2 + n.d * t; }
+        else if (side === 1) { px = wx + n.w / 2 - inset; pz = wz - n.d / 2 + n.d * t; }
+        else if (side === 2) { px = wx - n.w / 2 + n.w * t; pz = wz - n.d / 2 + inset; }
+        else { px = wx - n.w / 2 + n.w * t; pz = wz + n.d / 2 - inset; }
+        // keep clear of door throats (sim coords test)
+        const [sx, sy] = this.worldToSim(px, pz, n.deck);
+        let nearDoor = false;
+        for (const e of g.edges) {
+          if (!e.door || (e.a !== n.idx && e.b !== n.idx)) continue;
+          if (Math.hypot(e.door.x - sx, e.door.y - sy) < pw / 2 + 1.6) { nearDoor = true; break; }
+        }
+        if (nearDoor) continue;
+        const depth = pw * (0.7 + ((hh >>> 9) % 40) / 100);
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, depth),
+          (hh & 1) ? this._propMat : this._propMatB);
+        mesh.position.set(px, elev + ph / 2, pz);
+        mesh.rotation.y = ((hh >>> 4) % 4) * 0.04 - 0.06; // slightly askew
+        this.scene.add(mesh);
+        this.wallMeshes.push(mesh); // bullets stop on cover
+        this.props.push({ deck: n.deck, x: sx, y: sy, hw: pw / 2 + 0.18, hd: depth / 2 + 0.18 });
+      }
+    }
+  }
+
   _buildDoors() {
     const g = this.graph;
     for (const e of g.edges) {
@@ -391,7 +450,10 @@ export class World {
         }
       }
       const rate = DOORS.slideSpeed / (CLEAR_H - 0.3);
+      const was = d.open01;
       d.open01 += Math.sign(want - d.open01) * Math.min(Math.abs(want - d.open01), rate * dt);
+      // report open/close starts so the game can voice the hiss
+      if (was <= 0.03 && d.open01 > 0.03) this.doorEvents.push({ x: d.x, z: d.z, deck: d.deck });
       d.mesh.position.y = d.closedY + d.open01 * (CLEAR_H - 0.35);
       d.mesh.visible = d.open01 < 0.97;
     }
@@ -412,6 +474,16 @@ export class World {
       const a = g.node(e.a);
       if (a.deck !== deck) continue;
       if (segDist2(sx, sy, e.doorA.x, e.doorA.y, e.doorB.x, e.doorB.y) < 0.85 * 0.85) return true;
+    }
+    return false;
+  }
+
+  // cover props block the player (checked separately so door throats above
+  // can still grant passage through walls)
+  propBlocked(deck, sx, sy) {
+    for (const p of this.props) {
+      if (p.deck !== deck) continue;
+      if (Math.abs(sx - p.x) < p.hw && Math.abs(sy - p.y) < p.hd) return true;
     }
     return false;
   }

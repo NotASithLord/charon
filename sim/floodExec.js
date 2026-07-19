@@ -200,7 +200,7 @@ export function updateFloodTick(sim, dt) {
           a.state = STATE.GRABBING;
           a.move = null; a.path = [];
           if (sim.P.combat.grabPins) target.held = sim.tickCount;
-          sim.hurtHuman(target, sim.P.combat.latchDps * dt); // the spike works while it burrows
+          sim.hurtHuman(target, sim.P.combat.latchDps * dt, a.id); // the spike works while it burrows
           a.grabTimer += dt;
           const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
           if (a.grabTimer >= need && !target.dead) convertHuman(sim, a, target);

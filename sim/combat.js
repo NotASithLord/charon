@@ -74,8 +74,8 @@ export function resolveCombat(sim, dt) {
         const dps = amb.faction === FACTION.COMBAT ? P.combat.combatForm.dps : P.combat.marine.dps;
         const strike = dps * P.ambush.firstStrikeMult;
         sim.log('ambush', `ambush sprung in the ${sim.graph.node(shaft.a).name} ↔ ${sim.graph.node(shaft.b).name} shaft`);
-        if (isFlood(mover)) hurtFloodForm(sim, mover, strike, false);
-        else sim.hurtHuman(mover, strike);
+        if (isFlood(mover)) hurtFloodForm(sim, mover, strike, false, amb.id);
+        else sim.hurtHuman(mover, strike, amb.id);
       }
     }
     // an ambusher fights anything that survived into its segment
@@ -173,7 +173,7 @@ export function resolveCombat(sim, dt) {
         s.nextShotAt = sim.t + 1 / gun.rof;
         const range = Math.hypot(best.x - s.x, best.y - s.y);
         const acc = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
-        if (sim.rng.chance(acc)) hurtFloodForm(sim, best, gun.dmg, false);
+        if (sim.rng.chance(acc)) hurtFloodForm(sim, best, gun.dmg, false, s.id);
       }
       // stomp infection forms (they're fragile, §6.6) — but only the ones
       // that have actually closed with a shooter (real space: you boot or
@@ -216,7 +216,13 @@ export function resolveCombat(sim, dt) {
           for (const v of victims) {
             if (v.hp <= 0 || v.dead) continue;
             const d = Math.hypot(v.x - f.x, v.y - f.y);
-            const score = d + rank(v) * 0.5 + v.id * 1e-6;
+            // getting shot is a stimulus: whoever hurt this form recently
+            // jumps the queue — no more mauling one victim while its
+            // shooter plinks it from behind unanswered (close shooters only;
+            // chasing a distant one through focus fire is how packs die)
+            const grudge = v.id === f.lastHurtBy && d < 8
+              && sim.tickCount - (f.lastHurtTick ?? -999) < 30 ? -6 : 0;
+            const score = d + rank(v) * 0.5 + grudge + v.id * 1e-6;
             if (score < bestScore) { bestScore = score; best = v; }
           }
           if (!best) break;
@@ -227,7 +233,7 @@ export function resolveCombat(sim, dt) {
           // real recovery gap between swings to shoot it in
           if (range <= P.combat.meleeRangeM && sim.t >= (f.nextSwingAt ?? 0)) {
             f.nextSwingAt = sim.t + P.combat.combatForm.swing.cooldownSec;
-            sim.hurtHuman(best, P.combat.combatForm.swing.dmg);
+            sim.hurtHuman(best, P.combat.combatForm.swing.dmg, f.id);
           }
           // the armed minority spray the host's weapon one-handed (lore) —
           // discrete wild shots, mostly missing
@@ -235,7 +241,7 @@ export function resolveCombat(sim, dt) {
             f.nextHostShotAt = sim.t + 1 / P.combat.hostGun.rof;
             fired = true;
             const acc = range <= P.combat.rifleFalloffM ? P.combat.hostGun.accNear : P.combat.hostGun.accFar;
-            if (sim.rng.chance(acc)) sim.hurtHuman(best, P.combat.hostGun.dmg);
+            if (sim.rng.chance(acc)) sim.hurtHuman(best, P.combat.hostGun.dmg, f.id);
           }
         }
         // a hosted weapon firing is gunfire too — the ship hears it, and
@@ -259,9 +265,12 @@ export function isFlood(a) {
   return a.faction === FACTION.INFECTION || a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER;
 }
 
-// integrity -> downed -> (self-revive | reanimate | permanent) per §7
-export function hurtFloodForm(sim, a, dmg, isFlame) {
+// integrity -> downed -> (self-revive | reanimate | permanent) per §7.
+// `by` (attacker agent id) feeds hit feedback: the FLINCH render flag and
+// the form's shoot-back retargeting — getting shot is now a stimulus.
+export function hurtFloodForm(sim, a, dmg, isFlame, by = -1) {
   const P = sim.P;
+  if (by >= 0 && dmg > 0) { a.lastHurtBy = by; a.lastHurtTick = sim.tickCount; }
   if (a.faction === FACTION.INFECTION) {
     if (isFlame) a.damage = 100;
     sim.removeAgent(a);

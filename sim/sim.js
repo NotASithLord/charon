@@ -9,7 +9,7 @@ import { initRun, STATE, makeAgent } from './init.js';
 import { updateHumansTick, strategicSquads, assignFirstSweep } from './humans.js';
 import { Hive, TASK, W_FLOOD, W_HUMAN, isActiveFloodForm, isLivingHuman } from './hive.js';
 import { updateFloodTick } from './floodExec.js';
-import { resolveCombat, humanDeathToCorpse } from './combat.js';
+import { resolveCombat, humanDeathToCorpse, hurtFloodForm } from './combat.js';
 import { CommandQueue, CMD } from './commands.js';
 import { applyCommand } from './commandApply.js';
 
@@ -200,8 +200,9 @@ export class Sim {
     }
   }
 
-  hurtHuman(a, dmg) {
+  hurtHuman(a, dmg, by = -1) {
     if (a.hp <= 0 || a.dead) return;
+    if (by >= 0 && dmg > 0) { a.lastHurtBy = by; a.lastHurtTick = this.tickCount; }
     a.hp -= dmg;
     if (a.hp <= 0) {
       this.stats.humansDead++;
@@ -656,12 +657,20 @@ export class Sim {
       if (a.downed || a.hp <= 0 || a.dragging !== -1) return false;
       const k = a.task?.kind;
       if (k === TASK.TRANSFORM || k === TASK.DECOY || k === TASK.BAIT) return false; // rooted / playing a role
-      let best = null, bestD = Infinity;
+      let best = null, bestD = Infinity, bestScore = Infinity;
       for (const h of this._occ[pn]) {
         if (h.dead || h.hp <= 0) continue;
         if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
         const d = Math.hypot(h.x - a.x, h.y - a.y);
-        if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && h.id < (best?.id ?? Infinity))) { bestD = d; best = h; }
+        // shoot-back: a recent NEARBY attacker outranks nearer prey (hit
+        // feedback) — but a form never abandons a kill to chase a distant
+        // shooter through the room's focus fire
+        const grudge = h.id === a.lastHurtBy && d < 8
+          && this.tickCount - (a.lastHurtTick ?? -999) < 30 ? -6 : 0;
+        const score = d + grudge;
+        if (score < bestScore - 1e-9 || (Math.abs(score - bestScore) <= 1e-9 && h.id < (best?.id ?? Infinity))) {
+          bestScore = score; bestD = d; best = h;
+        }
       }
       if (!best) {
         if (a.state === STATE.FIGHT) { a.state = STATE.IDLE; a.charging = false; }
@@ -776,6 +785,39 @@ export class Sim {
     }
   }
 
+  // GRENADES (game layer): a radial blast at a real point. Damage falls off
+  // toward the edge, walls contain the burst (same physical room only), the
+  // ship hears it, and corpses caught in it are shredded out of the hive's
+  // economy. `by` feeds the hit-feedback/retargeting path.
+  explodeAt(deck, x, y, radius, dmg, by = -1) {
+    let node = -1;
+    for (const n of this._deckRooms[deck] ?? []) {
+      if (Math.abs(x - n.x) <= n.w / 2 + 0.4 && Math.abs(y - n.y) <= n.d / 2 + 0.4) { node = n.idx; break; }
+    }
+    if (node === -1) return 0;
+    this.gunfireAt(node);
+    let hits = 0;
+    for (const a of this.agents) {
+      if (a.dead || a.deck !== deck) continue;
+      if ((a.pnode ?? a.node) !== node) continue; // walls contain the burst
+      const d = Math.hypot(a.x - x, a.y - y);
+      if (d > radius) continue;
+      const k = dmg * (1 - (d / radius) * 0.7);
+      if (a.faction === FACTION.CORPSE) { a.damage = Math.min(100, a.damage + k); continue; }
+      if (a.faction === FACTION.INFECTION || a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER) {
+        hurtFloodForm(this, a, k, false, by);
+        hits++;
+      } else if (a.hp > 0 && !a.isPlayer) {
+        this.hurtHuman(a, k, by);
+        hits++;
+      } else if (a.isPlayer && a.hp > 0) {
+        this.hurtHuman(a, k * 0.5, by); // your own frag still bites through armor
+        hits++;
+      }
+    }
+    return hits;
+  }
+
   // ONE BODY ON THE LADDER (user rule): is this cross-deck link held by a
   // live climber other than `selfId`? Stale claims (holder died, or was
   // yanked off the move by combat) self-heal — a claim only counts while
@@ -864,6 +906,7 @@ export class Sim {
       if (a.move && a.move.layer === 'shaft') flags |= FLAG.IN_SHAFT;
       if (a.hostArmed) flags |= FLAG.ARMED_HOST;
       if (a.charging) flags |= FLAG.CHARGING;
+      if (a.lastHurtTick !== undefined && this.tickCount - a.lastHurtTick < 4) flags |= FLAG.FLINCH;
       b.flags[i] = flags;
       i++;
     }

@@ -15,7 +15,8 @@ export const PARAMS = {
   crew: {
     civilians: 96,            // unarmed crew sheltering / working the ship
     armedCrew: 21,            // crew carrying sidearms (not marines)
-    lowerMaintenance: 10,     // unarmed maintenance crew roaming decks 4-5 fixing systems
+    lowerMaintenance: 16,     // unarmed repair crew AT WORK in the lower-deck machinery
+                              // spaces (engineering/reactor/life support) from the start
     brigPrisoners: 2,
     medbayWounded: 6,
     radio: { civilian: 0.35, armed: 0.7, marine: 1.0 }, // hasRadio fraction

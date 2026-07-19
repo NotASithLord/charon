@@ -65,6 +65,37 @@
     background: rgba(8, 11, 15, 0.75); padding: 6px 14px; border-radius: 5px;
     border: 1px solid #3a3616;
   }
+
+  #hitmarker {
+    position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%, -50%) rotate(45deg); pointer-events: none; opacity: 0;
+  }
+  #hitmarker::before, #hitmarker::after {
+    content: ""; position: absolute; background: #ff5348;
+  }
+  #hitmarker::before { left: 10px; top: 0; width: 2px; height: 22px; }
+  #hitmarker::after { left: 0; top: 10px; width: 22px; height: 2px; }
+  #dmgdir {
+    position: absolute; left: 50%; top: 50%; width: 130px; height: 130px;
+    margin: -65px 0 0 -65px; pointer-events: none; opacity: 0; border-radius: 50%;
+  }
+  #dmgdir::before {
+    content: ""; position: absolute; left: 50%; top: -6px; margin-left: -22px;
+    width: 44px; height: 16px; border-radius: 50% 50% 0 0;
+    background: radial-gradient(ellipse at 50% 100%, rgba(255,40,32,0.9), rgba(255,40,32,0));
+  }
+  #tracker {
+    position: absolute; left: 14px; bottom: 14px; width: 150px; height: 150px;
+    opacity: 0.88; pointer-events: none;
+  }
+  #frags {
+    position: absolute; right: 16px; bottom: 44px; color: #9fd4ff;
+    font: 14px/1 "SF Mono", Menlo, monospace; letter-spacing: 1px; text-align: right;
+  }
+  #order {
+    position: absolute; right: 16px; bottom: 22px; color: #6a8fb5;
+    font: 11px/1 "SF Mono", Menlo, monospace; letter-spacing: 1px; text-align: right;
+  }
 </style>
 </head>
 <body>
@@ -80,6 +111,11 @@
   <div class="hud" id="crosshair"></div>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
+  <div id="hitmarker"></div>
+  <div id="dmgdir"></div>
+  <canvas id="tracker" width="150" height="150"></canvas>
+  <div id="frags">4 FRAG</div>
+  <div id="order">FIRETEAM: FOLLOW</div>
   <div class="hud" id="logwrap">
     <h2>SHIP ACTIVITY</h2>
     <div id="log"></div>
@@ -88,7 +124,7 @@
     <h1 id="ovTitle">HALO CHARON</h1>
     <p id="ovText">You are a lone crew member aboard the frigate Charon. Something hit the hangar deck.
       The ship's marines, crew — and whatever came aboard — act entirely on their own. Survive.</p>
-    <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · E scavenge ammo ·
+    <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · G frag · E scavenge ammo · 1 follow / 2 hold / 3 advance (fireteam) ·
       ladders/stairs: stand at one, press L — always takes you to the other end · your fireteam follows you · ESC frees the mouse</p>
   </div>
   <script type="module" src="./main.js"></script>

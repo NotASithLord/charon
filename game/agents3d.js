@@ -84,6 +84,7 @@ export class Agents3D {
     this._mPart = new THREE.Matrix4();
     this._mRot = new THREE.Matrix4();
     this._mOut = new THREE.Matrix4();
+    this._downAt = new Map(); // id -> ms when first seen downed (death blend)
     this._playerShots = []; // {ax,ay,az,bx,by,bz,ttl}
   }
 
@@ -194,30 +195,37 @@ export class Agents3D {
         continue;
       }
       const downed = flags & FLAG.DOWNED;
-      if (downed) { // downed combat forms lie flat
-        this._e.set(-Math.PI / 2, heading, 0);
+      if (downed) { // downed combat forms FALL, then lie flat (death blend)
+        let fell = this._downAt.get(id);
+        if (fell === undefined) { fell = performance.now(); this._downAt.set(id, fell); }
+        const p = Math.min(1, (performance.now() - fell) / 380);
+        const ease = 1 - (1 - p) * (1 - p);
+        this._e.set(-Math.PI / 2 * ease, heading, 0);
         this._q.setFromEuler(this._e);
-        this._m.compose(this._p.set(wx, elev + 0.25, wz), this._q, this._s.set(1, 1, 1));
+        this._m.compose(this._p.set(wx, elev + 0.25 * ease, wz), this._q, this._s.set(1, 1, 1));
         if (flags & FLAG.ARMED_HOST) stamp(this.combatOdstSet, counts.combatOdst++);
         else stamp(this.combatCivSet, counts.combatCiv++);
         continue;
       }
+      if (this._downAt.has(id)) this._downAt.delete(id); // revived — back on its feet
+      // FLINCH (hit feedback): a freshly-hurt body jerks
+      const flinch = flags & FLAG.FLINCH ? Math.sin(performance.now() * 0.06 + id) * 0.09 - 0.14 : 0;
 
       switch (f) {
         case FACTION.CIVILIAN: {
-          this._pose(wx, elev, wz, heading, 1, 1, 1);
+          this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
           stamp(this.civSet, counts.civ++);
           break;
         }
         case FACTION.ARMED: {
-          this._pose(wx, elev, wz, heading, 1, 1, 1);
+          this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
           stamp(this.armedSet, counts.armed++);
           this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           break;
         }
         case FACTION.MARINE: {
-          this._pose(wx, elev, wz, heading, 1, 1, 1);
+          this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
           stamp(this.marineSet, counts.marine++);
           this._rifleAt(wx, elev + 1.25, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
@@ -225,14 +233,14 @@ export class Agents3D {
         }
         case FACTION.INFECTION: {
           const pulse = 1 + Math.sin(this.sim.t * 7 + id) * 0.15;
-          this._pose(wx, elev, wz, heading, pulse, pulse, pulse);
+          this._pose(wx, elev, wz, heading, pulse, pulse, pulse, flinch);
           stamp(this.infectionSet, counts.infection++);
           break;
         }
         case FACTION.COMBAT: {
           const charging = flags & FLAG.CHARGING;
           // charge: lean hard forward, stretched stride
-          this._e.set(charging ? 0.55 : 0.18, heading, 0);
+          this._e.set((charging ? 0.55 : 0.18) + flinch, heading, 0);
           this._q.setFromEuler(this._e);
           this._m.compose(this._p.set(wx, elev, wz), this._q,
             this._s.set(1, charging ? 1.1 : 1, charging ? 1.35 : 1));
@@ -353,8 +361,8 @@ export class Agents3D {
     }
   }
 
-  _pose(x, y, z, rotY, sx, sy, sz) {
-    this._e.set(0, rotY, 0);
+  _pose(x, y, z, rotY, sx, sy, sz, rx = 0) {
+    this._e.set(rx, rotY, 0);
     this._q.setFromEuler(this._e);
     this._m.compose(this._p.set(x, y, z), this._q, this._s.set(sx, sy, sz));
   }

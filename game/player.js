@@ -192,9 +192,32 @@ export class Player {
     const [, sy0] = w.worldToSim(this.x, this.z, this.deck);
     const [sx1, sy1] = w.worldToSim(this.x + mx, this.z + mz, this.deck);
     let nx = this.x, nz = this.z;
-    if (w.isWalkable(this.deck, sx1, sy0)) nx = this.x + mx;
-    if (w.isWalkable(this.deck, nx, sy1)) nz = this.z + mz;
+    if (w.isWalkable(this.deck, sx1, sy0) && !w.propBlocked(this.deck, sx1, sy0)) nx = this.x + mx;
+    if (w.isWalkable(this.deck, nx, sy1) && !w.propBlocked(this.deck, nx, sy1)) nz = this.z + mz;
     this.x = nx; this.z = nz;
+    this._collideBodies();
+  }
+
+  // SOLID BODIES apply to you too (review P0): you can't walk through a
+  // marine or a combat form — slide around them like the sim's separation
+  // pass does for everyone else. Corpses and downed forms are stepped over.
+  _collideBodies() {
+    const R = { 3: 0.32, 4: 0.48, 5: 0.75 }; // infection/combat/carrier; humans 0.4
+    for (const a of this.sim.agents) {
+      if (a.dead || a.isPlayer || a.deck !== this.deck) continue;
+      if (a.faction === 6 || a.downed || a.hp <= 0) continue; // the dead don't block
+      const [wx, wz] = this.world.simToWorld(a.x, a.y, a.deck);
+      const dx = this.x - wx, dz = this.z - wz;
+      const need = (R[a.faction] ?? 0.4) + 0.32;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= need * need || d2 < 1e-8) continue;
+      const d = Math.sqrt(d2);
+      const push = (need - d);
+      const px = this.x + (dx / d) * push, pz = this.z + (dz / d) * push;
+      // never get pushed through a wall — only accept the slide if walkable
+      const [sx, sy] = this.world.worldToSim(px, pz, this.deck);
+      if (this.world.isWalkable(this.deck, sx, sy)) { this.x = px; this.z = pz; }
+    }
   }
 
   _syncAgent() {
