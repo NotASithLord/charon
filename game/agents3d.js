@@ -4,7 +4,7 @@
 // are all driven by sim flags, per the fidelity contract (ROADMAP-3D §4).
 
 import * as THREE from './vendor/three.module.js';
-import { FACTION, FLAG } from '../shared/agentBuffer.js';
+import { FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
 import { carryGeometry } from './rifle-model.js';
 import { characterParts } from './characters.js';
@@ -40,6 +40,8 @@ export class Agents3D {
       const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
       mesh.count = 0;
       mesh.frustumCulled = false;
+      mesh.userData.part = p.part;
+      mesh.userData.pivot = p.pivot;
       scene.add(mesh);
       return mesh;
     });
@@ -79,7 +81,69 @@ export class Agents3D {
     this._s = new THREE.Vector3();
     this._p = new THREE.Vector3();
     this._e = new THREE.Euler();
+    this._mPart = new THREE.Matrix4();
+    this._mRot = new THREE.Matrix4();
+    this._mOut = new THREE.Matrix4();
     this._playerShots = []; // {ax,ay,az,bx,by,bz,ttl}
+  }
+
+  // RUDIMENTARY SKELETAL ANIMATION (user note): each character is six rigid
+  // parts cut along its real bone weights; limbs swing about their actual
+  // joint pivots (shoulder/hip from the JMS skeleton) with a procedural
+  // cycle picked by the sim's animation clip. Pure render-side — the sim's
+  // deterministic state is untouched.
+  _swingFor(part, clip, t, id) {
+    const ph = t * (clip === CLIP.RUN ? 11 : clip === CLIP.ATTACK ? 9 : clip === CLIP.WRITHE ? 13 : 7.2)
+      + (id % 7) * 0.9; // strangers walk out of step
+    const s = Math.sin(ph);
+    switch (clip) {
+      case CLIP.WALK:
+        if (part === 'legL') return s * 0.5;
+        if (part === 'legR') return -s * 0.5;
+        if (part === 'armL') return -s * 0.3;
+        if (part === 'armR') return s * 0.3;
+        if (part === 'head') return Math.sin(ph * 0.5) * 0.04;
+        return 0;
+      case CLIP.RUN:
+        if (part === 'legL') return s * 0.85;
+        if (part === 'legR') return -s * 0.85;
+        if (part === 'armL') return -s * 0.6;
+        if (part === 'armR') return s * 0.6;
+        if (part === 'head') return 0.08;
+        return 0;
+      case CLIP.ATTACK:
+        // raised, flailing swipes — claws up and hammering
+        if (part === 'armL') return -1.0 + Math.sin(ph * 1.7) * 0.55;
+        if (part === 'armR') return -1.0 + Math.sin(ph * 1.7 + 2.1) * 0.55;
+        if (part === 'legL') return s * 0.25;
+        if (part === 'legR') return -s * 0.25;
+        if (part === 'head') return Math.sin(ph) * 0.1;
+        return 0;
+      case CLIP.WRITHE:
+        // infection form: tripod legs skitter, sensory stalks quiver
+        if (part === 'legL') return s * 0.35;
+        if (part === 'legR') return -s * 0.35;
+        if (part === 'head') return Math.sin(ph * 1.3) * 0.25;
+        return 0;
+      default: // IDLE — breathe
+        if (part === 'armL' || part === 'armR') return Math.sin(ph * 0.35 + (part === 'armR' ? 1 : 0)) * 0.04;
+        return 0;
+    }
+  }
+
+  // write base × (pivot-anchored swing) into every part mesh of a set
+  _stampAnimated(set, i, clip, animT, id) {
+    for (const mesh of set) {
+      const pivot = mesh.userData.pivot;
+      const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(mesh.userData.part, clip, animT, id) : 0;
+      if (!ang) { mesh.setMatrixAt(i, this._m); continue; }
+      this._mRot.makeRotationZ(ang);
+      this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
+        .multiply(this._mRot)
+        .multiply(this._mOut.makeTranslation(-pivot[0], -pivot[1], -pivot[2]));
+      this._mOut.multiplyMatrices(this._m, this._mPart);
+      mesh.setMatrixAt(i, this._mOut);
+    }
   }
 
   // transient tracer for the player's own rifle
@@ -92,7 +156,8 @@ export class Agents3D {
     const buf = sim.buffer;
     const k = Math.min(1, dt * 14);
     const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0 };
-    const stamp = (set, i) => { for (const mesh of set) mesh.setMatrixAt(i, this._m); };
+    let clip = 0, animT = 0, curId = 0;
+    const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId);
 
     const seen = new Set();
     for (let i = 0; i < buf.count; i++) {
@@ -112,6 +177,9 @@ export class Agents3D {
       if (id === this.playerId) continue; // first person — don't draw your own body
       const f = buf.faction[i];
       const flags = buf.flags[i];
+      clip = buf.animClip[i];
+      animT = buf.animTime[i];
+      curId = id;
       const rp = this.rpos.get(id);
       const deck = rp.deck;
       const [wx, wz] = world.simToWorld(rp.x, rp.y, deck);

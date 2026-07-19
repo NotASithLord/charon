@@ -113,6 +113,17 @@ const parseJMS = (text) => {
       .filter((l) => l.length);
     if (!(name in sections)) sections[name] = lines; // first VERTICES/TRIANGLES win
   }
+  const nodes = [];
+  {
+    const L = sections.NODES;
+    const n = parseInt(L[0], 10);
+    for (let i = 0; i < n; i++) {
+      // name, parent index, rotation quat, translation (world-space in 8210+)
+      const name = L[1 + i * 4];
+      const pos = L[4 + i * 4].split(/\s+/).map(Number);
+      nodes.push({ name, pos });
+    }
+  }
   const mats = [];
   {
     const L = sections.MATERIALS;
@@ -129,12 +140,19 @@ const parseJMS = (text) => {
       const pos = L[p++].split(/\s+/).map(Number);
       const norm = L[p++].split(/\s+/).map(Number);
       const ni = parseInt(L[p++], 10);
-      p += ni * 2;                               // node influences: index line + weight line each
+      // node influences: index line + weight line each — keep the HEAVIEST
+      // influence, it decides which rigid animation part owns the vertex
+      let bone = 0, bestW = -1;
+      for (let k = 0; k < ni; k++) {
+        const idx = parseInt(L[p++], 10);
+        const w = parseFloat(L[p++]);
+        if (w > bestW) { bestW = w; bone = idx; }
+      }
       const nuv = parseInt(L[p++], 10);
       const uv = nuv > 0 ? L[p].split(/\s+/).map(Number) : [0, 0]; // first uv set
       p += nuv;
       if (version >= 8211) p++;                  // vertex color line
-      verts.push({ pos, norm, uv });
+      verts.push({ pos, norm, uv, bone });
     }
   }
   const tris = [];
@@ -148,7 +166,25 @@ const parseJMS = (text) => {
       tris.push({ mat, idx });
     }
   }
-  return { mats, verts, tris };
+  return { nodes, mats, verts, tris };
+};
+
+// --- rigid animation parts -----------------------------------------------
+// Map every bone to one of six rigid parts by name. The renderer swings the
+// limb parts about their joint pivots (procedural walk/run/attack cycles) —
+// rudimentary skeletal animation without GPU skinning. The infection form's
+// six spider legs split into the two alternating tripods of an insect gait.
+const partOfBone = (name) => {
+  const s = name.toLowerCase();
+  if (/b_(lf|rm|lb)_leg/.test(s)) return 'legL';   // tripod A
+  if (/b_(rf|lm|rb)_leg/.test(s)) return 'legR';   // tripod B
+  if (/head|neck|jaw|tendril|tent/.test(s)) return 'head';
+  const side = s.includes('_l_') ? 'L' : s.includes('_r_') ? 'R' : '';
+  if (/thigh|calf|foot|toe|horselink/.test(s)) return side === 'R' ? 'legR' : 'legL';
+  if (/clavicle|upperarm|forearm|hand|claw|thumb|index|ring|pinky|middle|finger|shoulder/.test(s)) {
+    return side === 'R' ? 'armR' : 'armL';
+  }
+  return 'torso';
 };
 
 // z-up +x-forward (JMS) -> y-up +x-forward (three): (x, y, z) -> (x, z, -y)
@@ -176,13 +212,18 @@ const buildModel = (jms, recipe) => {
   const s = recipe.height / (maxY - minY);
   const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
 
-  // group triangles by texture, reindex per group
+  // group triangles by (animation part, texture), reindex per group. A
+  // triangle's part is its first vertex's dominant bone's part — split
+  // triangles at part seams are rare and land whole in one part.
+  const boneParts = jms.nodes.map((n) => partOfBone(n.name));
   const groups = new Map();
   for (const t of jms.tris) {
     const tex = kept.get(t.mat);
     if (!tex) continue;
-    let g = groups.get(tex);
-    if (!g) groups.set(tex, (g = { remap: new Map(), pos: [], norm: [], uv: [], idx: [] }));
+    const part = boneParts[jms.verts[t.idx[0]].bone] ?? 'torso';
+    const key = `${part} ${tex}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { part, tex, remap: new Map(), pos: [], norm: [], uv: [], idx: [] }));
     for (const vi of t.idx) {
       let ri = g.remap.get(vi);
       if (ri === undefined) {
@@ -198,7 +239,20 @@ const buildModel = (jms, recipe) => {
       g.idx.push(ri);
     }
   }
-  return [...groups.entries()].map(([tex, g]) => ({ tex, pos: g.pos, norm: g.norm, uv: g.uv, idx: g.idx }));
+  // joint pivots: the root-most bone of each part (nodes are listed parents-
+  // first, so the first bone mapped to a part is its root — the shoulder for
+  // an arm, the hip for a leg), in the same transformed model space
+  const pivots = {};
+  jms.nodes.forEach((n, i) => {
+    const part = boneParts[i];
+    if (part === 'torso' || pivots[part]) return;
+    const [x, y, z] = toThree(n.pos);
+    pivots[part] = [+(((x - cx) * s).toFixed(3)), +(((y - minY) * s).toFixed(3)), +(((z - cz) * s).toFixed(3))];
+  });
+  return {
+    pivots,
+    groups: [...groups.values()].map((g) => ({ part: g.part, tex: g.tex, pos: g.pos, norm: g.norm, uv: g.uv, idx: g.idx })),
+  };
 };
 
 // --- textures ----------------------------------------------------------------
@@ -244,11 +298,11 @@ await mkdir(OUT_TEX, { recursive: true });
 const out = {};
 for (const [name, recipe] of Object.entries(MODELS)) {
   const jms = parseJMS(await readFile(join(BF, recipe.jms), 'utf8'));
-  const groups = buildModel(jms, recipe);
+  const { pivots, groups } = buildModel(jms, recipe);
   const tris = groups.reduce((n, g) => n + g.idx.length / 3, 0);
   const vertsN = groups.reduce((n, g) => n + g.pos.length / 3, 0);
-  out[name] = { height: recipe.height, groups };
-  console.log(`${name.padEnd(12)} ${String(vertsN).padStart(6)} verts ${String(tris).padStart(6)} tris  groups: ${groups.map((g) => g.tex).join(', ')}`);
+  out[name] = { height: recipe.height, pivots, groups };
+  console.log(`${name.padEnd(12)} ${String(vertsN).padStart(6)} verts ${String(tris).padStart(6)} tris  parts: ${[...new Set(groups.map((g) => g.part))].join(', ')}`);
 }
 for (const [key, rel] of Object.entries(TEXTURES)) {
   await convertTexture(join(BF, rel), join(OUT_TEX, `${key}.png`));

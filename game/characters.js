@@ -18,13 +18,19 @@ const texFor = (name) => {
   return texCache[name];
 };
 
-// [{ geometry, texture }] per model — geometry is meters, y-up, +X-forward,
-// feet at y=0 (rotate with the same heading convention as the carry rifle)
-export const characterParts = (name) => CHARACTERS[name].groups.map((g) => {
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
-  geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.norm, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
-  geo.setIndex(g.idx);
-  return { geometry: geo, texture: texFor(g.tex) };
-});
+// [{ part, pivot, geometry, texture }] per model — geometry is meters, y-up,
+// +X-forward, feet at y=0 (rotate with the same heading convention as the
+// carry rifle). `part` is the rigid animation part (torso/head/armL/armR/
+// legL/legR) and `pivot` its joint position in model space — the renderer
+// swings each limb about its pivot for the procedural walk/attack cycles.
+export const characterParts = (name) => {
+  const model = CHARACTERS[name];
+  return model.groups.map((g) => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.norm, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+    geo.setIndex(g.idx);
+    return { part: g.part, pivot: model.pivots[g.part] ?? null, geometry: geo, texture: texFor(g.tex) };
+  });
+};
