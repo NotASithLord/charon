@@ -1,15 +1,19 @@
 // 3D world extruded from the meter-true ship plan (docs/ROADMAP-3D.md §1).
 // The sim graph stays authoritative: rooms are their authored w × d rects,
-// doors are the sim's computed door points cut into the shared walls, and
-// walkability is answered in SIM coordinates so the player and the sim agree
-// about where anyone can stand.
+// doors are the sim's computed door points as REAL SLIDING PANELS, and
+// cross-deck links are REAL SHAFTS — where two rooms overlap in plan the
+// shaft is a true vertical well with hatch holes cut through the deck
+// (climb it, look up/down it, shoot through it); offset pairs become
+// enclosed stairwell trunks. No teleport pads.
 
 import * as THREE from './vendor/three.module.js';
+import { DOORS } from './fps-data.js';
 
 export const DECK_H = 4.2;      // deck-to-deck (matches ship data)
 export const CLEAR_H = 3.0;     // floor-to-ceiling clear height
 export const DOOR_W = 1.7;      // doorway opening width
 const WALL_T = 0.16;
+const HATCH = 1.8;              // hatch hole side
 
 export function elevOf(deck) { return (5 - deck) * DECK_H; }
 
@@ -21,22 +25,39 @@ function segDist2(px, py, ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
+// axis-aligned rect minus square holes -> list of rects (for hatched floors)
+function rectMinusHoles(x0, z0, x1, z1, holes) {
+  let rects = [[x0, z0, x1, z1]];
+  for (const h of holes) {
+    const out = [];
+    for (const [a0, b0, a1, b1] of rects) {
+      const hx0 = Math.max(a0, h.x - HATCH / 2), hx1 = Math.min(a1, h.x + HATCH / 2);
+      const hz0 = Math.max(b0, h.z - HATCH / 2), hz1 = Math.min(b1, h.z + HATCH / 2);
+      if (hx0 >= hx1 || hz0 >= hz1) { out.push([a0, b0, a1, b1]); continue; }
+      if (a0 < hx0) out.push([a0, b0, hx0, b1]);
+      if (hx1 < a1) out.push([hx1, b0, a1, b1]);
+      if (b0 < hz0) out.push([hx0, b0, hx1, hz0]);
+      if (hz1 < b1) out.push([hx0, hz1, hx1, b1]);
+    }
+    rects = out;
+  }
+  return rects;
+}
+
 export class World {
   constructor(scene, graph) {
     this.graph = graph;
     this.scene = scene;
-    this.pads = []; // lift/ladder teleport pads {deck, x, z, node, toNode, toDeck, tx, tz, kind}
+    this.trunks = []; // vertical circulation, see _buildTrunks
+    this.doors = [];  // sliding door panels, see _buildDoors
     this._bandC = graph.deckBands.map((b) => (b.y0 + b.y1) / 2);
     this._build();
   }
 
   bandCenter(deck) { return this._bandC[deck - 1]; }
-  // sim schematic (x, y@deck) -> world (x, z)
   simToWorld(sx, sy, deck) { return [sx, sy - this.bandCenter(deck)]; }
   worldToSim(wx, wz, deck) { return [wx, wz + this.bandCenter(deck)]; }
 
-  // procedural panel texture: deck plating / wall panels with seam lines so
-  // motion and depth read even under flat lighting
   _panelTex(base, line, cell = 64) {
     const c = document.createElement('canvas');
     c.width = c.height = 256;
@@ -47,7 +68,6 @@ export class World {
       x.beginPath(); x.moveTo(i, 0); x.lineTo(i, 256); x.stroke();
       x.beginPath(); x.moveTo(0, i); x.lineTo(256, i); x.stroke();
     }
-    // rivets
     x.fillStyle = line;
     for (let i = cell / 2; i < 256; i += cell) for (let j = cell / 2; j < 256; j += cell) {
       x.beginPath(); x.arc(i, j, 2.4, 0, Math.PI * 2); x.fill();
@@ -83,45 +103,52 @@ export class World {
       tex.repeat.set(Math.max(1, w / 4), Math.max(1, d / 4));
       return new THREE.MeshStandardMaterial({ map: tex, color: tint, roughness: 0.85, metalness: 0.35 });
     };
-    const matWall = new THREE.MeshStandardMaterial({ map: wallTexBase, color: 0xaebdd8, roughness: 0.7, metalness: 0.5 });
+    this._matWall = new THREE.MeshStandardMaterial({ map: wallTexBase, color: 0xaebdd8, roughness: 0.7, metalness: 0.5 });
+    const matWall = this._matWall;
     const matCeil = new THREE.MeshStandardMaterial({ color: 0x141a26, emissive: 0x2a3a58, emissiveIntensity: 0.35, roughness: 1, side: THREE.DoubleSide });
-    const matLocked = new THREE.MeshStandardMaterial({
-      color: 0x7a1f1f, emissive: 0xa03020, emissiveIntensity: 0.7,
-      transparent: true, opacity: 0.55, side: THREE.DoubleSide,
-    });
-    const matLift = new THREE.MeshStandardMaterial({ color: 0x1e4b56, emissive: 0x2fd7f0, emissiveIntensity: 0.8 });
-    const matLadder = new THREE.MeshStandardMaterial({ color: 0x54401e, emissive: 0xf0a52f, emissiveIntensity: 0.6 });
-    const matBreach = new THREE.MeshStandardMaterial({ color: 0x521c12, emissive: 0xff5533, emissiveIntensity: 0.5 });
 
-    // per-node door openings, in sim coords, grouped by which wall side
+    // ---- vertical circulation first (its hatches cut the decks) ----
+    this._buildTrunks();
+    const floorHoles = new Map(); // nodeIdx -> holes in its FLOOR
+    const ceilHoles = new Map();  // nodeIdx -> holes in its CEILING
+    for (const t of this.trunks) {
+      if (!t.vertical) continue;
+      (floorHoles.get(t.upperNode) ?? floorHoles.set(t.upperNode, []).get(t.upperNode)).push({ x: t.x, z: t.z });
+      (ceilHoles.get(t.lowerNode) ?? ceilHoles.set(t.lowerNode, []).get(t.lowerNode)).push({ x: t.x, z: t.z });
+    }
+
     for (const n of g.nodes) {
       const deck = n.deck, elev = elevOf(deck);
       const [wx, wz] = this.simToWorld(n.x, n.y, deck);
       const isBreach = n.idx === g.breachNode;
-
-      // floor + ceiling + signage
       const tint = isBreach ? 0xff8866 : g.unpowered[n.idx] ? 0x4a5261 : (n.type === 'corridor' ? 0xbccbe4 : 0x9daabf);
-      const floor = new THREE.Mesh(new THREE.BoxGeometry(n.w, 0.12, n.d), mkFloorMat(n.w, n.d, tint));
-      floor.position.set(wx, elev - 0.06, wz);
-      this.scene.add(floor);
-      const ceil = new THREE.Mesh(new THREE.PlaneGeometry(n.w, n.d), matCeil);
-      ceil.rotation.x = Math.PI / 2;
-      ceil.position.set(wx, elev + CLEAR_H, wz);
-      this.scene.add(ceil);
+      const fmat = mkFloorMat(n.w, n.d, tint);
+
+      // floor + ceiling with hatch holes where shafts pierce them
+      const fh = floorHoles.get(n.idx) ?? [];
+      for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, fh)) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.12, b1 - b0), fmat);
+        slab.position.set((a0 + a1) / 2, elev - 0.06, (b0 + b1) / 2);
+        this.scene.add(slab);
+      }
+      const ch = ceilHoles.get(n.idx) ?? [];
+      for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.1, b1 - b0), matCeil);
+        slab.position.set((a0 + a1) / 2, elev + CLEAR_H, (b0 + b1) / 2);
+        this.scene.add(slab);
+      }
       const sign = this._label(n.name);
       sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
       this.scene.add(sign);
 
-      // openings on each side: project each same-deck door point onto the
-      // nearest wall of this rect
-      const sides = { N: [], S: [], W: [], E: [] }; // N = -z, S = +z, W = -x, E = +x
+      // walls with door openings, inset half a thickness (no z-fighting)
+      const sides = { N: [], S: [], W: [], E: [] };
       for (const e of g.edges) {
         if (!e.door) continue;
         if (e.a !== n.idx && e.b !== n.idx) continue;
         const other = g.node(e.a === n.idx ? e.b : e.a);
         if (other.deck !== deck) continue;
         const [dx, dz] = this.simToWorld(e.door.x, e.door.y, deck);
-        // distance to each wall
         const dN = Math.abs((wz - n.d / 2) - dz), dS = Math.abs((wz + n.d / 2) - dz);
         const dW = Math.abs((wx - n.w / 2) - dx), dE = Math.abs((wx + n.w / 2) - dx);
         const m = Math.min(dN, dS, dW, dE);
@@ -130,8 +157,6 @@ export class World {
         else if (m === dW) sides.W.push({ at: dz, edge: e });
         else sides.E.push({ at: dz, edge: e });
       }
-      // walls sit half a thickness INSIDE the footprint so two flush rooms
-      // get back-to-back panels instead of coplanar z-fighting faces
       const wi = WALL_T / 2;
       const wallRuns = [
         { key: 'N', horiz: true, fixed: wz - n.d / 2 + wi, from: wx - n.w / 2, to: wx + n.w / 2 },
@@ -149,14 +174,6 @@ export class World {
           const a = c.at - DOOR_W / 2;
           if (a > cursor + 0.05) spans.push([cursor, a]);
           cursor = Math.max(cursor, c.at + DOOR_W / 2);
-          // locked doors get a glowing barrier pane in the opening
-          if (c.edge.locked) {
-            const pane = new THREE.Mesh(new THREE.PlaneGeometry(DOOR_W, CLEAR_H - 0.2), matLocked);
-            if (run.horiz) pane.position.set(c.at, elev + CLEAR_H / 2, run.fixed);
-            else { pane.position.set(run.fixed, elev + CLEAR_H / 2, c.at); pane.rotation.y = Math.PI / 2; }
-            pane.userData.edge = c.edge;
-            this.scene.add(pane);
-          }
         }
         if (run.to > cursor + 0.05) spans.push([cursor, run.to]);
         for (const [a, b] of spans) {
@@ -171,11 +188,9 @@ export class World {
       }
     }
 
-    // doorway throats: the span between two footprints is a real short
-    // tunnel — floor, sides and lintel — so standing in a doorway is
-    // standing somewhere, not floating in the void between boxes
+    // doorway throats between non-flush spaces
     for (const e of g.edges) {
-      if (!e.door || !e.doorA) continue;
+      if (!e.door || !e.doorA || e.shared) continue;
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck !== b.deck) continue;
       const deck = a.deck, elev = elevOf(deck);
@@ -185,52 +200,168 @@ export class World {
       const len = Math.max(0.6, Math.hypot(dx, dz)) + 0.5;
       const cx = (ax + bx) / 2, cz = (az + bz) / 2;
       const ang = -Math.atan2(dz, dx);
-      const px = -dz / (len - 0.5 || 1), pz = dx / (len - 0.5 || 1); // unit perpendicular
+      const hl = Math.max(0.001, Math.hypot(dx, dz));
+      const px = -dz / hl, pz = dx / hl;
       const mk = (geo, mat, ox, oy, oz) => {
         const m = new THREE.Mesh(geo, mat);
         m.position.set(cx + ox, elev + oy, cz + oz);
         m.rotation.y = ang;
         this.scene.add(m);
       };
-      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matWall, 0, -0.06, 0);            // sill floor
-      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matCeil, 0, CLEAR_H - 0.25, 0);   // lintel
+      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matWall, 0, -0.06, 0);
+      mk(new THREE.BoxGeometry(len, 0.12, DOOR_W), matCeil, 0, CLEAR_H - 0.25, 0);
       mk(new THREE.BoxGeometry(len, CLEAR_H, 0.12), matWall, px * DOOR_W / 2, CLEAR_H / 2, pz * DOOR_W / 2);
       mk(new THREE.BoxGeometry(len, CLEAR_H, 0.12), matWall, -px * DOOR_W / 2, CLEAR_H / 2, -pz * DOOR_W / 2);
     }
 
-    // lift/ladder pads for every cross-deck standard edge
+    this._buildDoors();
+  }
+
+  // ---- REAL SHAFTS (user note: the portal mechanisms end here) ----
+  // A cross-deck link whose two rooms overlap in plan gets ONE true vertical
+  // well: hatch through the deck, ladder rungs, open line of sight/fire.
+  // Offset rooms get an enclosed stairwell trunk at each end instead.
+  _buildTrunks() {
+    const g = this.graph;
+    const matLadder = new THREE.MeshStandardMaterial({ color: 0x8a97a8, roughness: 0.5, metalness: 0.7 });
+    const matCollar = (lift) => new THREE.MeshStandardMaterial({
+      color: lift ? 0x1e4b56 : 0x54401e,
+      emissive: lift ? 0x2fd7f0 : 0xf0a52f, emissiveIntensity: 0.55,
+    });
     for (const e of g.edges) {
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck === b.deck) continue;
-      const mk = (from, to) => {
-        const fromDeck = from.deck;
-        const px = Math.max(from.x - from.w / 2 + 1.2, Math.min(from.x + from.w / 2 - 1.2, to.x));
-        const [wx, wz] = this.simToWorld(px, from.y, fromDeck);
-        const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 0.1, 20),
-          e.type === 'lift' ? matLift : matLadder);
-        pad.position.set(wx, elevOf(fromDeck) + 0.05, wz);
-        this.scene.add(pad);
-        // the trunk itself: a translucent column floor-to-ceiling marking
-        // the vertical circulation (lift shaft / ladder well) — decks are
-        // real stacked levels and this is how you move between them
-        const trunk = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.95, 0.95, CLEAR_H, 14, 1, true),
-          new THREE.MeshStandardMaterial({
-            color: e.type === 'lift' ? 0x2fd7f0 : 0xf0a52f,
-            emissive: e.type === 'lift' ? 0x1a7b8a : 0x8a5c1a, emissiveIntensity: 0.5,
-            transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
-          }));
-        trunk.position.set(wx, elevOf(fromDeck) + CLEAR_H / 2, wz);
-        this.scene.add(trunk);
-        return { deck: fromDeck, x: wx, z: wz, node: from.idx };
-      };
-      const pa = mk(a, b), pb = mk(b, a);
-      this.pads.push({ ...pa, toDeck: pb.deck, tx: pb.x, tz: pb.z, toNode: pb.node, kind: e.type, edge: e });
-      this.pads.push({ ...pb, toDeck: pa.deck, tx: pa.x, tz: pa.z, toNode: pa.node, kind: e.type, edge: e });
+      const upper = a.deck < b.deck ? a : b; // smaller deck number = higher elevation
+      const lower = a.deck < b.deck ? b : a;
+      const [uax, uaz] = this.simToWorld(upper.x, upper.y, upper.deck);
+      const [lbx, lbz] = this.simToWorld(lower.x, lower.y, lower.deck);
+      const ox0 = Math.max(uax - upper.w / 2, lbx - lower.w / 2) + 1.1;
+      const ox1 = Math.min(uax + upper.w / 2, lbx + lower.w / 2) - 1.1;
+      const oz0 = Math.max(uaz - upper.d / 2, lbz - lower.d / 2) + 1.1;
+      const oz1 = Math.min(uaz + upper.d / 2, lbz + lower.d / 2) - 1.1;
+      const vertical = ox1 - ox0 >= 0.2 && oz1 - oz0 >= 0.2;
+      const lift = e.type === 'lift';
+      if (vertical) {
+        const x = (ox0 + ox1) / 2, z = (oz0 + oz1) / 2;
+        const lowElev = elevOf(lower.deck), highElev = elevOf(upper.deck);
+        this.trunks.push({
+          vertical: true, kind: e.type, edge: e, x, z,
+          lowerDeck: lower.deck, upperDeck: upper.deck,
+          lowerNode: lower.idx, upperNode: upper.idx,
+          lowElev, highElev,
+        });
+        // hatch collars top and bottom + ladder rungs up one side
+        for (const [elev, ny] of [[lowElev, lowElev + 0.02], [highElev, highElev + 0.02]]) {
+          const collar = new THREE.Mesh(new THREE.BoxGeometry(HATCH + 0.5, 0.08, HATCH + 0.5), matCollar(lift));
+          collar.position.set(x, ny, z);
+          this.scene.add(collar);
+        }
+        const runN = Math.floor((highElev - lowElev) / 0.38);
+        for (let i = 0; i <= runN; i++) {
+          const rung = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 0.07), matLadder);
+          rung.position.set(x, lowElev + 0.3 + i * 0.38, z - HATCH / 2 + 0.1);
+          this.scene.add(rung);
+        }
+        // shaft lining between decks (four thin walls through the structure)
+        const linH = highElev - lowElev - CLEAR_H;
+        if (linH > 0.05) {
+          for (const [ox, oz, w, d] of [
+            [0, -HATCH / 2, HATCH, 0.08], [0, HATCH / 2, HATCH, 0.08],
+            [-HATCH / 2, 0, 0.08, HATCH], [HATCH / 2, 0, 0.08, HATCH]]) {
+            const lin = new THREE.Mesh(new THREE.BoxGeometry(w, linH, d), this._matWall ?? matLadder);
+            lin.position.set(x + ox, lowElev + CLEAR_H + linH / 2, z + oz);
+            this.scene.add(lin);
+          }
+        }
+      } else {
+        // enclosed stairwell: a trunk at each end; climbing one delivers you
+        // to the other (a switchback landing you can't see through)
+        const mk = (n, other, deck) => {
+          const [nx, nz] = this.simToWorld(n.x, n.y, n.deck);
+          const [ox2] = this.simToWorld(other.x, other.y, other.deck);
+          const px = Math.max(nx - n.w / 2 + 1.2, Math.min(nx + n.w / 2 - 1.2, ox2));
+          return { x: px, z: nz, deck: n.deck, node: n.idx };
+        };
+        const pu = mk(upper, lower), pl = mk(lower, upper);
+        const rec = {
+          vertical: false, kind: e.type, edge: e,
+          lowerDeck: lower.deck, upperDeck: upper.deck,
+          lowerNode: lower.idx, upperNode: upper.idx,
+          lowElev: elevOf(lower.deck), highElev: elevOf(upper.deck),
+          low: pl, high: pu,
+        };
+        this.trunks.push(rec);
+        for (const p of [pl, pu]) {
+          const well = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.95, 0.95, CLEAR_H, 14, 1, true),
+            new THREE.MeshStandardMaterial({
+              color: lift ? 0x2fd7f0 : 0xf0a52f,
+              emissive: lift ? 0x1a7b8a : 0x8a5c1a, emissiveIntensity: 0.5,
+              transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false,
+            }));
+          well.position.set(p.x, elevOf(p.deck) + CLEAR_H / 2, p.z);
+          this.scene.add(well);
+          const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.07, 16), matCollar(lift));
+          collar.position.set(p.x, elevOf(p.deck) + 0.035, p.z);
+          this.scene.add(collar);
+        }
+      }
     }
   }
 
-  // --- walkability, answered in sim coords (x, schematic y) per deck ---
+  // ---- sliding doors (user note): panels that open for ANY movement near
+  // them and close behind it; locked doors stay shut and read red ----
+  _buildDoors() {
+    const g = this.graph;
+    for (const e of g.edges) {
+      if (!e.door) continue;
+      const a = g.node(e.a), b = g.node(e.b);
+      if (a.deck !== b.deck) continue;
+      const deck = a.deck, elev = elevOf(deck);
+      const [dx, dz] = this.simToWorld(e.door.x, e.door.y, deck);
+      const horizWall = Math.abs(a.y - b.y) >= Math.abs(a.x - b.x);
+      const mat = new THREE.MeshStandardMaterial({
+        color: e.locked ? 0x7a2723 : 0x55637d,
+        emissive: e.locked ? 0xa03020 : 0x101820,
+        emissiveIntensity: e.locked ? 0.7 : 0.4,
+        roughness: 0.5, metalness: 0.6,
+      });
+      const panel = new THREE.Mesh(
+        horizWall ? new THREE.BoxGeometry(DOOR_W + 0.1, CLEAR_H - 0.15, 0.14)
+          : new THREE.BoxGeometry(0.14, CLEAR_H - 0.15, DOOR_W + 0.1),
+        mat);
+      panel.position.set(dx, elev + (CLEAR_H - 0.15) / 2, dz);
+      this.scene.add(panel);
+      this.doors.push({
+        edge: e, mesh: panel, deck,
+        x: dx, z: dz,
+        closedY: elev + (CLEAR_H - 0.15) / 2,
+        open01: 0, // slides UP into the frame
+      });
+    }
+  }
+
+  // called by main each frame with positions of things that move
+  updateDoors(dt, movers) {
+    const r2 = DOORS.openRadius * DOORS.openRadius;
+    for (const d of this.doors) {
+      let want = 0;
+      if (!d.edge.locked) {
+        for (const m of movers) {
+          if (m.deck !== d.deck) continue;
+          const ddx = m.x - d.x, ddz = m.z - d.z;
+          if (ddx * ddx + ddz * ddz < r2) { want = 1; break; }
+        }
+      }
+      const rate = DOORS.slideSpeed / (CLEAR_H - 0.3);
+      d.open01 += Math.sign(want - d.open01) * Math.min(Math.abs(want - d.open01), rate * dt);
+      d.mesh.position.y = d.closedY + d.open01 * (CLEAR_H - 0.35);
+      d.mesh.visible = d.open01 < 0.97;
+    }
+  }
+
+  // --- walkability, in sim coords per deck (doors handled by their panels;
+  // the throat is passable — a closed unlocked door opens as you reach it) ---
   isWalkable(deck, sx, sy) {
     const g = this.graph;
     for (const n of g.nodes) {
@@ -239,8 +370,6 @@ export class World {
       if (sx > n.x - n.w / 2 + m && sx < n.x + n.w / 2 - m
         && sy > n.y - n.d / 2 + m && sy < n.y + n.d / 2 - m) return true;
     }
-    // doorway throats (only through unlocked doors): a capsule along the
-    // span from one room's wall to the other's
     for (const e of g.edges) {
       if (!e.door || e.locked) continue;
       const a = g.node(e.a);
@@ -264,11 +393,19 @@ export class World {
     return best;
   }
 
-  padNear(deck, wx, wz) {
-    for (const p of this.pads) {
-      if (p.deck !== deck) continue;
-      const dx = wx - p.x, dz = wz - p.z;
-      if (dx * dx + dz * dz < 1.0) return p;
+  // the trunk (if any) whose column contains this world position on `deck`
+  trunkAt(deck, wx, wz) {
+    for (const t of this.trunks) {
+      if (t.vertical) {
+        if (deck !== t.lowerDeck && deck !== t.upperDeck) continue;
+        const dx = wx - t.x, dz = wz - t.z;
+        if (dx * dx + dz * dz < 1.3 * 1.3) return t;
+      } else {
+        const p = deck === t.lowerDeck ? t.low : deck === t.upperDeck ? t.high : null;
+        if (!p) continue;
+        const dx = wx - p.x, dz = wz - p.z;
+        if (dx * dx + dz * dz < 1.15 * 1.15) return t;
+      }
     }
     return null;
   }

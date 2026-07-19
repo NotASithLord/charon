@@ -1,14 +1,16 @@
-// HALO CHARON — 3D vertical slice (docs/ROADMAP-3D.md): a solo human running
-// the ship in first person while the FULL simulation plays out around them.
-// The sim is untouched and authoritative; this page is a renderer + one
-// externally-driven agent (the player).
+// HALO CHARON — 3D slice (docs/ROADMAP-3D.md): an ODST with a fireteam,
+// dropped into the ship while the FULL simulation plays out around them.
+// Mechanics layer ported from the first-strike vertical slice (MA5 loop,
+// armor-over-health, movement feel). The sim is untouched and authoritative.
 
 import * as THREE from './vendor/three.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
 import { hurtFloodForm } from '../sim/combat.js';
-import { World, elevOf, CLEAR_H } from './world.js';
+import { World, elevOf } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
+import { HeldWeapon } from './weapon.js';
+import { MA5 } from './fps-data.js';
 
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -22,21 +24,44 @@ scene.fog = new THREE.Fog(0x05070a, 18, 60);
 
 const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 220);
 
-// lighting: dim shipboard ambience + a headlamp on the player
 scene.add(new THREE.HemisphereLight(0x9fb2d0, 0x141821, 1.4));
 scene.add(new THREE.AmbientLight(0x7d879e, 1.1));
 const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
 scene.add(lamp);
 
-// --- boot the sim (same params as the debug page defaults) ---
+// --- boot ---
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const sim = new Sim(seedFromUrl || 'charon-1');
 const world = new World(scene, sim.graph);
 const agents = new Agents3D(scene, sim, world);
 
-// spawn the player on the bridge — the far end of the ship from the breach
-const player = new Player(canvas, world, sim, sim.graph.byId.get('bridge'));
+// spawn: Security on deck 3 — an ODST detail with a fireteam
+const player = new Player(canvas, world, sim, sim.graph.byId.get('security'));
 agents.playerId = player.agent.id;
+sim.attachPlayerSquad(player.agent, 3);
+
+const weapon = new HeldWeapon(MA5);
+player.onAmmoTaken = (src) => {
+  if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; sim.log('combat', `you strip mags from the rack (${sim.armoryStock} rifles left)`); }
+  else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
+};
+
+// simple viewmodel: MA5 silhouette parented to the camera
+const viewmodel = new THREE.Group();
+{
+  const m = new THREE.MeshStandardMaterial({ color: 0x2c333e, roughness: 0.5, metalness: 0.6 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.13, 0.62), m);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.3), new THREE.MeshStandardMaterial({ color: 0x1a1e26 }));
+  barrel.position.set(0, 0.02, -0.44);
+  const mag = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.1), m);
+  mag.position.set(0, -0.13, -0.05);
+  viewmodel.add(body, barrel, mag);
+  viewmodel.position.set(0.26, -0.24, -0.5);
+  camera.add(viewmodel);
+}
+scene.add(camera);
+const muzzleFlash = new THREE.PointLight(0xffd9a0, 0, 7, 2);
+scene.add(muzzleFlash);
 
 // --- HUD ---
 const el = (id) => document.getElementById(id);
@@ -46,7 +71,7 @@ const ghostAlive = () => {
   return gh && !gh.dead && gh.damage < 100 ? gh : null;
 };
 overlay.addEventListener('click', () => {
-  if (player.dead && !ghostAlive()) return; // no coming back from that
+  if (player.dead && !ghostAlive()) return;
   overlay.classList.add('hidden');
   if (!player.dead) canvas.requestPointerLock();
 });
@@ -59,7 +84,7 @@ function endScreen(title, text, final = true) {
   el('ovText').textContent = text;
   overlay.querySelector('.keys').textContent = final
     ? 'reload the page for a new run (add ?seed=... for a specific ship)'
-    : 'click to keep moving — it knows you are here';
+    : 'click to keep watching';
   overlay.classList.remove('hidden');
 }
 
@@ -91,52 +116,96 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// --- the rifle: hitscan through the sim's own damage model. Shooting is
-// LOUD — it marks gunfire in your room, and the ship reacts ---
-let lastFire = 0;
+// --- firing: MA5 events route into the sim's own damage model. Every shot
+// is LOUD. Through-deck shots work when you and the target share an open
+// vertical shaft's line ---
+let fireHeld = false, reloadPressed = false, meleePressed = false;
+canvas.addEventListener('mousedown', (e) => { if (e.button === 0) fireHeld = true; });
+window.addEventListener('mouseup', (e) => { if (e.button === 0) fireHeld = false; });
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR') reloadPressed = true;
+  if (e.code === 'KeyF') meleePressed = true;
+});
+
 const _dir = new THREE.Vector3();
+const _rt = new THREE.Vector3();
+const _up = new THREE.Vector3();
 const _hit = new THREE.Vector3();
-function fireRifle() {
-  if (!player.armed || player.dead || !player.locked) return;
-  const now = performance.now();
-  if (now - lastFire < 170) return;
-  lastFire = now;
-  camera.getWorldDirection(_dir);
-  const origin = camera.position;
+function shotCandidates() {
+  // same-deck LOS via the sim's rules, plus the far room of any open shaft
+  // whose column the player stands in/near
   const visible = new Set(sim.visibleNodes(player.agent.node));
-  let best = null, bestT = 35;
+  const out = [];
+  const trunk = world.trunkAt(player.deck, player.x, player.z);
+  const shaftNode = trunk && trunk.vertical
+    ? (player.deck === trunk.lowerDeck ? trunk.upperNode : trunk.lowerNode) : -1;
   for (const a of sim.agents) {
     if (a.dead) continue;
-    if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue; // flood only
-    if (a.deck !== player.deck || !visible.has(a.node)) continue;
+    if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
+    const sameDeck = a.deck === player.deck && visible.has(a.node);
+    const viaShaft = shaftNode !== -1 && a.node === shaftNode;
+    if (sameDeck || viaShaft) out.push(a);
+  }
+  return out;
+}
+
+function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
+  camera.getWorldDirection(_dir);
+  _rt.crossVectors(_dir, camera.up).normalize();
+  _up.crossVectors(_rt, _dir).normalize();
+  _dir.addScaledVector(_rt, Math.cos(offAng) * offRad)
+    .addScaledVector(_up, Math.sin(offAng) * offRad).normalize();
+  const origin = camera.position;
+  let best = null, bestT = maxDist;
+  for (const a of shotCandidates()) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
     const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
     _hit.set(wx, cy, wz).sub(origin);
     const t = _hit.dot(_dir);
-    if (t < 0.05 || t > bestT) continue; // point-blank counts — fight off a grabber
+    if (t < 0.05 || t > bestT) continue;
     const px = origin.x + _dir.x * t - wx, py = origin.y + _dir.y * t - cy, pz = origin.z + _dir.z * t - wz;
     const r = a.faction === 3 ? 0.5 : a.faction === 5 ? 1.0 : 0.7;
     if (px * px + py * py + pz * pz < r * r) { best = a; bestT = t; }
   }
   sim.gunfireAt(player.agent.node);
-  const end = new THREE.Vector3().copy(origin).addScaledVector(_dir, best ? bestT : 30);
+  const end = new THREE.Vector3().copy(origin).addScaledVector(_dir, best ? bestT : Math.min(30, maxDist));
   const muzzle = new THREE.Vector3().copy(origin).addScaledVector(_dir, 0.5);
   muzzle.y -= 0.15;
   agents.playerShot(muzzle, end);
-  if (best) hurtFloodForm(sim, best, 7, false);
+  muzzleFlash.position.copy(muzzle);
+  muzzleFlash.intensity = 8;
+  if (best) hurtFloodForm(sim, best, dmg, false);
+  return !!best;
 }
-canvas.addEventListener('mousedown', (e) => { if (e.button === 0) fireRifle(); });
 
-// --- main loop: fixed-step sim, per-frame player + render ---
+// --- main loop ---
 let acc = 0;
 let shownLost = false;
 let spectateShown = false;
 let last = performance.now();
+const doorMovers = [];
 function frame(now) {
   const dtReal = Math.min(0.1, (now - last) / 1000);
   last = now;
 
   player.update(dtReal);
+
+  // MA5 loop (auto fire, bloom, reload, melee) — pure mechanics, events out
+  const wevents = [];
+  weapon.step(dtReal, {
+    fireHeld: fireHeld && player.locked && !player.dead,
+    reloadPressed, meleePressed,
+  }, wevents);
+  reloadPressed = false; meleePressed = false;
+  for (const ev of wevents) {
+    if (ev.t === 'fire') traceShot(ev.offAng, ev.offRad);
+    else if (ev.t === 'melee_hit') traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage);
+  }
+  muzzleFlash.intensity *= Math.exp(-14 * dtReal);
+  // viewmodel kick + reload dip
+  viewmodel.position.z = -0.5 + weapon.recoil * 1.6;
+  viewmodel.position.y = -0.24 - (weapon.reloading ? 0.16 : 0) - (weapon.meleeT > 0 ? 0.1 : 0);
+  viewmodel.rotation.x = weapon.recoil * 2 + (weapon.meleeT > 0 ? -0.5 : 0);
 
   acc += dtReal;
   let guard = 0;
@@ -148,8 +217,19 @@ function frame(now) {
 
   agents.update(dtReal);
 
-  // camera: your own eyes — or, once taken, the eyes of what you became
-  // (you can see, but it is not you moving)
+  // sliding doors open for ANY movement near them (user rule)
+  doorMovers.length = 0;
+  doorMovers.push({ deck: player.deck, x: player.x, z: player.z });
+  const buf = sim.buffer;
+  for (let i = 0; i < buf.count; i++) {
+    if (buf.faction[i] === 6) continue; // the dead don't trip doors
+    const deck = buf.posZ[i];
+    const [wx, wz] = world.simToWorld(buf.posX[i], buf.posY[i], deck);
+    doorMovers.push({ deck, x: wx, z: wz });
+  }
+  world.updateDoors(dtReal, doorMovers);
+
+  // camera: your eyes — or the eyes of what you became
   const ghost = player.dead ? ghostAlive() : null;
   if (ghost) {
     const [gx, gz] = world.simToWorld(ghost.x, ghost.y, ghost.deck);
@@ -158,6 +238,7 @@ function frame(now) {
     camera.rotation.set(0, 0, 0);
     camera.rotateY(Math.atan2(-Math.cos(ghost.heading), -Math.sin(ghost.heading)));
     lamp.position.set(gx, gy + 0.2, gz);
+    viewmodel.visible = false;
   } else {
     const pose = player.cameraPose();
     camera.position.set(pose.x, pose.y, pose.z);
@@ -165,6 +246,7 @@ function frame(now) {
     camera.rotateY(pose.yaw);
     camera.rotateX(pose.pitch);
     lamp.position.set(pose.x, pose.y + 0.2, pose.z);
+    viewmodel.visible = !player.dead;
   }
 
   // HUD
@@ -174,18 +256,23 @@ function frame(now) {
   el('room').textContent = room ? room.name : '—';
   el('deckLabel').textContent = `DECK ${povAgent.deck}`;
   const hp = Math.max(0, Math.ceil(povAgent.hp));
-  const hpEl = el('hp');
-  hpEl.textContent = ghost ? `IT ${hp}` : `HP ${hp}`;
-  hpEl.classList.toggle('low', hp <= 8 || !!ghost);
-  el('weapon').textContent = ghost ? '' : (player.armed ? 'MA5 RIFLE' : 'UNARMED');
-  const src = player.dead ? null : player.weaponSource();
+  el('healthBar').style.width = `${ghost ? hp / 63 * 100 : hp / 45 * 100}%`;
+  el('armorBar').style.width = `${ghost ? 0 : player.armor / 50 * 100}%`;
+  el('hpText').textContent = ghost ? `IT ${hp}` : `${Math.ceil(player.armor)} | ${hp}`;
+  el('ammo').textContent = ghost ? '' : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`);
+  const src = player.dead ? null : player.ammoSource();
   const hint = el('hint');
   if (src) {
     hint.textContent = src === 'armory'
-      ? `E — take a rifle from the rack (${sim.armoryStock} left)`
-      : 'E — take the rifle from the dead';
+      ? `E — strip mags from the rack (${sim.armoryStock} rifles)` : 'E — take mags off the dead';
     hint.style.display = 'block';
-  } else hint.style.display = 'none';
+  } else {
+    const trunk = player.dead ? null : world.trunkAt(player.deck, player.x, player.z);
+    if (trunk) {
+      hint.textContent = trunk.vertical ? 'LOOK up/down + W — climb the ladder' : 'LOOK up/down + W — take the stairs';
+      hint.style.display = 'block';
+    } else hint.style.display = 'none';
+  }
   el('pinned').style.display = player.pinned && !player.dead ? 'block' : 'none';
   renderLog();
 
@@ -193,18 +280,16 @@ function frame(now) {
     if (!spectateShown) {
       spectateShown = true;
       endScreen('YOU WERE TAKEN',
-        'It is wearing you now. You can see — but it is not you moving. What you are will fight for the hive until it is put down; it will never be allowed to root.', false);
+        'It is wearing you now. You can see — but it is not you moving. A player taken never seeds a carrier; it fights until it is put down.', false);
     }
   } else if (player.dead) {
-    endScreen(sim.playerConvertedTo ? 'PUT DOWN' : 'YOU DIED',
+    endScreen(sim.playerConvertedTo ? 'PUT DOWN' : 'KIA',
       sim.playerConvertedTo
         ? 'What was left of you is finally still.'
         : 'The ship fights on without you. The last thing you hear is the hive, singing.');
   } else if (sim.outcome === 'contained') {
     endScreen('OUTBREAK CONTAINED', 'The marines burned it out. The Charon survives.');
   } else if (!ended && !shownLost && sim.tickCount % 30 === 0) {
-    // the sim can't call the ship lost while YOU still count as a human —
-    // check whether anyone else is left
     const othersAlive = sim.agents.some((a) => !a.dead && a.hp > 0 && !a.isPlayer
       && (a.faction === 0 || a.faction === 1 || a.faction === 2));
     if (!othersAlive) {
@@ -219,4 +304,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // debug hooks
-window.__game = { sim, world, player, agents };
+window.__game = { sim, world, player, agents, weapon };

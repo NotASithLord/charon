@@ -126,14 +126,39 @@ export class Sim {
   // Position is driven externally by the game each tick, so strict lockstep
   // determinism pauses while a live player is attached (their movement is an
   // input stream; the multiplayer path feeds it through the command queue).
-  attachPlayer(nodeIdx) {
-    const a = makeAgent(FACTION.CIVILIAN, nodeIdx, this.graph);
-    a.hp = a.maxHp = this.P.combat.civilian.hp;
+  attachPlayer(nodeIdx, opts = {}) {
+    const a = makeAgent(opts.odst ? FACTION.ARMED : FACTION.CIVILIAN, nodeIdx, this.graph);
+    a.hp = a.maxHp = opts.odst ? 45 : this.P.combat.civilian.hp;
     a.isPlayer = true;
     a.hasRadio = true;
     this.spawn(a);
-    this.log('radio', 'a lone survivor is moving through the ship (you)');
+    this.log('radio', opts.odst
+      ? 'an ODST hits the deck, MA5 hot (you)'
+      : 'a lone survivor is moving through the ship (you)');
     return a;
+  }
+
+  // the ODST's squad (game rule): marines who form on the player and follow
+  // via the standing escort order — they fight anything on contact, and the
+  // usual morale rules apply
+  attachPlayerSquad(playerAgent, size = 3) {
+    const squad = {
+      id: this.squads.length, members: [], objective: null, morale: 1,
+      respondingTo: null, phase1: false,
+      order: { kind: 'order:escort', entityId: playerAgent.id },
+    };
+    for (let i = 0; i < size; i++) {
+      const m = makeAgent(FACTION.MARINE, playerAgent.node, this.graph);
+      m.hp = m.maxHp = this.P.combat.marine.hp;
+      m.hasRadio = true;
+      m.squad = squad.id;
+      squad.members.push(m.id);
+      this.spawn(m);
+    }
+    squad.size0 = size;
+    this.squads.push(squad);
+    this.log('radio', `your fireteam forms up — ${size} marines on you`);
+    return squad;
   }
 
   // the player takes up a rifle — from the armory rack or from a corpse

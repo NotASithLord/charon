@@ -50,7 +50,15 @@
     top: 58%; left: 50%; transform: translateX(-50%);
     color: #ff6a4d; font-weight: 700; font-size: 18px; display: none;
   }
-  #weapon { color: #8fb5e8; font-size: 12px; margin-top: 2px; }
+  #vitals .bar {
+    width: 170px; height: 9px; margin: 3px 0 0 auto;
+    background: rgba(20,26,36,0.8); border: 1px solid #2a3547; border-radius: 2px;
+    overflow: hidden;
+  }
+  #armorBar { height: 100%; width: 100%; background: #6fb0f0; transition: width 0.1s; }
+  #healthBar { height: 100%; width: 100%; background: #d8574a; transition: width 0.1s; }
+  #hpText { color: #8fb5e8; font-size: 12px; margin-top: 2px; }
+  #ammo { color: #e8d98c; font-size: 16px; font-weight: 700; margin-top: 4px; }
   #hint {
     top: 64%; left: 50%; transform: translateX(-50%); display: none;
     color: #e8d98c; font-size: 15px; font-weight: 700;
@@ -62,7 +70,13 @@
 <body>
   <canvas id="c"></canvas>
   <div class="hud" id="topbar"><b>UNSC CHARON</b> · <span id="clock">0:00</span> · <span id="room">—</span></div>
-  <div class="hud" id="vitals"><div id="hp">HP 20</div><div id="deckLabel">DECK —</div><div id="weapon">UNARMED</div></div>
+  <div class="hud" id="vitals">
+    <div class="bar"><div id="armorBar"></div></div>
+    <div class="bar"><div id="healthBar"></div></div>
+    <div id="hpText">50 | 45</div>
+    <div id="deckLabel">DECK —</div>
+    <div id="ammo">60 / 240</div>
+  </div>
   <div class="hud" id="crosshair"></div>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
@@ -74,7 +88,8 @@
     <h1 id="ovTitle">HALO CHARON</h1>
     <p id="ovText">You are a lone crew member aboard the frigate Charon. Something hit the hangar deck.
       The ship's marines, crew — and whatever came aboard — act entirely on their own. Survive.</p>
-    <p class="keys">click to enter · WASD move · SHIFT run · mouse look · E take a rifle (armory rack, or from the armed dead) · LEFT CLICK fire — gunfire is loud · glowing pads = lifts &amp; ladders · ESC frees the mouse</p>
+    <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · E scavenge ammo ·
+      ladders: stand at a shaft, look up/down, hold W · your fireteam follows you · ESC frees the mouse</p>
   </div>
   <script type="module" src="./main.js"></script>
 </body>
