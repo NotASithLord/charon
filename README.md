@@ -158,3 +158,26 @@ Deviations from the spec's starter numbers, all in the "adjust freely" space it 
    is known. Burned bodies are permanently out of the economy.
 3. **Marine response speed:** see tuning notes above — this is the live balance question.
 4. **NPC count:** 140 default; the VAT harness stresses 50–300.
+
+## peerd dwapp packaging
+
+Every page here can run as a [peerd](https://github.com/NotASithLord/peerd) dwapp —
+no server, static files, rendered by peerd's sandboxed app runtime out of the box.
+The constraint set (peerd `app-compose.js` + `runner.html`): one entry HTML, scripts
+inlined at compose time into a single document in an OPAQUE-origin iframe — so no
+relative ES-module resolution, no relative fetches, and binary assets must travel as
+`data:` URIs.
+
+```
+npm run build:dwapp
+```
+
+writes `dist/dwapp/{game,sim,fused}/` — each folder is a complete two-file dwapp
+(`index.html` + `bundle.js`). The bundle is the page's whole module graph flattened
+by esbuild (esm, zero imports left, so the inline module script needs no resolution
+and top-level await keeps working); the game's rifle textures are baked in as
+`data:` URIs and rerouted through `THREE.DefaultLoadingManager.setURLModifier`, so
+no game code changes and normal dev serving is untouched. Sizes sit well under
+peerd's 256-file / 50M-char install caps (the game is ~1.95M chars). Paste the two
+files into a peerd app (entry `index.html`) or publish over the dweb; the sim pages
+run fully in-sandbox, and the fused VAT page needs a WebGPU-capable browser.

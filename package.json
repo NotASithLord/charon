@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Halo Charon POC — simulation core + VAT rendering validation harness",
+  "description": "Halo Charon POC \u2014 simulation core + VAT rendering validation harness",
   "scripts": {
     "serve": "python3 -m http.server 8000",
     "headless": "node sim/headless.js",
     "determinism": "node sim/determinism-check.js",
-    "commands": "node sim/command-check.js"
+    "commands": "node sim/command-check.js",
+    "build:dwapp": "node scripts/build-dwapp.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }
