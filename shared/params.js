@@ -15,8 +15,9 @@ export const PARAMS = {
   crew: {
     civilians: 96,            // unarmed crew sheltering / working the ship
     armedCrew: 21,            // crew carrying sidearms (not marines)
-    lowerMaintenance: 16,     // unarmed repair crew AT WORK in the lower-deck machinery
+    lowerMaintenance: 44,     // unarmed repair crew AT WORK in the lower-deck machinery
                               // spaces (engineering/reactor/life support) from the start
+                              // (user note: "way more souls alive in the lower levels")
     brigPrisoners: 2,
     medbayWounded: 6,
     radio: { civilian: 0.35, armed: 0.7, marine: 1.0 }, // hasRadio fraction
@@ -29,7 +30,8 @@ export const PARAMS = {
     garrison: 6,              // permanent Command Corridor guard detail
   },
   bodies: {
-    eventCorpses: 150,        // portal-event dead scattered through the ship
+    eventCorpses: 60,         // portal-event dead scattered through the ship
+                              // (user note: "less bodies, it's not a graveyard")
     breachCorpses: 10,        // fresh dead at the breach (±50% roll on placement)
     // the vast majority of the dead were NOT carrying weapons (user rule):
     // a form raised from them fights with claws alone — sprint, leap, swipe
@@ -39,8 +41,8 @@ export const PARAMS = {
   // flood should win most runs — the marines alone can't hold the ship. Tune
   // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 20, // difficulty lever — live input in the sim UI
-    initialCombatForms: 4,     // difficulty lever — live input in the sim UI
+    initialInfectionForms: 16, // difficulty lever — live input in the sim UI
+    initialCombatForms: 3,     // difficulty lever — live input in the sim UI
     initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
   },
   // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling

@@ -535,9 +535,10 @@ export class Sim {
           const d = link.door;
           if (k < flipT) {
             const kk = k / flipT;
-            a.x = from.x + (d.x - from.x) * kk;
-            a.y = from.y + (d.y - from.y) * kk;
-            a.heading = Math.atan2(d.y - from.y, d.x - from.x);
+            const sx = a.move.sx ?? from.x, sy = a.move.sy ?? from.y;
+            a.x = sx + (d.x - sx) * kk;
+            a.y = sy + (d.y - sy) * kk;
+            a.heading = Math.atan2(d.y - sy, d.x - sx);
           } else {
             const kk = (k - flipT) / Math.max(1e-6, 1 - flipT);
             a.x = d.x + (to.x - d.x) * kk;
@@ -551,8 +552,17 @@ export class Sim {
           // between deck plans. Stand on the origin pad until the handover,
           // then on the destination pad.
           const padX = (n, other) => Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x));
-          if (k < (link.flipT ?? 0.5)) {
-            a.x = padX(from, to); a.y = from.y;
+          const flipT = link.flipT ?? 0.5;
+          if (k < flipT) {
+            // WALK to the pad first (user note: jerky movement) — snapping
+            // straight onto it teleported every climber across the room
+            const px = padX(from, to), py = from.y;
+            const sx = a.move.sx ?? px, sy = a.move.sy ?? py;
+            const approach = Math.max(0.12, flipT * 0.5);
+            const kk = Math.min(1, k / approach);
+            a.x = sx + (px - sx) * kk;
+            a.y = sy + (py - sy) * kk;
+            if (kk < 1) a.heading = Math.atan2(py - sy, px - sx);
           } else {
             a.x = padX(to, from); a.y = to.y;
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
@@ -642,7 +652,12 @@ export class Sim {
         // tiny per-agent pace variation staggers a column longitudinally so
         // simultaneous movers never sit on the exact same interpolation point
         const pace = 1 + ((a.id % 7) - 3) * 0.012;
-        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, mult) * pace };
+        // sx/sy: the leg starts from where the body ACTUALLY stands (user
+        // note: jerky movement) — interpolating from the room's center made
+        // every parked/steered/separated agent snap onto the center line the
+        // moment a move began
+        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0,
+          sx: a.x, sy: a.y, travelSec: this.travelSec(link, mult) * pace };
         if (ladder) link.occupiedBy = a.id; // claim the ladder
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
@@ -885,18 +900,18 @@ export class Sim {
   // occupants gives ~0.7 m spacing, clamped to the room's real footprint.
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
-    let rank = 0;
-    // rank among the PHYSICAL room's occupants (occupancy is indexed by
-    // pnode) — ranking against the logical-node list handed two agents the
-    // same spiral slot and park-drift pulled them into the same point
-    for (const o of this._occ[a.pnode ?? a.node]) {
-      if (o.faction !== FACTION.CORPSE && o.id < a.id) rank++;
-    }
-    const ang = rank * 2.399963 + nd.idx * 0.7;
-    const rad = 0.65 * Math.sqrt(rank);
+    // STABLE SLOTS (user note: jerky movement): each body's parking spot is
+    // a pure hash of its OWN id — ranking against the room's other occupants
+    // meant every arrival/death/departure reshuffled the whole room's
+    // targets and everyone drifted to new points mid-fight. Collisions are
+    // _separate's job.
+    const h1 = ((a.id * 2654435761) >>> 0) / 4294967296;
+    const h2 = (((a.id + 7907) * 1597334677) >>> 0) / 4294967296;
     const hw = Math.max(0.7, nd.w / 2 - 1.0), hd = Math.max(0.7, nd.d / 2 - 1.0);
-    const fx = Math.max(-hw, Math.min(hw, Math.cos(ang) * rad));
-    const fy = Math.max(-hd, Math.min(hd, Math.sin(ang) * rad));
+    const ang = h1 * Math.PI * 2 + nd.idx * 0.7;
+    const u = Math.sqrt(h2);
+    const fx = Math.cos(ang) * u * Math.min(hw, 6);
+    const fy = Math.sin(ang) * u * Math.min(hd, 6);
     a.x += (nd.x + fx - a.x) * Math.min(1, dt * 3);
     a.y += (nd.y + fy - a.y) * Math.min(1, dt * 3);
     a.animTime += dt;
@@ -953,7 +968,9 @@ export class Sim {
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;
       if (a.move && a.move.layer === 'shaft') flags |= FLAG.IN_SHAFT;
-      if (a.hostArmed) flags |= FLAG.ARMED_HOST;
+      // armed corpses carry the flag too so the renderer can lay the right
+      // body down (and drop a rifle beside it)
+      if (a.hostArmed || (a.faction === FACTION.CORPSE && a.wasArmed && a.damage < 100)) flags |= FLAG.ARMED_HOST;
       if (a.charging) flags |= FLAG.CHARGING;
       if (a.lastHurtTick !== undefined && this.tickCount - a.lastHurtTick < 4) flags |= FLAG.FLINCH;
       b.flags[i] = flags;

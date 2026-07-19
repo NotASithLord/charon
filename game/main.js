@@ -467,7 +467,11 @@ function drawTracker() {
   const pov = player.dead ? ghostAlive() : player.agent;
   if (!pov) return;
   const [px, pz] = [player.x, player.z];
-  const cos = Math.cos(-player.yaw), sin = Math.sin(-player.yaw);
+  // tracker basis = the player's ACTUAL forward/right vectors (user report:
+  // radar inverted) — rotating the offset by -yaw only agreed with the
+  // camera at yaw 0, because forward is (-sin, -cos), not (sin, cos)
+  const fwdX = -Math.sin(player.yaw), fwdZ = -Math.cos(player.yaw);
+  const rightX = Math.cos(player.yaw), rightZ = -Math.sin(player.yaw);
   const buf = sim.buffer;
   for (let i = 0; i < buf.count; i++) {
     if (buf.id[i] === player.agent.id) continue;
@@ -480,9 +484,9 @@ function drawTracker() {
     const dx = wx - px, dz = wz - pz;
     const d = Math.hypot(dx, dz);
     if (d > RANGE) continue;
-    // rotate into tracker space (up = facing)
-    const rx = dx * cos - dz * sin, rz = dx * sin + dz * cos;
-    const tx = R + (rx / RANGE) * 70, ty = R + (rz / RANGE) * 70;
+    // project into tracker space: up = facing, right = your right hand
+    const tx = R + ((dx * rightX + dz * rightZ) / RANGE) * 70;
+    const ty = R - ((dx * fwdX + dz * fwdZ) / RANGE) * 70;
     const hostile = fbuf === 3 || fbuf === 4 || fbuf === 5;
     trk.fillStyle = hostile ? 'rgba(255,72,56,0.95)' : 'rgba(255,214,64,0.95)';
     if (deck === player.deck) {

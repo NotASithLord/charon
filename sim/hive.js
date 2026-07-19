@@ -1265,9 +1265,19 @@ export class Hive {
   }
 
   assign(form, task) {
+    // re-issuing the SAME task must not wipe the path or restart progress —
+    // the strategic round re-assigns standing orders every 2.5 s, and the
+    // clear-repath cycle read as agents stuttering mid-corridor (user note:
+    // jerky movement); rooting/conversion timers also kept resetting
+    const t = form.task;
+    const same = t && t.kind === task.kind && t.node === task.node
+      && t.targetId === task.targetId && t.corpseId === task.corpseId
+      && t.muster === task.muster;
     form.task = task;
-    form.path = [];
-    form.taskProgress = 0;
+    if (!same) {
+      form.path = [];
+      form.taskProgress = 0;
+    }
     // a form yanked out of a grab must not stay frozen in GRABBING — that
     // state parks movement AND blocks eating (the breach-freeze regression)
     if (form.state === STATE.GRABBING) { form.state = STATE.IDLE; form.grabTimer = 0; }

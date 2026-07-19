@@ -31,8 +31,8 @@ export class Agents3D {
     // REAL SKINS (user note): converted Halo character meshes — H2 marines/
     // crew/infection form, H3 flood combat forms (civilian + ODST hosts) —
     // drawn as one InstancedMesh per texture group, feet at y=0. The
-    // carrier keeps its procedural swelling body (no source mesh exists),
-    // corpses stay simple boxes.
+    // carrier keeps its procedural swelling body (no source mesh exists);
+    // corpses are the character meshes laid flat (burned husks stay slabs).
     const mkSet = (name) => characterParts(name).map((p) => {
       const mat = new THREE.MeshStandardMaterial({
         map: p.texture, roughness: 0.78, metalness: 0.06, side: THREE.DoubleSide,
@@ -208,10 +208,31 @@ export class Agents3D {
       const heading = -buf.headingR[i];
 
       if (f === FACTION.CORPSE) {
-        this._e.set(0, (id * 2.399963) % (Math.PI * 2), 0);
-        this._q.setFromEuler(this._e);
-        this._m.compose(this._p.set(wx, elev + 0.15, wz), this._q, this._s.set(1, 1, 1));
-        this.corpse.setMatrixAt(counts.corpse++, this._m);
+        const lieAng = (id * 2.399963) % (Math.PI * 2);
+        if (flags & FLAG.BURNED) {
+          // charred husk — a blackened low mass, no body left to speak of
+          this._e.set(0, lieAng, 0);
+          this._q.setFromEuler(this._e);
+          this._m.compose(this._p.set(wx, elev + 0.1, wz), this._q, this._s.set(1, 0.55, 1));
+          this.corpse.setMatrixAt(counts.corpse++, this._m);
+        } else {
+          // a REAL body lying where it fell (user note: render bodies
+          // appropriately, not grey boxes) — the character mesh laid flat,
+          // same pose math as the downed-form fall. The armed dead keep
+          // their rifle beside them, so the scavenge prompt points at
+          // something you can see.
+          this._e.set(-Math.PI / 2, lieAng, 0);
+          this._q.setFromEuler(this._e);
+          this._m.compose(this._p.set(wx, elev + 0.25, wz), this._q, this._s.set(1, 1, 1));
+          if (flags & FLAG.ARMED_HOST) {
+            stamp(this.armedSet, counts.armed++);
+            this._rifleAt(wx + Math.cos(lieAng + 1.2) * 0.55, elev + 0.12,
+              wz + Math.sin(lieAng + 1.2) * 0.55, lieAng * 1.7);
+            this.rifle.setMatrixAt(counts.rifle++, this._m);
+          } else {
+            stamp(this.civSet, counts.civ++);
+          }
+        }
         continue;
       }
       const downed = flags & FLAG.DOWNED;

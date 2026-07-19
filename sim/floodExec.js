@@ -41,6 +41,15 @@ export function updateFloodTick(sim, dt) {
         (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE)
         && Math.hypot(h.x - a.x, h.y - a.y) <= sim.P.combat.lungeRiskM);
       if (hot && !inLunge) {
+        // danger where we STAND, for comparison — bolting only makes sense
+        // into a strictly safer room. Without this, a form whose exits were
+        // all covered would "flee" INTO the next room's marines (user
+        // report: pods seemingly charging the guns for no reason).
+        let hereDanger = 0;
+        for (const h of roomies) {
+          if (h.hp > 0 && !h.dead && (h.faction === FACTION.MARINE
+            || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT))) hereDanger += 2;
+        }
         let best = null, bestDanger = Infinity;
         for (const { to, link } of sim.graph.neighbors(a.node, ['std', 'vent'],
           (l) => (l.kind === 'std' ? !l.locked : !l.blocked))) {
@@ -53,7 +62,21 @@ export function updateFloodTick(sim, dt) {
           }
           if (danger < bestDanger) { bestDanger = danger; best = { to, link }; }
         }
-        if (best) {
+        if (best && bestDanger < hereDanger) {
+          // a form mid-conversion ABANDONS the body properly — task cleared,
+          // corpse unclaimed for whoever comes later. Keeping the CONVERT
+          // task alive pulled the form straight back into the fire lane the
+          // moment it finished bolting: an endless drop-and-return carousel
+          // (user report: "begin to infect corpses and just drop them").
+          if (a.task?.kind === TASK.CONVERT) {
+            const b = sim.byId.get(a.task.corpseId);
+            if (b) b.claimed = false;
+            a.task = null; a.taskProgress = 0;
+          } else if (a.task?.kind === TASK.REANIMATE) {
+            const d = sim.byId.get(a.task.targetId);
+            if (d) d.claimed = false;
+            a.task = null;
+          }
           a.path = [];
           sim.setPath(a, [{ to: best.to, link: best.link, layer: best.link.kind }]);
           a.state = STATE.MOVE;
@@ -208,6 +231,14 @@ export function updateFloodTick(sim, dt) {
           // same open space, not yet in reach: _spatialSteer closes the gap
           // straight at the victim's live position
           a.state = STATE.MOVE; a.grabTimer = 0;
+        } else if (target.faction === FACTION.MARINE) {
+          // a marine who broke contact is rejoining his squad's guns — the
+          // pod does NOT corridor-chase him into massed fire (user report:
+          // forms "charging marines in the next room"). Marines are only
+          // ever grabbed point-blank or under an overwhelm, and both of
+          // those are same-room conditions; if he strays close again the
+          // lunge rule retakes him.
+          a.task = null; a.state = STATE.IDLE; a.grabTimer = 0;
         } else {
           a.state = STATE.MOVE; a.grabTimer = 0;
           moveToward(sim, a, goal, hive.safeInfectionPath.bind(hive));
