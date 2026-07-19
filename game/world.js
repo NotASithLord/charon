@@ -226,6 +226,34 @@ export class World {
   // Offset rooms get an enclosed stairwell trunk at each end instead.
   _buildTrunks() {
     const g = this.graph;
+    // KEEP CLEAR OF THE DOORWAYS (user note): a ladder well parked right in
+    // front of a door makes no sense. Candidate spots are scored by clearance
+    // from every door opening of the rooms the trunk pierces, and the best
+    // clear spot wins (with a mild pull toward the natural position).
+    const doorPts = (roomIdx, deck) => {
+      const pts = [];
+      for (const l of g.edges) {
+        if (l.a !== roomIdx && l.b !== roomIdx) continue;
+        if (g.node(l.a).deck !== g.node(l.b).deck) continue;
+        const d = (l.a === roomIdx ? l.doorA : l.doorB) ?? l.door;
+        if (!d) continue;
+        const [dx, dz] = this.simToWorld(d.x, d.y, deck);
+        pts.push([dx, dz]);
+      }
+      return pts;
+    };
+    const pickSpot = (x0, x1, z0, z1, pts, prefX, prefZ, prefW = 0.1) => {
+      let bx = (x0 + x1) / 2, bz = (z0 + z1) / 2, bestScore = -Infinity;
+      const N = 6;
+      for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+        const cx = x0 + (x1 - x0) * i / N, cz = z0 + (z1 - z0) * j / N;
+        let dMin = Infinity;
+        for (const [qx, qz] of pts) dMin = Math.min(dMin, Math.hypot(cx - qx, cz - qz));
+        const score = Math.min(dMin, 6) - Math.hypot(cx - prefX, cz - prefZ) * prefW;
+        if (score > bestScore + 1e-9) { bestScore = score; bx = cx; bz = cz; }
+      }
+      return [bx, bz];
+    };
     const matLadder = new THREE.MeshStandardMaterial({ color: 0x8a97a8, roughness: 0.5, metalness: 0.7 });
     const matCollar = (lift) => new THREE.MeshStandardMaterial({
       color: lift ? 0x1e4b56 : 0x54401e,
@@ -245,7 +273,9 @@ export class World {
       const vertical = ox1 - ox0 >= 0.2 && oz1 - oz0 >= 0.2;
       const lift = e.type === 'lift';
       if (vertical) {
-        const x = (ox0 + ox1) / 2, z = (oz0 + oz1) / 2;
+        const [x, z] = pickSpot(ox0, ox1, oz0, oz1,
+          [...doorPts(lower.idx, lower.deck), ...doorPts(upper.idx, upper.deck)],
+          (ox0 + ox1) / 2, (oz0 + oz1) / 2);
         const lowElev = elevOf(lower.deck), highElev = elevOf(upper.deck);
         this.trunks.push({
           vertical: true, kind: e.type, edge: e, x, z,
@@ -283,7 +313,11 @@ export class World {
           const [nx, nz] = this.simToWorld(n.x, n.y, n.deck);
           const [ox2] = this.simToWorld(other.x, other.y, other.deck);
           const px = Math.max(nx - n.w / 2 + 1.2, Math.min(nx + n.w / 2 - 1.2, ox2));
-          return { x: px, z: nz, deck: n.deck, node: n.idx };
+          const [sx, sz] = pickSpot(
+            nx - n.w / 2 + 1.2, nx + n.w / 2 - 1.2,
+            nz - n.d / 2 + 1.2, nz + n.d / 2 - 1.2,
+            doorPts(n.idx, n.deck), px, nz, 0.08);
+          return { x: sx, z: sz, deck: n.deck, node: n.idx };
         };
         const pu = mk(upper, lower), pl = mk(lower, upper);
         const rec = {

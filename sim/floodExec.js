@@ -32,9 +32,15 @@ export function updateFloodTick(sim, dt) {
     // brain — the currency is too precious to stand in a fire lane
     if (a.faction === FACTION.INFECTION && !a.move && a.state !== STATE.GRABBING
       && (sim.hive.lastScarcity ?? 3) > 0.8) {
-      const hot = sim.occupants(a.pnode ?? a.node).some((h) => h.hp > 0 && !h.dead &&
+      const roomies = sim.occupants(a.pnode ?? a.node);
+      const hot = roomies.some((h) => h.hp > 0 && !h.dead &&
         (h.faction === FACTION.MARINE || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT)));
-      if (hot) {
+      // …but a form that has already gotten CLOSE to a human doesn't bolt —
+      // it lunges (the point-blank branch below takes it)
+      const inLunge = roomies.some((h) => h.hp > 0 && !h.dead &&
+        (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE)
+        && Math.hypot(h.x - a.x, h.y - a.y) <= sim.P.combat.lungeRiskM);
+      if (hot && !inLunge) {
         let best = null, bestDanger = Infinity;
         for (const { to, link } of sim.graph.neighbors(a.node, ['std', 'vent'],
           (l) => (l.kind === 'std' ? !l.locked : !l.blocked))) {
@@ -77,7 +83,20 @@ export function updateFloodTick(sim, dt) {
         else if (h.faction === FACTION.ARMED && h.state === STATE.FIGHT) gunsW += 0.6;
       }
       const overwhelmed = gunsW > 0 && sim.floodStrengthAt(a.pnode ?? a.node) >= gunsW * sim.P.swarm.overwhelmRatio;
-      if (gunsW === 0 || overwhelmed) {
+      // POINT-BLANK RISK (user rule): a form that has gotten within
+      // lungeRiskM of ANY human — marine included, guns or not — lunges for
+      // the latch right now. Letting one skitter up to you is always a
+      // mistake, and a live host turns FASTER than a corpse.
+      let close = null, closeD = Infinity;
+      for (const h of here) {
+        if (h.hp <= 0 || h.dead) continue;
+        if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
+        const d = Math.hypot(h.x - a.x, h.y - a.y);
+        if (d < closeD - 1e-9 || (Math.abs(d - closeD) <= 1e-9 && h.id < (close?.id ?? Infinity))) { closeD = d; close = h; }
+      }
+      if (close && closeD <= sim.P.combat.lungeRiskM) {
+        if (a.task?.targetId !== close.id) hive.assign(a, { kind: TASK.GRAB, targetId: close.id });
+      } else if (gunsW === 0 || overwhelmed) {
         const prey = here.find((h) => h.hp > 0 && !h.dead &&
           (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED
             || (overwhelmed && h.faction === FACTION.MARINE)));
@@ -181,9 +200,10 @@ export function updateFloodTick(sim, dt) {
           a.state = STATE.GRABBING;
           a.move = null; a.path = [];
           if (sim.P.combat.grabPins) target.held = sim.tickCount;
+          sim.hurtHuman(target, sim.P.combat.latchDps * dt); // the spike works while it burrows
           a.grabTimer += dt;
           const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
-          if (a.grabTimer >= need) convertHuman(sim, a, target);
+          if (a.grabTimer >= need && !target.dead) convertHuman(sim, a, target);
         } else if (samePhys) {
           // same open space, not yet in reach: _spatialSteer closes the gap
           // straight at the victim's live position
@@ -330,9 +350,11 @@ function moveToward(sim, a, node, pathFn = null) {
   else if (a.faction === FACTION.INFECTION) path = hive.safeInfectionPath(a.node, node);
   // combat forms route AROUND remembered gun lines — the plain shortest path
   // marched every form transiting near the last stand straight through it,
-  // one at a time (fall back to the direct route only when there is none)
+  // one at a time. The fallback route may crawl the VENT network (user rule):
+  // when the corridors are all watched or locked, a combat form squeezes
+  // through the ducting — the hive almost always has an escape hatch.
   else path = hive.safeAssaultPath(a.node, node)
-    ?? sim.graph.path(a.node, node, ['std', 'shaft'], hive.bigPass);
+    ?? sim.graph.path(a.node, node, ['std', 'shaft', 'vent'], hive.combatPass);
   if (path && path.length) sim.setPath(a, path);
   else if (!path) a.task = null; // believed-unreachable; hive will reassign
 }

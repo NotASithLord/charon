@@ -167,9 +167,14 @@ export const PARAMS = {
     // wildly (lore) — suppressive noise more than marksmanship
     hostGun: { rof: 2, dmg: 5, accNear: 0.35, accFar: 0.15 },
     carrierHp: 40,
-    infectionGrabSec: 8,       // time to convert an armed/overwhelmed target
+    infectionGrabSec: 6,       // armed crew/marines: a LIVE host turns slightly
+                               // FASTER than a corpse (user rule) — the flesh cooperates
     civilianGrabSec: 7,        // burrowing in takes real seconds now (user note)
     corpseConvertSec: 7,       // infection form + body -> combat form
+    // POINT-BLANK RISK (user rule): letting an infection form get this close
+    // is always a mistake, marine or not — it lunges for the latch
+    lungeRiskM: 3.0,
+    latchDps: 2,               // the embedded spike works while it burrows
     grabPins: true,            // a grabbed target is held in place (can't flee)
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
     // REAL SPACE COMBAT (user note): claws and grabs land at arm's reach,

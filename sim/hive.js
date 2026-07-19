@@ -72,6 +72,20 @@ export class Hive {
     if (link.kind === 'std') return !this.knownLocked.has(link.i);
     return link.kind === 'shaft';
   };
+  // combat forms squeeze through the vent network too (user rule) — only the
+  // bloated carriers are stuck with corridors and shafts (bigPass above)
+  combatPass = (link, from, to) => {
+    if (this.sim.graph.burningUntil[to ?? -1] > this.sim.t) return false;
+    if (link.kind === 'std') return !this.knownLocked.has(link.i);
+    if (link.kind === 'shaft') return true;
+    return link.kind === 'vent' && !this.knownBlockedVents.has(link.i);
+  };
+  _layersFor(kind) {
+    return kind === 'infection' ? ['std', 'vent'] : kind === 'combat' ? ['std', 'shaft', 'vent'] : ['std', 'shaft'];
+  }
+  _passFor(kind) {
+    return kind === 'infection' ? this.infectionPass : kind === 'combat' ? this.combatPass : this.bigPass;
+  }
 
   observeBlocked(link) {
     const g = this.sim.graph;
@@ -206,8 +220,8 @@ export class Hive {
   // watched vents; fall back to the direct route when there is no choice.
   stealthPath(from, to, kind) {
     const g = this.sim.graph;
-    const layers = kind === 'infection' ? ['std', 'vent'] : ['std', 'shaft'];
-    const base = kind === 'infection' ? this.infectionPass : this.bigPass;
+    const layers = this._layersFor(kind);
+    const base = this._passFor(kind);
     const quiet = (l, a, b) => {
       if (!base(l, a, b)) return false;
       if (b !== to && this.believedHumanStr[b] > 0.25) return false;
@@ -355,7 +369,9 @@ export class Hive {
       const threat = this.localThreat(f.node);
       const own = sim.influence.floodStr[f.node];
       if (threat > Math.max(own, 0.8)) {
-        const safe = this.quietNodeNear(f.node, f.faction === FACTION.INFECTION ? 'infection' : 'big');
+        // combat forms bolt through the vents too (user rule) — the escape
+        // hatch topology is what makes avoid-and-breed survivable
+        const safe = this.quietNodeNear(f.node, f.faction === FACTION.INFECTION ? 'infection' : 'combat');
         if (safe !== -1 && safe !== f.node) {
           this.assign(f, { kind: TASK.MOVE, node: safe, evade: true });
         }
@@ -375,8 +391,7 @@ export class Hive {
 
   quietNodeNear(from, kind) {
     const g = this.sim.graph;
-    const reach = g.nodesWithin(from, 4, kind === 'infection' ? ['std', 'vent'] : ['std', 'shaft'],
-      kind === 'infection' ? this.infectionPass : this.bigPass);
+    const reach = g.nodesWithin(from, 4, this._layersFor(kind), this._passFor(kind));
     let best = -1, bestScore = -Infinity;
     for (const n of reach) {
       if (g.burningUntil[n] > this.sim.t) continue;
@@ -543,9 +558,7 @@ export class Hive {
   scatterNode(site, salt, kind) {
     const g = this.sim.graph;
     const opts = [site];
-    for (const { to } of g.neighbors(site,
-      kind === 'infection' ? ['std', 'vent'] : ['std', 'shaft'],
-      kind === 'infection' ? this.infectionPass : this.bigPass)) {
+    for (const { to } of g.neighbors(site, this._layersFor(kind), this._passFor(kind))) {
       if (this.localThreat(to) < 0.6 && !g.hasRole(to, 'artery') && g.node(to).type !== 'open') opts.push(to);
     }
     return opts[salt % opts.length];
@@ -647,6 +660,40 @@ export class Hive {
       for (const c of combat) c.desperateSince = undefined;
     }
     this._desperate = desperate;
+
+    // 2c. SOFT-TARGET RAID (user note): the hive KNOWS the medbay and the
+    //     other soft rooms are likely unguarded — the same shared map that
+    //     pins the marines' believed positions marks everywhere else safe.
+    //     Once the opening carrier base is met (3+ seated or seeding,
+    //     dispersed), one spare combat form slips off early to massacre,
+    //     distract, and MAKE BODIES: the screaming pulls squads across the
+    //     ship while the dens keep breeding, and the dead feed conversion.
+    {
+      const seeding = combat.reduce((n, c) => n + (c.task?.kind === TASK.TRANSFORM || c.task?.seed ? 1 : 0), 0);
+      const raider = this._raiderId !== undefined ? sim.byId.get(this._raiderId) : null;
+      const raiderLive = raider && !raider.dead && !raider.downed && raider.hp > 0;
+      if (!raiderLive) this._raiderId = undefined;
+      if (K + seeding >= 3 && !raiderLive && sim.t >= (this._raidCooldownUntil ?? 0)) {
+        let bestT = -1, bestS = 0.5;
+        for (const n of g.nodes) {
+          if (!n.roles.includes('soft') && !n.roles.includes('medbay')) continue;
+          if (this.believedHardness[n.idx] > 0.3) continue; // believed guarded — not this one
+          const s = this.believedHumanStr[n.idx] - this.believedHardness[n.idx] * 2;
+          if (s > bestS) { bestS = s; bestT = n.idx; }
+        }
+        if (bestT !== -1) {
+          const spares = combat.filter((c) => !c.fromPlayer && !c.downed
+            && (!c.task || (c.task.kind === TASK.GUARD && c.task.muster === undefined && !c.task.seed)));
+          const r = this.nearest(spares, bestT, ['std', 'shaft', 'vent'], this.combatPass);
+          if (r) {
+            this._raiderId = r.id;
+            this._raidCooldownUntil = sim.t + 60;
+            this.assign(r, { kind: TASK.ATTACK, node: bestT });
+            sim.log('rampage', `a combat form slips off to raid ${g.node(bestT).name} — soft target, likely unguarded`);
+          }
+        }
+      }
+    }
 
     // 3. guards on each carrier. Protecting the first carriers through
     //    incubation is the whole game (§13.4), so guard HARDER when the pool
@@ -967,6 +1014,18 @@ export class Hive {
       bodyAt[b.node] += 1;
       for (const { to } of g.neighbors(b.node, ['std'], () => true)) bodyAt[to] += 0.3;
     }
+    // SURVIVAL DOCTRINE (user note): the opening goal is to survive and
+    // sustain — production must be DISPERSED (enough carriers in enough
+    // different spots that no single sweep ends the hive) and sited where
+    // the hive believes marines AREN'T. One form's sighting is the whole
+    // hive's map: a known marine position implies everywhere else is safer.
+    const marineNodes = [];
+    for (const [id, b] of this.beliefs) {
+      const h = this.sim.byId.get(id);
+      if (h && !h.dead && h.hp > 0 && h.faction === FACTION.MARINE && b.conf >= 0.4) marineNodes.push(b.node);
+    }
+    const marineDist = marineNodes.length
+      ? g.flowField(marineNodes, ['std', 'shaft'], () => true).dist : null;
     let best = -1, bestScore = 0.2; // need a genuinely good spot
     for (const n of g.nodes) {
       const idx = n.idx;
@@ -982,10 +1041,15 @@ export class Hive {
       if (n.type === 'corridor' || n.type === 'open') score -= 1.5;
       score -= this.trafficPenalty(idx) * 0.5;
       score += Math.min(this.garrisonDist[idx] === -1 ? 4 : this.garrisonDist[idx], 4) * 0.25;
+      if (marineDist) {
+        const d = marineDist[idx];
+        score += Math.min(d === -1 ? 6 : d, 6) * 0.3; // far from every believed marine
+      }
       if (carrierNodes.length) {
         let near = Infinity;
         for (const cn of carrierNodes) { const d = g.hops(idx, cn, ['std', 'shaft'], this.bigPass); if (d !== -1) near = Math.min(near, d); }
         if (near === 0) continue;                 // already a carrier here
+        if (near === 1) score -= 2.5;             // next door = one sweep kills both
         if (near !== Infinity) score += Math.min(near, 5) * 0.5;
       }
       if (score > bestScore) { bestScore = score; best = idx; }

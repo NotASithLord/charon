@@ -29,12 +29,15 @@ export function resolveCombat(sim, dt) {
     g.push(a);
   }
 
-  // --- vent exposure (§7): a moving infection form can only be seen/shot by
-  // someone standing in ONE OF THE TWO ROOMS THE VENT ACTUALLY CONNECTS —
-  // not from an adjacent compartment (user note). You have to be at the
-  // grating to see through it.
+  // --- vent exposure (§7): a moving form can only be seen/shot by someone
+  // standing in ONE OF THE TWO ROOMS THE VENT ACTUALLY CONNECTS — not from
+  // an adjacent compartment (user note). You have to be at the grating to
+  // see through it. An infection form pops to a single round; a combat form
+  // squeezed into the duct (user rule: they crawl vents too) is a big target
+  // that soaks real fire instead.
   for (const a of sim.agents) {
-    if (a.dead || a.faction !== FACTION.INFECTION || !a.move || a.move.layer !== 'vent') continue;
+    if (a.dead || !a.move || a.move.layer !== 'vent') continue;
+    if (a.faction !== FACTION.INFECTION && a.faction !== FACTION.COMBAT) continue;
     const link = a.move.link;
     let watched = false;
     for (const end of [link.a, link.b]) {
@@ -42,10 +45,15 @@ export function resolveCombat(sim, dt) {
         watched = true; break;
       }
     }
-    if (watched && sim.rng.chance(P.hive.ventKillProbPerSec * dt)) {
-      sim.removeAgent(a);
-      sim.stats.formsShotInVents++;
-      sim.log('vent', `an infection form is shot through a vent grating (${sim.graph.node(link.a).name} ↔ ${sim.graph.node(link.b).name})`);
+    if (!watched) continue;
+    if (a.faction === FACTION.INFECTION) {
+      if (sim.rng.chance(P.hive.ventKillProbPerSec * dt)) {
+        sim.removeAgent(a);
+        sim.stats.formsShotInVents++;
+        sim.log('vent', `an infection form is shot through a vent grating (${sim.graph.node(link.a).name} ↔ ${sim.graph.node(link.b).name})`);
+      }
+    } else {
+      hurtFloodForm(sim, a, P.combat.marine.dps * dt, false);
     }
   }
 
@@ -170,7 +178,12 @@ export function resolveCombat(sim, dt) {
       // stomp infection forms (they're fragile, §6.6) — but only the ones
       // that have actually closed with a shooter (real space: you boot or
       // point-fire what's at your feet, not a form skittering 30m away)
-      let stomps = shooters.reduce((s, a) => s + (a.faction === FACTION.MARINE ? P.combat.marine.stompPerSec : P.combat.armed.stompPerSec), 0) * dt;
+      // a shooter with a form LATCHED ON is wrestling it, not aiming — half
+      // effectiveness (the point-blank risk is real for a lone marine; a
+      // squadmate's boot is what saves you)
+      let stomps = shooters.reduce((s, a) => s +
+        (a.faction === FACTION.MARINE ? P.combat.marine.stompPerSec : P.combat.armed.stompPerSec)
+        * (a.held === sim.tickCount ? 0.5 : 1), 0) * dt;
       for (const f of [...infForms].sort((a, b) => a.id - b.id)) {
         if (stomps <= 0) break;
         if (!shooters.some((s) => Math.hypot(s.x - f.x, s.y - f.y) <= P.combat.stompRangeM)) continue;

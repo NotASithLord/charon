@@ -34,6 +34,25 @@ export class ShipGraph {
       i, a: idx(e.a), b: idx(e.b), breakable: e.breakable,
       blocked: false, kind: LAYER.VENT, label: 'V-' + String(i + 1).padStart(2, '0'),
     }));
+    // VENT NETWORK (user rule): ducting parallels nearly every doorway — the
+    // flood's private topology. Infection AND combat forms crawl it (a
+    // combat form squeezes through; a bloated carrier cannot), humans never,
+    // and door locks don't apply — so a hive in avoid-and-breed posture
+    // almost always has an escape hatch. Auto-generated alongside the
+    // authored runs: one duct behind every same-deck doorway.
+    {
+      const seen = new Set(this.vents.map((v) => `${Math.min(v.a, v.b)}:${Math.max(v.a, v.b)}`));
+      for (const e of this.edges) {
+        if (this.nodes[e.a].deck !== this.nodes[e.b].deck) continue;
+        const key = `${Math.min(e.a, e.b)}:${Math.max(e.a, e.b)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        this.vents.push({
+          i: this.vents.length, a: e.a, b: e.b, breakable: true,
+          blocked: false, kind: LAYER.VENT, label: 'V-' + String(this.vents.length + 1).padStart(2, '0'),
+        });
+      }
+    }
 
     // adjacency: adj[node] = [{to, link}] where link is an edge/shaft/vent record
     this.adj = { std: this._buildAdj(this.edges), shaft: this._buildAdj(this.shafts), vent: this._buildAdj(this.vents) };
