@@ -447,6 +447,12 @@ export class Sim {
             a.node = a.move.to; a.deck = to.deck;
           }
         }
+        // formation lane (user note: no stacked dots): every mover holds a
+        // personal lateral offset from the column line, so a squad on the
+        // same route reads as a file of soldiers, not one dot
+        const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5;
+        a.x += Math.cos(a.heading + Math.PI / 2) * lane;
+        a.y += Math.sin(a.heading + Math.PI / 2) * lane;
         a.animTime += dt;
         if (a.move.t >= 1) {
           a.node = a.move.to;
@@ -496,7 +502,10 @@ export class Sim {
           mult *= this.P.speed.chargeMult;
           a.charging = true;
         }
-        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, mult) };
+        // tiny per-agent pace variation staggers a column longitudinally so
+        // simultaneous movers never sit on the exact same interpolation point
+        const pace = 1 + ((a.id % 7) - 3) * 0.012;
+        a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, mult) * pace };
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
         this._parkDrift(a, dt);
@@ -504,15 +513,22 @@ export class Sim {
     }
   }
 
-  // parked agents drift to a personal offset inside the room's real footprint
+  // Parked agents each claim their OWN patch of floor (user note: no stacked
+  // dots): a golden-angle spiral slot ranked by id among the room's living
+  // occupants gives ~0.7 m spacing, clamped to the room's real footprint.
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
-    const ang = (a.id * 2.399963) % (Math.PI * 2);
-    const frac = ((a.id * 7919) % 100) / 100 * 0.85;
-    const tx = nd.x + Math.cos(ang) * (nd.w / 2 - 1.2) * frac;
-    const ty = nd.y + Math.sin(ang) * (nd.d / 2 - 1.2) * frac;
-    a.x += (tx - a.x) * Math.min(1, dt * 3);
-    a.y += (ty - a.y) * Math.min(1, dt * 3);
+    let rank = 0;
+    for (const o of this._occ[a.node]) {
+      if (o.faction !== FACTION.CORPSE && o.id < a.id) rank++;
+    }
+    const ang = rank * 2.399963 + nd.idx * 0.7;
+    const rad = 0.65 * Math.sqrt(rank);
+    const hw = Math.max(0.7, nd.w / 2 - 1.0), hd = Math.max(0.7, nd.d / 2 - 1.0);
+    const fx = Math.max(-hw, Math.min(hw, Math.cos(ang) * rad));
+    const fy = Math.max(-hd, Math.min(hd, Math.sin(ang) * rad));
+    a.x += (nd.x + fx - a.x) * Math.min(1, dt * 3);
+    a.y += (nd.y + fy - a.y) * Math.min(1, dt * 3);
     a.animTime += dt;
   }
 

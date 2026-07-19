@@ -171,12 +171,17 @@ for (const d of document.querySelectorAll('#deckBtns button')) {
 const ov = (id, key) => document.getElementById(id).addEventListener('change', (e) => { viz.overlays[key] = e.target.checked; });
 ov('ovInfluence', 'influence'); ov('ovShafts', 'shafts'); ov('ovVents', 'vents');
 ov('ovCalls', 'calls'); ov('ovTracker', 'tracker'); ov('ovBeliefs', 'beliefs'); ov('ovLabels', 'labels'); ov('ovConns', 'conns');
+ov('ovFire', 'fire');
 for (const id of ['dialLambda', 'dialQ', 'dialRadio']) {
   document.getElementById(id).addEventListener('input', applyDials);
 }
 applyDials();
 populateCommandUI();
 wireCommandUI();
+
+// debug/test hooks (harmless in normal use)
+window.__viz = () => viz;
+window.__sim = () => sim;
 
 function frame(now) {
   const dtReal = Math.min(0.1, (now - last) / 1000);

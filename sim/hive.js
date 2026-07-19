@@ -592,7 +592,11 @@ export class Hive {
         const c = this.nearest(spares, target, ['std', 'shaft'], this.bigPass);
         if (c) {
           if (c.node === target && !c.move && this.localThreat(target) < 0.5) this.assign(c, { kind: TASK.TRANSFORM });
-          else this.assign(c, { kind: TASK.GUARD, node: target }); // stage it there; it roots next round
+          // seed: true protects the walk from the rampage muster — production
+          // precedes war, and re-drafting the seed form every round starved
+          // the hive of carriers entirely (deadlock: no carriers -> no
+          // infection forms -> no conversions -> the muster can never fill)
+          else this.assign(c, { kind: TASK.GUARD, node: target, seed: true });
         }
       }
     }
@@ -653,8 +657,10 @@ export class Hive {
       if (!rampaging.has(f.node)) continue;
       if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT
         || f.task.kind === TASK.TRANSFORM)) continue; // a rooting carrier is not a soldier
+      if (f.task?.seed) continue; // carrier-seed detail is off-limits to the draft
       const target = this.nearestBelievedHuman(f.node);
       if (target === -1) continue;
+      if ((this._musterBan?.get(target) ?? 0) > sim.t) continue; // given up on it for now
       const defense = this.believedHumanStr[target] + this.believedHardness[target];
       if (defense > 0.8) {
         // a defended position is NEVER attacked piecemeal: every form stages
@@ -688,6 +694,8 @@ export class Hive {
         if (!staged.has(t.muster)) staged.set(t.muster, []);
         staged.get(t.muster).push(f);
       }
+      this._musterStart ??= new Map();
+      this._musterBan ??= new Map();
       for (const [target, forms] of staged) {
         const defense = this.believedHumanStr[target] + this.believedHardness[target];
         // a wave past maxMusterForms overwhelms ANY line — never keep waiting
@@ -695,8 +703,22 @@ export class Hive {
         const needed = Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
         const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
         if (defense <= 0.8 || arrived >= needed) {
+          this._musterStart.delete(target);
           for (const f of forms) this.assign(f, { kind: TASK.ATTACK, node: target });
           sim.log('rampage', `the muster is up — ${forms.length} forms storm ${g.node(target).name} together`);
+          continue;
+        }
+        // a muster that CANNOT fill — every form the hive owns still short of
+        // the wave — disbands and goes back to breeding. Standing outside the
+        // line forever while production is dead was a stalemate, not patience.
+        if (!this._musterStart.has(target)) this._musterStart.set(target, sim.t);
+        const spareCount = combat.filter((c) => !c.task
+          || (c.task.kind === TASK.GUARD && c.task.muster === undefined && !c.task.seed)).length;
+        if (sim.t - this._musterStart.get(target) > 120 && forms.length + spareCount < needed) {
+          this._musterStart.delete(target);
+          this._musterBan.set(target, sim.t + 180);
+          for (const f of forms) f.task = null;
+          sim.log('hive', `the hive breaks off the muster at ${g.node(target).name} — not enough mass; it turns back to breeding`);
           continue;
         }
         // RECRUIT (user rule: "they muster first"): a muster that is short

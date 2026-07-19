@@ -117,6 +117,7 @@
       <label class="chk"><input type="checkbox" id="ovShafts" checked>shafts</label>
       <label class="chk"><input type="checkbox" id="ovVents" checked>vents</label>
       <label class="chk"><input type="checkbox" id="ovCalls" checked>calls</label>
+      <label class="chk"><input type="checkbox" id="ovFire" checked>fire fx</label>
       <label class="chk"><input type="checkbox" id="ovTracker">tracker</label>
       <label class="chk"><input type="checkbox" id="ovBeliefs">hive beliefs</label>
       <label class="chk"><input type="checkbox" id="ovLabels" checked>labels</label>
@@ -158,19 +159,20 @@
     <div id="left"><div id="canvasWrap"><canvas id="canvas"></canvas>
       <div id="legend">
         <div class="lgTitle">CAMERA <span style="color:#39424c">scroll = zoom · drag = pan · dbl-click = whole ship</span></div>
-        <div class="lgTitle">AGENTS</div>
+        <div class="lgTitle">AGENTS <span style="color:#39424c">(zoom in for full icons)</span></div>
         <div class="lgGrid">
           <span><i class="dot" style="background:#f2f2f2"></i>civilian</span>
-          <span><i class="dot" style="background:#e8c840"></i>armed crew</span>
-          <span><i class="sq" style="background:#4d8ef0"></i>marine</span>
-          <span><i class="dot" style="background:#51ff6a"></i>infection form</span>
-          <span><i class="sq" style="background:#c0392b;clip-path:polygon(50% 0,100% 100%,0 100%)"></i>combat form</span>
-          <span><i class="dot" style="background:#b15fd9"></i>carrier</span>
+          <span><i class="dot" style="background:#e8c840"></i>armed crew (sidearm out)</span>
+          <span><i class="sq" style="background:#4d8ef0;border-radius:50% 50% 20% 20%"></i>marine (helmet + rifle)</span>
+          <span><i class="dot" style="background:#51ff6a"></i>infection form (tentacled pod)</span>
+          <span><i class="sq" style="background:#c0392b;clip-path:polygon(50% 0,100% 100%,0 100%)"></i>combat form (whip arm; gun if host had one)</span>
+          <span><i class="dot" style="background:#b15fd9"></i>carrier (belly swells to rupture)</span>
           <span><i class="ln solid" style="border-color:#6d6d6d;width:10px"></i>corpse (lying)</span>
         </div>
         <div class="lgTitle">IN-ROOM ACTION</div>
         <div class="lgGrid">
-          <span><i class="ln solid" style="border-color:#ffe08c"></i>tracer fire</span>
+          <span><i class="dot" style="background:#fff6dc"></i>muzzle flash + tracer</span>
+          <span><i class="ln solid" style="border-color:#c0392b"></i>charge streak (lunge)</span>
           <span><i class="ln solid" style="border-color:#51ff6a"></i>grab in progress</span>
           <span><i class="dot ring" style="border-color:#51ff6a"></i>body converting</span>
           <span><i class="dot ring" style="border-color:#b15fd9"></i>rooting to carrier</span>

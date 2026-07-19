@@ -24,7 +24,7 @@ export class Viz {
     this.ctx = canvas.getContext('2d');
     this.sim = sim;
     this.deckFilter = 0; // 0 = all decks
-    this.overlays = { influence: true, shafts: true, vents: true, calls: true, tracker: false, beliefs: false, labels: true, conns: false };
+    this.overlays = { influence: true, shafts: true, vents: true, calls: true, tracker: false, beliefs: false, labels: true, conns: false, fire: true };
     this.callRings = []; // {node, t0}
     this.lastCallCount = 0;
     // camera in world METERS: center + zoom on top of the fit-to-canvas scale
@@ -368,6 +368,10 @@ export class Viz {
       const downed = flags & FLAG.DOWNED;
       const color = FACTION_COLOR[f];
 
+      const heading = buf.headingR[i];
+      // lore-styled icons read at close zoom; below ~5 px/m they collapse to
+      // simple marks so the far view stays legible
+      const detailed = this.s >= 5;
       if (burned) {
         ctx.fillStyle = '#111';
         ctx.beginPath(); ctx.arc(x, y, rr(0.5, 2), 0, Math.PI * 2); ctx.fill();
@@ -376,46 +380,26 @@ export class Viz {
         ctx.strokeStyle = color; ctx.lineWidth = this._lw(1.2);
         ctx.beginPath(); ctx.arc(x, y, rr(0.55, 3), 0, Math.PI * 2); ctx.stroke();
       } else if (f === FACTION.MARINE) {
-        const r = rr(0.55, 2.8);
+        this._marineGlyph(x, y, heading, rr(0.55, 2.8), detailed);
+      } else if (f === FACTION.ARMED) {
+        this._armedGlyph(x, y, heading, rr(0.45, 2.3), detailed);
+      } else if (f === FACTION.CIVILIAN) {
+        const r = rr(0.42, 2.2);
         ctx.fillStyle = color;
-        ctx.fillRect(x - r, y - r, r * 2, r * 2); // marines read as squares
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+        if (detailed) { // head + shoulder hint so they read as people
+          ctx.fillStyle = '#b9bec6';
+          ctx.beginPath(); ctx.arc(x, y, r * 0.45, 0, Math.PI * 2); ctx.fill();
+        }
+      } else if (f === FACTION.INFECTION) {
+        this._infectionGlyph(x, y, rr(0.3, 1.8), buf.id[i], detailed);
       } else if (f === FACTION.COMBAT) {
-        const r = rr(0.65, 3.2);
-        // lore: a charging form leaves a motion streak (sprint/lunge burst)
-        if (flags & FLAG.CHARGING) {
-          const h = buf.headingR[i];
-          ctx.strokeStyle = 'rgba(192,57,43,0.4)';
-          ctx.lineWidth = this._lw(2);
-          ctx.beginPath();
-          ctx.moveTo(x - Math.cos(h) * r * 3.2, y - Math.sin(h) * r * 3.2);
-          ctx.lineTo(x, y);
-          ctx.stroke();
-        }
-        ctx.fillStyle = color;
-        ctx.beginPath(); // spiked triangle
-        ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.9, y + r * 0.8); ctx.lineTo(x - r * 0.9, y + r * 0.8);
-        ctx.closePath(); ctx.fill();
-        // lore: hosts that carried weapons still do — render the gun
-        if (flags & FLAG.ARMED_HOST) {
-          ctx.strokeStyle = '#e0e6ee';
-          ctx.lineWidth = this._lw(1.2);
-          ctx.beginPath(); ctx.moveTo(x - r, y + r * 0.2); ctx.lineTo(x + r, y + r * 0.2); ctx.stroke();
-        }
+        this._combatGlyph(x, y, heading, rr(0.65, 3.2), flags, detailed);
       } else if (f === FACTION.CARRIER) {
         // the belly swells with what it carries (user note: game-accurate —
         // it accumulates inside and only ruptures under fire or at the limit)
         const held = sim.byId.get(buf.id[i])?.held ?? 0;
-        const cap = sim.P.carrier.maxInfectionForms;
-        const r = rr(0.85 + (held / cap) * 0.8, 4);
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = 'rgba(177,95,217,0.5)';
-        ctx.lineWidth = this._lw(1.2);
-        ctx.beginPath(); ctx.arc(x, y, r + this._lw(2.5), 0, Math.PI * 2); ctx.stroke();
-      } else {
-        const r = f === FACTION.INFECTION ? rr(0.3, 1.8) : rr(0.42, 2.2);
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+        this._carrierGlyph(x, y, rr(0.85, 4), held / sim.P.carrier.maxInfectionForms, detailed);
       }
 
       // exposed infection form in a vent flashes (§8: shows the shot window)
@@ -442,6 +426,152 @@ export class Viz {
     }
   }
 
+  // ---- lore-styled NPC glyphs (user note: icons, not just colored dots) ----
+
+  // marine: armored shoulders + helmet with a visor slit + rifle, facing
+  // their heading — reads instantly as a soldier
+  _marineGlyph(x, y, h, r, detailed) {
+    const { ctx } = this;
+    if (!detailed) {
+      ctx.fillStyle = FACTION_COLOR[FACTION.MARINE];
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      return;
+    }
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(h);
+    // shoulders (armor block, wider than deep)
+    ctx.fillStyle = '#33619f';
+    ctx.fillRect(-r * 0.5, -r, r * 1.0, r * 2);
+    // rifle along the facing, offset to the right hand
+    ctx.strokeStyle = '#c9d4e2';
+    ctx.lineWidth = r * 0.28;
+    ctx.beginPath(); ctx.moveTo(r * 0.1, r * 0.45); ctx.lineTo(r * 1.9, r * 0.45); ctx.stroke();
+    // helmet + visor slit
+    ctx.fillStyle = '#4d8ef0';
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#0c1a30';
+    ctx.lineWidth = r * 0.22;
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.40, -0.7, 0.7); ctx.stroke(); // visor faces heading
+    ctx.restore();
+  }
+
+  // armed crew: a person with a sidearm out — circle body, short pistol line
+  _armedGlyph(x, y, h, r, detailed) {
+    const { ctx } = this;
+    ctx.fillStyle = FACTION_COLOR[FACTION.ARMED];
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    if (!detailed) return;
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(h);
+    ctx.strokeStyle = '#c9d4e2';
+    ctx.lineWidth = r * 0.3;
+    ctx.beginPath(); ctx.moveTo(r * 0.3, r * 0.35); ctx.lineTo(r * 1.5, r * 0.35); ctx.stroke();
+    ctx.fillStyle = '#8a7726';
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2); ctx.fill(); // head
+    ctx.restore();
+  }
+
+  // infection form: a taut pod on wriggling tentacles (they writhe in place)
+  _infectionGlyph(x, y, r, id, detailed) {
+    const { ctx, sim } = this;
+    if (detailed) {
+      ctx.strokeStyle = '#2e9946';
+      ctx.lineWidth = r * 0.35;
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + id;
+        const wig = Math.sin(sim.t * 6 + id + k * 1.7) * 0.35;
+        ctx.beginPath();
+        ctx.moveTo(x + Math.cos(a) * r * 0.6, y + Math.sin(a) * r * 0.6);
+        ctx.lineTo(x + Math.cos(a + wig) * r * 1.7, y + Math.sin(a + wig) * r * 1.7);
+        ctx.stroke();
+      }
+    }
+    ctx.fillStyle = FACTION_COLOR[FACTION.INFECTION];
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    if (detailed) { // the sensory stalk cluster
+      ctx.fillStyle = '#bfffcb';
+      ctx.beginPath(); ctx.arc(x, y - r * 0.3, r * 0.35, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // combat form: hunched, spined mass with a whip arm — and the host's gun
+  // if it died holding one. Charging forms trail a motion streak.
+  _combatGlyph(x, y, h, r, flags, detailed) {
+    const { ctx } = this;
+    if (flags & FLAG.CHARGING) {
+      ctx.strokeStyle = 'rgba(192,57,43,0.4)';
+      ctx.lineWidth = this._lw(2);
+      ctx.beginPath();
+      ctx.moveTo(x - Math.cos(h) * r * 3.2, y - Math.sin(h) * r * 3.2);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+    if (!detailed) {
+      ctx.fillStyle = FACTION_COLOR[FACTION.COMBAT];
+      ctx.beginPath();
+      ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.9, y + r * 0.8); ctx.lineTo(x - r * 0.9, y + r * 0.8);
+      ctx.closePath(); ctx.fill();
+      return;
+    }
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(h);
+    // hunched body: lumpy closed blob with dorsal spines aft
+    ctx.fillStyle = '#8f2c22';
+    ctx.beginPath();
+    ctx.moveTo(r * 0.9, 0);
+    ctx.lineTo(r * 0.2, -r * 0.75);
+    ctx.lineTo(-r * 0.45, -r * 0.95); // spine
+    ctx.lineTo(-r * 0.35, -r * 0.4);
+    ctx.lineTo(-r * 1.0, -r * 0.35);  // spine
+    ctx.lineTo(-r * 0.6, 0);
+    ctx.lineTo(-r * 1.0, r * 0.5);    // spine
+    ctx.lineTo(-r * 0.3, r * 0.55);
+    ctx.lineTo(r * 0.3, r * 0.8);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = FACTION_COLOR[FACTION.COMBAT];
+    ctx.beginPath(); ctx.arc(r * 0.1, 0, r * 0.55, 0, Math.PI * 2); ctx.fill();
+    // whip arm forward-left
+    ctx.strokeStyle = '#d8654f';
+    ctx.lineWidth = r * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(r * 0.4, -r * 0.3);
+    ctx.quadraticCurveTo(r * 1.3, -r * 0.8, r * 1.8, -r * 0.25);
+    ctx.stroke();
+    // host's weapon forward-right (lore: combat forms keep their guns)
+    if (flags & FLAG.ARMED_HOST) {
+      ctx.strokeStyle = '#c9d4e2';
+      ctx.lineWidth = r * 0.24;
+      ctx.beginPath(); ctx.moveTo(r * 0.2, r * 0.45); ctx.lineTo(r * 1.7, r * 0.45); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // carrier: bulbous two-lobed sack on stubby legs; the belly lobe swells
+  // with the payload and strains as it nears the rupture point
+  _carrierGlyph(x, y, r, fill01, detailed) {
+    const { ctx, sim } = this;
+    const swell = r * (0.75 + fill01 * 0.9);
+    if (detailed) { // stubby legs
+      ctx.strokeStyle = '#6d4a7e';
+      ctx.lineWidth = r * 0.3;
+      for (const k of [-0.8, -0.3, 0.3, 0.8]) {
+        ctx.beginPath(); ctx.moveTo(x + k * r * 0.7, y + r * 0.4); ctx.lineTo(x + k * r, y + r * 1.05); ctx.stroke();
+      }
+    }
+    // belly sack (swells with held forms; throbs when close to full)
+    const throb = fill01 > 0.6 ? 1 + Math.sin(sim.t * 5) * 0.05 : 1;
+    ctx.fillStyle = '#9a68b8';
+    ctx.beginPath(); ctx.arc(x, y - swell * 0.35, swell * throb, 0, Math.PI * 2); ctx.fill();
+    // body lobe
+    ctx.fillStyle = FACTION_COLOR[FACTION.CARRIER];
+    ctx.beginPath(); ctx.arc(x, y + r * 0.25, r * 0.7, 0, Math.PI * 2); ctx.fill();
+    if (detailed && fill01 > 0) { // strain lines on the sack
+      ctx.strokeStyle = 'rgba(230, 200, 255, 0.55)';
+      ctx.lineWidth = r * 0.12;
+      ctx.beginPath(); ctx.arc(x, y - swell * 0.35, swell * 0.6, -2.2, -0.9); ctx.stroke();
+    }
+  }
+
   // a body lying where it fell: short slab + head dot, angle fixed per id
   _corpseGlyph(x, y, id, color) {
     const { ctx } = this;
@@ -460,8 +590,10 @@ export class Viz {
   // arcs over bodies being converted and combat forms rooting into carriers
   _combatFx(g) {
     const { ctx, sim } = this;
-    // gunfire: nodes that fired within the last couple of ticks
-    for (let n = 0; n < g.n; n++) {
+    // gunfire: nodes that fired within the last couple of ticks — every
+    // marine and armed civilian shooting shows it (user note): strobing
+    // tracer + a bright star-shaped muzzle flash at the barrel
+    if (this.overlays.fire) for (let n = 0; n < g.n; n++) {
       if (sim.tickCount - sim.gunfireTick[n] > 2 || !this._visible(n)) continue;
       const occ = sim.occupants(n);
       const shooters = occ.filter((a) => a.hp > 0 && !a.dead &&
@@ -474,15 +606,12 @@ export class Viz {
         const sp = this.rpos.get(sh.id) ?? sh, tp = this.rpos.get(t.id) ?? t;
         const flick = (sh.id + sim.tickCount) % 3;
         if (flick === 0) continue; // strobing, not a solid beam
-        ctx.strokeStyle = `rgba(255, 224, 140, ${flick === 1 ? 0.5 : 0.25})`;
-        ctx.lineWidth = Math.max(0.08, 1 / this.s);
-        ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(tp.x, tp.y); ctx.stroke();
-        // muzzle flash
         const dx = tp.x - sp.x, dy = tp.y - sp.y, dl = Math.hypot(dx, dy) || 1;
-        ctx.fillStyle = 'rgba(255, 240, 180, 0.9)';
-        ctx.beginPath();
-        ctx.arc(sp.x + dx / dl * 0.7, sp.y + dy / dl * 0.7, Math.max(0.16, 1.2 / this.s), 0, Math.PI * 2);
-        ctx.fill();
+        const mx = sp.x + dx / dl * 0.8, my = sp.y + dy / dl * 0.8;
+        ctx.strokeStyle = `rgba(255, 224, 140, ${flick === 1 ? 0.55 : 0.3})`;
+        ctx.lineWidth = Math.max(0.08, 1 / this.s);
+        ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(tp.x, tp.y); ctx.stroke();
+        this._muzzleFlash(mx, my, Math.atan2(dy, dx), flick === 1);
       }
     }
     // grabs, conversions, rooting — read straight from the sim agents
@@ -510,6 +639,25 @@ export class Viz {
         this._progressArc(ap.x, ap.y, a.taskProgress / sim.P.carrier.transformSec, '#b15fd9');
       }
     }
+  }
+
+  // four-point star + hot core + faint glow, oriented along the shot
+  _muzzleFlash(x, y, ang, bright) {
+    const { ctx } = this;
+    const r = Math.max(0.45, 3.2 / this.s) * (bright ? 1 : 0.7);
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(ang);
+    ctx.fillStyle = `rgba(255, 190, 90, ${bright ? 0.28 : 0.16})`;
+    ctx.beginPath(); ctx.arc(0, 0, r * 1.8, 0, Math.PI * 2); ctx.fill(); // glow
+    ctx.strokeStyle = `rgba(255, 240, 190, ${bright ? 0.95 : 0.7})`;
+    ctx.lineWidth = Math.max(0.1, 1.2 / this.s);
+    ctx.beginPath();
+    ctx.moveTo(-r, 0); ctx.lineTo(r * 1.5, 0); // long spike down-range
+    ctx.moveTo(0, -r * 0.7); ctx.lineTo(0, r * 0.7);
+    ctx.stroke();
+    ctx.fillStyle = '#fff6dc';
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2); ctx.fill(); // core
+    ctx.restore();
   }
 
   _progressArc(x, y, frac, color) {
