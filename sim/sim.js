@@ -466,22 +466,33 @@ export class Sim {
             a.heading = Math.atan2(to.y - d.y, to.x - d.x);
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
           }
+        } else if (a.move.layer === 'std' && from.deck !== to.deck) {
+          // VERTICAL TRANSIT (user note: no walking off the map): a body in
+          // a lift or on a ladder is AT the trunk, not floating in the void
+          // between deck plans. Stand on the origin pad until the handover,
+          // then on the destination pad.
+          const padX = (n, other) => Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x));
+          if (k < (link.flipT ?? 0.5)) {
+            a.x = padX(from, to); a.y = from.y;
+          } else {
+            a.x = padX(to, from); a.y = to.y;
+            if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
+          }
+          a.heading = Math.atan2(to.y - from.y, to.x - from.x);
         } else {
+          // shafts/vents: crawl along the (drawn) duct line
           a.x = from.x + (to.x - from.x) * k;
           a.y = from.y + (to.y - from.y) * k;
           a.heading = Math.atan2(to.y - from.y, to.x - from.x);
-          // lifts/ladders hand over halfway up the trunk; shaft/vent crawlers
-          // keep their special mid-link combat model and flip on arrival
-          if (a.move.layer === 'std' && k >= (link.flipT ?? 0.5) && a.node !== a.move.to) {
-            a.node = a.move.to; a.deck = to.deck;
-          }
         }
         // formation lane (user note: no stacked dots): every mover holds a
         // personal lateral offset from the column line, so a squad on the
         // same route reads as a file of soldiers, not one dot
-        const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5;
-        a.x += Math.cos(a.heading + Math.PI / 2) * lane;
-        a.y += Math.sin(a.heading + Math.PI / 2) * lane;
+        if (a.move.layer === 'std' && from.deck === to.deck) {
+          const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5;
+          a.x += Math.cos(a.heading + Math.PI / 2) * lane;
+          a.y += Math.sin(a.heading + Math.PI / 2) * lane;
+        }
         a.animTime += dt;
         if (a.move.t >= 1) {
           a.node = a.move.to;

@@ -210,6 +210,18 @@ export class World {
           e.type === 'lift' ? matLift : matLadder);
         pad.position.set(wx, elevOf(fromDeck) + 0.05, wz);
         this.scene.add(pad);
+        // the trunk itself: a translucent column floor-to-ceiling marking
+        // the vertical circulation (lift shaft / ladder well) — decks are
+        // real stacked levels and this is how you move between them
+        const trunk = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.95, 0.95, CLEAR_H, 14, 1, true),
+          new THREE.MeshStandardMaterial({
+            color: e.type === 'lift' ? 0x2fd7f0 : 0xf0a52f,
+            emissive: e.type === 'lift' ? 0x1a7b8a : 0x8a5c1a, emissiveIntensity: 0.5,
+            transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
+          }));
+        trunk.position.set(wx, elevOf(fromDeck) + CLEAR_H / 2, wz);
+        this.scene.add(trunk);
         return { deck: fromDeck, x: wx, z: wz, node: from.idx };
       };
       const pa = mk(a, b), pb = mk(b, a);
