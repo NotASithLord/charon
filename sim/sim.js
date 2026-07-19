@@ -56,7 +56,7 @@ export class Sim {
       conversions: 0, conversionsRound: 0, humansConverted: 0,
       carriersSeated: 0, formsMinted: 0, corpsesBurned: 0,
       infectionFormsKilled: 0, combatFormsDowned: 0, humansDead: 0,
-      distressCalls: 0, formsShotInVents: 0,
+      distressCalls: 0,
     };
 
     this._precomputeSensing();
@@ -616,7 +616,11 @@ export class Sim {
         // cars: a whole fireteam rides together, no queue.
         const ladder = link.kind === 'std' && link.type === 'ladder'
           && this.graph.node(step.to).deck !== this.graph.node(a.node).deck;
-        if (ladder && this.vertBusy(link, a.id)) continue; // hold at the pad; retry next tick
+        // hold at the pad while the rungs are taken — OR while the player has
+        // called "next" on this ladder (a busy ladder queues the emergency,
+        // it doesn't deny it; without the reservation NPCs re-claim the rungs
+        // every tick and a human pressing a key can never win the race)
+        if (ladder && (this.vertBusy(link, a.id) || this.vertReserved(link, a.id))) continue;
         a.doorBalks = 0;
         a.path.shift();
         let mult = this._speedMult(a);
@@ -865,6 +869,15 @@ export class Sim {
     if (!h || h.dead) return false;
     if (h.isPlayer) return h.climbingLink === link;
     return !!(h.move && h.move.link === link);
+  }
+
+  // next-in-line reservation (player queueing): while the reserver lives,
+  // NPCs yield the next slot on this ladder. Self-heals if they die.
+  vertReserved(link, selfId = -1) {
+    const id = link.reservedBy;
+    if (id === undefined || id === selfId) return false;
+    const h = this.byId.get(id);
+    return !!(h && !h.dead);
   }
 
   // Parked agents each claim their OWN patch of floor (user note: no stacked

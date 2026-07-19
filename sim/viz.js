@@ -453,7 +453,8 @@ export class Viz {
         this._carrierGlyph(x, y, rr(0.85, 4), held / sim.P.carrier.maxInfectionForms, detailed);
       }
 
-      // exposed infection form in a vent flashes (§8: shows the shot window)
+      // form transiting a vent flashes (debug view is omniscient — in the
+      // game nobody can see or shoot into the ductwork)
       if (flags & FLAG.EXPOSED && Math.floor(sim.t * 6) % 2 === 0) {
         ctx.strokeStyle = '#aaffbb';
         ctx.lineWidth = this._lw(1.4);
@@ -742,7 +743,6 @@ export function renderStats(sim, el) {
     ['carriers seated', s.carriersSeated],
     ['forms released', s.formsMinted],
     ['distress calls', s.distressCalls],
-    ['vent kills', s.formsShotInVents],
   ];
   el.innerHTML = rows.map(([k, v]) => k === '—'
     ? '<div class="sep"></div>'

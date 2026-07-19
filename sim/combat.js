@@ -29,33 +29,10 @@ export function resolveCombat(sim, dt) {
     g.push(a);
   }
 
-  // --- vent exposure (§7): a moving form can only be seen/shot by someone
-  // standing in ONE OF THE TWO ROOMS THE VENT ACTUALLY CONNECTS — not from
-  // an adjacent compartment (user note). You have to be at the grating to
-  // see through it. An infection form pops to a single round; a combat form
-  // squeezed into the duct (user rule: they crawl vents too) is a big target
-  // that soaks real fire instead.
-  for (const a of sim.agents) {
-    if (a.dead || !a.move || a.move.layer !== 'vent') continue;
-    if (a.faction !== FACTION.INFECTION && a.faction !== FACTION.COMBAT) continue;
-    const link = a.move.link;
-    let watched = false;
-    for (const end of [link.a, link.b]) {
-      if (sim.occupants(end).some((h) => (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED) && h.hp > 0)) {
-        watched = true; break;
-      }
-    }
-    if (!watched) continue;
-    if (a.faction === FACTION.INFECTION) {
-      if (sim.rng.chance(P.hive.ventKillProbPerSec * dt)) {
-        sim.removeAgent(a);
-        sim.stats.formsShotInVents++;
-        sim.log('vent', `an infection form is shot through a vent grating (${sim.graph.node(link.a).name} ↔ ${sim.graph.node(link.b).name})`);
-      }
-    } else {
-      hurtFloodForm(sim, a, P.combat.marine.dps * dt, false);
-    }
-  }
+  // (Removed: the old "shot through a vent grating" exposure roll. In real
+  // space nobody — the player included — can see into the ductwork, so
+  // marines shooting unseeable forms was an artifact of the abstract-graph
+  // era. Vents are blind transit now; the fight happens at the openings.)
 
   // --- shaft ambush first strikes (§7): whoever moves loses the corner ---
   for (const [key, group] of groups) {

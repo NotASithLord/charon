@@ -13,6 +13,7 @@ import { HeldWeapon } from './weapon.js';
 import { MA5, FRAG } from './fps-data.js';
 import { GameAudio } from './audio.js';
 import { FireFX } from './fx.js';
+import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
 
@@ -54,6 +55,16 @@ const agents = new Agents3D(scene, sim, world);
 const player = new Player(canvas, world, sim, sim.graph.byId.get('security'));
 agents.playerId = player.agent.id;
 const fireteam = sim.attachPlayerSquad(player.agent, 3);
+// MARINE TACNET (user request): the sim view's plan, filtered to what the
+// marine teams actually see. Intel accumulates whether the map is open or not.
+const marineMap = new MarineMap(
+  document.getElementById('mapcanvas'), document.getElementById('mapside'),
+  sim, fireteam.id, player.agent.id);
+let mapOpen = false;
+function toggleMap(open = !mapOpen) {
+  mapOpen = open;
+  document.getElementById('mapview').classList.toggle('mv-hidden', !mapOpen);
+}
 const audio = new GameAudio();
 canvas.addEventListener('click', () => audio.ensure());
 
@@ -116,6 +127,79 @@ const wallRay = new THREE.Raycaster();
 // --- HUD ---
 const el = (id) => document.getElementById(id);
 const overlay = el('overlay');
+
+// --- INTRO (user request): the briefing types itself out like a military
+// report. Any key or click while it types reveals the whole thing; when it's
+// done, a click deploys you (that click doubles as the pointer-lock and
+// audio gesture). The sim runs cold underneath — by the time you hit the
+// deck, the ship's log already has a history.
+const INTRO_BODY = [
+  'UNSC FLEETCOM — PRIORITY TRAFFIC // EYES ONLY',
+  'FROM: CENTCOM SOL / MARS DEFENSE COORDINATION',
+  'TO:   FFG-201 UNSC CHARON — MARS HIGH ANCHOR',
+  'DATE: OCTOBER 2552 // LOCAL 0347',
+  '',
+  'SITUATION FOLLOWS.',
+  '',
+  'Sol has been a war of attrition since the day the Covenant first',
+  'appeared off Earth. Every month they probe the anchorages, every',
+  'month we bleed them back, and every month there is a little less',
+  'of us left to do the bleeding. The Charon has held the Mars picket',
+  'through all of it.',
+  '',
+  'Two transmissions reached this station in the past week.',
+  'The first: an outbreak on Earth. Not Covenant. Something else,',
+  'loose in the hives — something that eats the dead and wears them.',
+  'The second, stranger: a faction of the Covenant has broken from',
+  'their own fleet and offered us alliance against it.',
+  '',
+  'At 0331 local, HOLY CHARITY — the Covenant holy system itself —',
+  'exited slipspace directly on top of the Mars anchorage.',
+  'At 0339 it tore open a slipspace rupture larger and more violent',
+  'than anything on record, and was gone into it.',
+  '',
+  'The collapse wave killed the reactor, primary systems, and comms.',
+  'Emergency power only. Every ship and station around Mars is likely',
+  'as dark as we are. You would have no way of knowing.',
+  '',
+  'Moments before the rupture, something impacted the hangar deck.',
+  '',
+  'Internal sensors are down. The crew is at stations.',
+  'You are not alone in the dark.',
+].join('\n');
+const INTRO_MISSION = 'MISSION: SURVIVE. CONTAIN.';
+const INTRO_TOTAL = INTRO_BODY.length + INTRO_MISSION.length;
+const intro = el('intro'), introText = el('introText'), introMission = el('introMission'), introHint = el('introHint');
+let introChars = 0, introDone = false, introGone = false;
+function introRender() {
+  introText.textContent = INTRO_BODY.slice(0, Math.min(introChars, INTRO_BODY.length));
+  introMission.textContent = introChars > INTRO_BODY.length
+    ? INTRO_MISSION.slice(0, introChars - INTRO_BODY.length) : '';
+  if (introChars >= INTRO_TOTAL && !introDone) {
+    introDone = true;
+    introHint.textContent = 'CLICK TO DEPLOY';
+    introHint.classList.add('ready');
+  }
+}
+const introTimer = setInterval(() => {
+  if (introGone || introDone) { clearInterval(introTimer); return; }
+  introChars += 2;
+  introRender();
+}, 22);
+function dismissIntro() {
+  introGone = true;
+  intro.style.display = 'none';
+  overlay.classList.add('hidden');
+  audio.ensure();
+  canvas.requestPointerLock();
+}
+intro.addEventListener('click', () => {
+  if (introDone) dismissIntro();
+  else { introChars = INTRO_TOTAL; introRender(); }
+});
+window.addEventListener('keydown', () => {
+  if (!introGone && !introDone) { introChars = INTRO_TOTAL; introRender(); }
+});
 const ghostAlive = () => {
   const gh = sim.playerConvertedTo ? sim.byId.get(sim.playerConvertedTo) : null;
   return gh && !gh.dead && gh.damage < 100 ? gh : null;
@@ -175,9 +259,11 @@ window.addEventListener('mouseup', (e) => { if (e.button === 0) fireHeld = false
 let fragPressed = false;
 let frags = FRAG.count;
 window.addEventListener('keydown', (e) => {
+  if (!introGone) return; // still on the briefing — keys only skip the typing
   if (e.code === 'KeyR') reloadPressed = true;
   if (e.code === 'KeyF') meleePressed = true;
   if (e.code === 'KeyG') fragPressed = true;
+  if (e.code === 'KeyM') toggleMap();
   // FIRETEAM ORDERS (review P1): the sim's command layer, on your keys
   if (!player.dead && player.locked) {
     if (e.code === 'Digit1') setOrder('follow');
@@ -236,6 +322,7 @@ function shotCandidates() {
   for (const a of sim.agents) {
     if (a.dead) continue;
     if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
+    if (a.move && a.move.layer === 'vent') continue; // in the ducts — no line of fire
     if (a.deck === player.deck || (shaftNode !== -1 && a.node === shaftNode)) out.push(a);
   }
   return out;
@@ -493,6 +580,8 @@ function frame(now) {
   agents.update(dtReal);
   soundSweep(now);
   drawTracker();
+  marineMap.observe();
+  if (mapOpen) marineMap.draw(player.agent, player.dead);
   audio.setListener(player.x, player.z, player.yaw);
   audio.alarm(sim.lastStand && !ended);
 
@@ -613,9 +702,11 @@ function frame(now) {
     if (trunk) {
       const up = player.deck === trunk.lowerDeck;
       const kind = trunk.vertical ? 'ladder' : 'stairs';
-      hint.textContent = trunk.edge?.type === 'ladder' && sim.vertBusy(trunk.edge, player.agent.id)
-        ? `${kind} busy — one at a time`
-        : `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
+      hint.textContent = player.queuedTrunk === trunk
+        ? 'in line for the ladder — you go next'
+        : trunk.edge?.type === 'ladder' && sim.vertBusy(trunk.edge, player.agent.id)
+          ? `${kind} busy — L to take the next slot`
+          : `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
       hint.style.display = 'block';
     } else hint.style.display = 'none';
   }

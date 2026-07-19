@@ -25,6 +25,7 @@ export class Player {
     this.onGround = true;
     this.climbing = false;
     this.climb = null; // active climb transition, see _startClimb
+    this.queuedTrunk = null; // waiting in line for a busy ladder
     this.yaw = -Math.PI / 2; this.pitch = 0;
     this.keys = new Set();
     this.locked = false;
@@ -92,6 +93,17 @@ export class Player {
       this._stepClimb(dt);
     } else {
       const trunk = this.world.trunkAt(this.deck, this.x, this.z);
+      // QUEUED (user rule): a busy ladder puts you in line, it doesn't deny
+      // you. Hold the reservation while you stand at the pad and go the
+      // moment the rungs clear; stepping away lets your place go.
+      if (this.queuedTrunk) {
+        if (trunk !== this.queuedTrunk || this.pinned || this.dead) this._cancelQueue();
+        else if (!this.sim.vertBusy(this.queuedTrunk.edge, this.agent.id)) {
+          const q = this.queuedTrunk;
+          this._cancelQueue();
+          this._startClimb(q);
+        }
+      }
       if (trunk && this.locked && !this.pinned && wantClimb && !this._wLatch) {
         this._startClimb(trunk);
         this._wLatch = true;
@@ -152,7 +164,14 @@ export class Player {
     // while WE climb, the claim keeps NPCs at the pads. Lifts are cars —
     // everyone rides together, no queue.
     const link = trunk.edge?.type === 'ladder' ? trunk.edge : null;
-    if (link && this.sim.vertBusy(link, this.agent.id)) return;
+    if (link && this.sim.vertBusy(link, this.agent.id)) {
+      // IN LINE (user rule): reserve the next slot — NPCs hold at the pads
+      // until you've gone (sim.vertReserved) — and auto-climb when clear
+      link.reservedBy = this.agent.id;
+      this.queuedTrunk = trunk;
+      return;
+    }
+    if (link && link.reservedBy === this.agent.id) link.reservedBy = undefined;
     const fromDeck = this.deck;
     const atLower = fromDeck === trunk.lowerDeck;
     const toDeck = atLower ? trunk.upperDeck : trunk.lowerDeck;
@@ -167,6 +186,12 @@ export class Player {
       worldY: elevOf(fromDeck) + this.h,
     };
     this.vx = this.vz = this.vy = 0;
+  }
+
+  _cancelQueue() {
+    const e = this.queuedTrunk?.edge;
+    if (e && e.reservedBy === this.agent.id) e.reservedBy = undefined;
+    this.queuedTrunk = null;
   }
 
   _stepClimb(dt) {

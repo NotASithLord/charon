@@ -195,6 +195,9 @@ export class Agents3D {
       if (id === this.playerId) continue; // first person — don't draw your own body
       const f = buf.faction[i];
       const flags = buf.flags[i];
+      // inside the ductwork: a form transiting a vent is genuinely out of
+      // sight — don't render a body standing in the room it left
+      if (flags & FLAG.EXPOSED) continue;
       clip = buf.animClip[i];
       animT = buf.animTime[i];
       curId = id;

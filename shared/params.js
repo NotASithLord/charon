@@ -125,8 +125,6 @@ export const PARAMS = {
     scarcityMax: 4,
     riskBase: 1.0,
     militaryValue: 1.5,
-    ventKillProbPerSec: 0.35,  // p_v while moving+watched
-    ventKillProbStillPerSec: 0.06, // seen through grating while still
     values: {                  // targetValue weights for grabs
       helpless: 3.0,
       corpse: 1.2,             // convert corpse -> combat form (plus militaryValue)

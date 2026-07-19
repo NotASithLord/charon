@@ -103,7 +103,9 @@ export function carryGeometry() {
   merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
   merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   merged.setIndex(new THREE.BufferAttribute(idx, 1));
-  merged.rotateY(-Math.PI / 2); // native +Z-forward -> +X-forward
+  // native +Z-forward -> +X-forward. (+π/2: rotating -π/2 sends +Z to -X,
+  // which had every carried rifle pointing backwards — user report)
+  merged.rotateY(Math.PI / 2);
   _mergedCarry = merged;
   return merged;
 }
