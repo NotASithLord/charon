@@ -265,21 +265,26 @@ export function initRun(seed, rng, P) {
   const breach = rng.pick(candidates);
   graph.breachNode = breach;
   graph.unpowered[breach] = 1;
+  // every form spills out of the crash at its OWN spot (user rule: solid
+  // bodies, no stacking on the room's center point)
   const flood = [];
   for (let i = 0; i < P.flood.initialInfectionForms; i++) {
     const a = makeAgent(FACTION.INFECTION, breach, graph);
     a.hp = a.maxHp = 1;
+    scatterInRoom(a, graph.node(breach), rng);
     flood.push(a);
   }
   for (let i = 0; i < P.flood.initialCarriers; i++) {
     const a = makeAgent(FACTION.CARRIER, breach, graph);
     a.hp = a.maxHp = P.combat.carrierHp;
     a.state = STATE.INCUBATING;
+    scatterInRoom(a, graph.node(breach), rng);
     flood.push(a);
   }
   for (let i = 0; i < P.flood.initialCombatForms; i++) {
     const a = makeAgent(FACTION.COMBAT, breach, graph);
     a.hp = a.maxHp = P.combat.combatForm.hp * (1 + rng.range(-P.combat.combatForm.hpJitter, P.combat.combatForm.hpJitter));
+    scatterInRoom(a, graph.node(breach), rng);
     flood.push(a);
   }
   // the crash site's fresh dead are random too (user note): ~50%-160% of the

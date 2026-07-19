@@ -223,7 +223,7 @@ export function updateFloodTick(sim, dt) {
           a.taskProgress += dt;
           if (a.taskProgress >= sim.P.combat.corpseConvertSec) {
             body.dead = true;
-            const cf = spawnCombatForm(sim, a.node);
+            const cf = spawnCombatForm(sim, a.node, body);
             cf.hostArmed = body.wasArmed === true; // the host's weapon comes up with it
             sim.stats.conversions++; sim.stats.conversionsRound++;
             sim.removeAgent(a); // the infection form is spent (§6.6)
@@ -359,12 +359,15 @@ function moveToward(sim, a, node, pathFn = null) {
   else if (!path) a.task = null; // believed-unreachable; hive will reassign
 }
 
-export function spawnCombatForm(sim, node) {
+export function spawnCombatForm(sim, node, at = null) {
   const f = makeAgent(FACTION.COMBAT, node, sim.graph);
   const cf = sim.P.combat.combatForm;
   // ±hpJitter so 2-marine fights are a genuine coin-flip, not a fixed result
   const j = 1 + sim.rng.range(-cf.hpJitter, cf.hpJitter);
   f.hp = f.maxHp = cf.hp * j;
+  // the form stands up WHERE THE BODY LAY (user rule: solid bodies, own
+  // space) — not teleported to the room's center point
+  if (at) { f.x = at.x; f.y = at.y; }
   sim.spawn(f);
   return f;
 }
@@ -440,7 +443,7 @@ function convertHuman(sim, form, target) {
     if (sim.rng.chance(0.5)) sim.emitCall(target);
   }
   target.dead = true;
-  const cf = spawnCombatForm(sim, target.node);
+  const cf = spawnCombatForm(sim, target.node, target);
   cf.hostArmed = target.faction === FACTION.ARMED || target.faction === FACTION.MARINE;
   if (target.isPlayer) {
     // the player lives on inside the thing that took them: spectate-only POV

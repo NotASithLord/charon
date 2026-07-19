@@ -265,7 +265,7 @@ export class ShipGraph {
     if (l.kind === 'shaft') return run * 1.35 / 0.7;
     if (l.kind === 'vent') return run * 1.35 / 0.55;
     if (l.type === 'lift') return l.horizM / 1.4 + 10;
-    if (l.type === 'ladder') return l.horizM / 1.4 + l.vertM / 0.5;
+    if (l.type === 'ladder') return 1.0 + l.vertM / 1.2; // mount + climb (matches travelSec)
     return run / 1.4 + (l.type === 'blastdoor' ? 2.5 : 0.8);
   }
 

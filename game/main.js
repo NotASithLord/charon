@@ -301,7 +301,9 @@ function frame(now) {
     if (trunk) {
       const up = player.deck === trunk.lowerDeck;
       const kind = trunk.vertical ? 'ladder' : 'stairs';
-      hint.textContent = `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
+      hint.textContent = trunk.edge?.type === 'ladder' && sim.vertBusy(trunk.edge, player.agent.id)
+        ? `${kind} busy — one at a time`
+        : `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
       hint.style.display = 'block';
     } else hint.style.display = 'none';
   }

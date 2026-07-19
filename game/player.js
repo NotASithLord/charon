@@ -147,6 +147,12 @@ export class Player {
   // is never a guess (user note) — up if you're on the lower deck, down if
   // you're on the upper one, full stop.
   _startClimb(trunk) {
+    // QUEUED CLIMBING (user rule): one body on the LADDER at a time — if an
+    // NPC is on the rungs, the press does nothing (the HUD shows the wait);
+    // while WE climb, the claim keeps NPCs at the pads. Lifts are cars —
+    // everyone rides together, no queue.
+    const link = trunk.edge?.type === 'ladder' ? trunk.edge : null;
+    if (link && this.sim.vertBusy(link, this.agent.id)) return;
     const fromDeck = this.deck;
     const atLower = fromDeck === trunk.lowerDeck;
     const toDeck = atLower ? trunk.upperDeck : trunk.lowerDeck;
@@ -154,8 +160,9 @@ export class Player {
     if (trunk.vertical) { tx = trunk.x; tz = trunk.z; }
     else { const dest = atLower ? trunk.high : trunk.low; tx = dest.x; tz = dest.z; }
     const rise = Math.abs(trunk.highElev - trunk.lowElev);
+    if (link) { link.occupiedBy = this.agent.id; this.agent.climbingLink = link; }
     this.climb = {
-      fromDeck, toDeck, fromX: this.x, fromZ: this.z, tx, tz,
+      fromDeck, toDeck, fromX: this.x, fromZ: this.z, tx, tz, link,
       t: 0, dur: Math.max(0.5, Math.min(2.2, rise / ODST.climbSpeed)),
       worldY: elevOf(fromDeck) + this.h,
     };
@@ -174,6 +181,8 @@ export class Player {
       this.deck = c.toDeck;
       this.x = c.tx; this.z = c.tz;
       this.h = 0;
+      if (c.link && c.link.occupiedBy === this.agent.id) c.link.occupiedBy = undefined;
+      this.agent.climbingLink = null;
       this.climb = null;
     }
   }

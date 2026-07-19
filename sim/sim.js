@@ -270,6 +270,7 @@ export class Sim {
     updateHumansTick(this, dt);
     updateFloodTick(this, dt);
     this._advanceMovement(dt);
+    this._separate(dt);
     this._refreshOccupancy();
     resolveCombat(this, dt);
 
@@ -466,7 +467,11 @@ export class Sim {
     if (link.kind === 'vent') return run * M.crawlWindingFactor / M.ventMps;
     const mps = M.baseMps * Math.max(0.2, mult);
     if (link.type === 'lift') return link.horizM / mps + M.liftSec;
-    if (link.type === 'ladder') return link.horizM / mps + link.vertM / M.ladderClimbMps;
+    // a ladder transit is MOUNT + CLIMB — the walk to the pad already
+    // happened in the room. Folding the link's fore-aft span into the hold
+    // time made every one-at-a-time climb a ~12 s ladder monopoly and the
+    // queues behind it jammed for minutes (user rule: queued, not jammed).
+    if (link.type === 'ladder') return 1.0 + link.vertM / M.ladderClimbMps;
     return run / mps + (M.doorDelaySec[link.type] ?? 0);
   }
 
@@ -561,6 +566,7 @@ export class Sim {
         }
         a.animTime += dt;
         if (a.move.t >= 1) {
+          if (a.move.link.occupiedBy === a.id) a.move.link.occupiedBy = undefined; // ladder is free
           a.node = a.move.to;
           a.deck = to.deck;
           a.move = null;
@@ -597,6 +603,12 @@ export class Sim {
           a.path = [];
           continue;
         }
+        // CLIMBING IS QUEUED (user rule): a LADDER takes one body at a time —
+        // everyone else waits at the pad until the rungs are clear. Lifts are
+        // cars: a whole fireteam rides together, no queue.
+        const ladder = link.kind === 'std' && link.type === 'ladder'
+          && this.graph.node(step.to).deck !== this.graph.node(a.node).deck;
+        if (ladder && this.vertBusy(link, a.id)) continue; // hold at the pad; retry next tick
         a.doorBalks = 0;
         a.path.shift();
         let mult = this._speedMult(a);
@@ -619,6 +631,7 @@ export class Sim {
         // simultaneous movers never sit on the exact same interpolation point
         const pace = 1 + ((a.id % 7) - 3) * 0.012;
         a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0, travelSec: this.travelSec(link, mult) * pace };
+        if (ladder) link.occupiedBy = a.id; // claim the ladder
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
         this._parkDrift(a, dt);
@@ -691,13 +704,101 @@ export class Sim {
     return true;
   }
 
+  // PERSONAL SPACE (user rule): every body is SOLID — two agents can never
+  // occupy the same patch of deck. A soft separation pass each tick pushes
+  // apart any pair sharing a room that sit closer than their summed body
+  // radii. Movers mid-link are excluded (formation lanes + pace jitter
+  // already stagger them, and their position is re-derived from the link
+  // next tick anyway); a latched grabber and its pinned victim stay put;
+  // the player's body is game-driven, so it never gets shoved — everyone
+  // else steps around it.
+  _bodyRadius(a) {
+    switch (a.faction) {
+      case FACTION.CARRIER: return 0.75;
+      case FACTION.COMBAT: return 0.48;
+      case FACTION.INFECTION: return 0.32;
+      default: return 0.4;
+    }
+  }
+
+  _separate(dt) {
+    const relax = Math.min(1, dt * 10);
+    for (let n = 0; n < this.graph.n; n++) {
+      const occ = this._occ[n];
+      if (!occ || occ.length < 2) continue;
+      const room = this.graph.node(n);
+      const hw = Math.max(0.4, room.w / 2 - 0.3), hd = Math.max(0.4, room.d / 2 - 0.3);
+      for (let i = 0; i < occ.length; i++) {
+        const a = occ[i];
+        if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.move) continue;
+        const ra = this._bodyRadius(a);
+        for (let j = i + 1; j < occ.length; j++) {
+          const b = occ[j];
+          if (b.dead || b.faction === FACTION.CORPSE || b.downed || b.move) continue;
+          const need = ra + this._bodyRadius(b);
+          let dx = b.x - a.x, dy = b.y - a.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= need * need) continue;
+          const dist = Math.sqrt(d2);
+          if (dist < 1e-6) { // exactly stacked: split along a deterministic axis
+            const ang = ((a.id * 31 + b.id * 17) % 628) / 100;
+            dx = Math.cos(ang); dy = Math.sin(ang);
+          } else { dx /= dist; dy /= dist; }
+          const aMoves = !a.isPlayer && a.held !== this.tickCount;
+          const bMoves = !b.isPlayer && b.held !== this.tickCount;
+          if (!aMoves && !bMoves) continue;
+          const push = (need - dist) * relax * (aMoves && bMoves ? 0.5 : 1);
+          if (aMoves) {
+            a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x - dx * push));
+            a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y - dy * push));
+          }
+          if (bMoves) {
+            b.x = Math.max(room.x - hw, Math.min(room.x + hw, b.x + dx * push));
+            b.y = Math.max(room.y - hd, Math.min(room.y + hd, b.y + dy * push));
+          }
+        }
+      }
+    }
+    // a latched grabber may have been shouldered aside — pull it back onto
+    // its victim so the burrow never breaks from crowd pressure (two forms
+    // fighting over one body now ring the body instead of stacking in it)
+    for (const a of this.agents) {
+      if (a.dead || a.state !== STATE.GRABBING || a.task?.kind !== TASK.GRAB) continue;
+      const v = this.byId.get(a.task.targetId);
+      if (!v || v.dead) continue;
+      const d = Math.hypot(a.x - v.x, a.y - v.y);
+      const max = this.P.combat.grabRangeM * 0.9;
+      if (d > max && d > 1e-6) {
+        const k = max / d;
+        a.x = v.x + (a.x - v.x) * k;
+        a.y = v.y + (a.y - v.y) * k;
+      }
+    }
+  }
+
+  // ONE BODY ON THE LADDER (user rule): is this cross-deck link held by a
+  // live climber other than `selfId`? Stale claims (holder died, or was
+  // yanked off the move by combat) self-heal — a claim only counts while
+  // the holder is genuinely in transit on this link.
+  vertBusy(link, selfId = -1) {
+    const id = link.occupiedBy;
+    if (id === undefined || id === selfId) return false;
+    const h = this.byId.get(id);
+    if (!h || h.dead) return false;
+    if (h.isPlayer) return h.climbingLink === link;
+    return !!(h.move && h.move.link === link);
+  }
+
   // Parked agents each claim their OWN patch of floor (user note: no stacked
   // dots): a golden-angle spiral slot ranked by id among the room's living
   // occupants gives ~0.7 m spacing, clamped to the room's real footprint.
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
     let rank = 0;
-    for (const o of this._occ[a.node]) {
+    // rank among the PHYSICAL room's occupants (occupancy is indexed by
+    // pnode) — ranking against the logical-node list handed two agents the
+    // same spiral slot and park-drift pulled them into the same point
+    for (const o of this._occ[a.pnode ?? a.node]) {
       if (o.faction !== FACTION.CORPSE && o.id < a.id) rank++;
     }
     const ang = rank * 2.399963 + nd.idx * 0.7;
