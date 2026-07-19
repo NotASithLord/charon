@@ -31,11 +31,11 @@ const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
 scene.add(lamp);
 
 // --- boot: random ship every run unless a seed is pinned in the URL
-// (?seed=... for a reproducible one), starting flood kept light (10
+// (?seed=... for a reproducible one), starting flood kept light (20
 // infection forms, no combat forms/carriers yet) ---
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
-const sim = new Sim(seed, { flood: { initialInfectionForms: 10, initialCombatForms: 0, initialCarriers: 0 } });
+const sim = new Sim(seed, { flood: { initialInfectionForms: 20, initialCombatForms: 0, initialCarriers: 0 } });
 const world = new World(scene, sim.graph);
 const agents = new Agents3D(scene, sim, world);
 
@@ -301,7 +301,7 @@ function frame(now) {
     if (trunk) {
       const up = player.deck === trunk.lowerDeck;
       const kind = trunk.vertical ? 'ladder' : 'stairs';
-      hint.textContent = `W — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
+      hint.textContent = `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
       hint.style.display = 'block';
     } else hint.style.display = 'none';
   }

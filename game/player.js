@@ -1,9 +1,10 @@
 // The ODST — first-person controller with the first-strike movement feel
 // (exponential accel, gravity, jump), ballistic-armor-over-health, and real
 // vertical shafts (not teleport pads): stand at a ladder/stairwell and press
-// W to climb it. Direction is never ambiguous (user note: no more guessing
+// L to climb it (L, not W — W is forward; walking past a ladder shouldn't
+// yank you up it). Direction is never ambiguous (user note: no more guessing
 // whether looking up/down goes up or down) — a shaft only ever has ONE other
-// end from wherever you're standing, so W always takes you there, with a
+// end from wherever you're standing, so L always takes you there, with a
 // brief climb animation instead of an instant cut. The player is a live sim
 // agent: the flood hunts them, grabs pin them, conversion takes them.
 
@@ -82,19 +83,21 @@ export class Player {
     } else if (!this.keys.has('KeyE')) this._eLatch = false;
 
     const wantFwd = this.keys.has('KeyW');
+    const wantClimb = this.keys.has('KeyL');
 
-    // --- climbing: press W at a shaft, arrive at its only other end ---
+    // --- climbing: press L at a shaft (not W — that's forward, and walking
+    // past a ladder shouldn't yank you up it), arrive at its only other end ---
     this.climbing = !!this.climb;
     if (this.climb) {
       this._stepClimb(dt);
     } else {
       const trunk = this.world.trunkAt(this.deck, this.x, this.z);
-      if (trunk && this.locked && !this.pinned && wantFwd && !this._wLatch) {
+      if (trunk && this.locked && !this.pinned && wantClimb && !this._wLatch) {
         this._startClimb(trunk);
         this._wLatch = true;
       }
     }
-    if (!wantFwd) this._wLatch = false;
+    if (!wantClimb) this._wLatch = false;
 
     // --- walking (first-strike accel model) ---
     if (!this.climbing && this.locked && !this.pinned) {
