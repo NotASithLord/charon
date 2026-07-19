@@ -130,11 +130,14 @@ export class World {
         else if (m === dW) sides.W.push({ at: dz, edge: e });
         else sides.E.push({ at: dz, edge: e });
       }
+      // walls sit half a thickness INSIDE the footprint so two flush rooms
+      // get back-to-back panels instead of coplanar z-fighting faces
+      const wi = WALL_T / 2;
       const wallRuns = [
-        { key: 'N', horiz: true, fixed: wz - n.d / 2, from: wx - n.w / 2, to: wx + n.w / 2 },
-        { key: 'S', horiz: true, fixed: wz + n.d / 2, from: wx - n.w / 2, to: wx + n.w / 2 },
-        { key: 'W', horiz: false, fixed: wx - n.w / 2, from: wz - n.d / 2, to: wz + n.d / 2 },
-        { key: 'E', horiz: false, fixed: wx + n.w / 2, from: wz - n.d / 2, to: wz + n.d / 2 },
+        { key: 'N', horiz: true, fixed: wz - n.d / 2 + wi, from: wx - n.w / 2, to: wx + n.w / 2 },
+        { key: 'S', horiz: true, fixed: wz + n.d / 2 - wi, from: wx - n.w / 2, to: wx + n.w / 2 },
+        { key: 'W', horiz: false, fixed: wx - n.w / 2 + wi, from: wz - n.d / 2, to: wz + n.d / 2 },
+        { key: 'E', horiz: false, fixed: wx + n.w / 2 - wi, from: wz - n.d / 2, to: wz + n.d / 2 },
       ];
       for (const run of wallRuns) {
         const cuts = sides[run.key]

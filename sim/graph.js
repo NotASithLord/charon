@@ -63,41 +63,72 @@ export class ShipGraph {
   }
 
   _layout() {
-    // REAL-DISTANCE layout (user note): all coordinates are METERS. x is real
-    // fore-aft position along the ship; decks are drawn as stacked bands with
-    // rooms alternating above/below the deck's corridor line, and every node
-    // carries its authored footprint (w × d). Travel time comes from these
-    // distances, not from a fixed per-edge constant.
+    // A REAL DECK PLAN (user note): all coordinates are METERS, and the
+    // layout is a contiguous floor plan, not a node diagram. Row hints in
+    // the ship data place every space FLUSH against the space it opens into
+    // (row 0 = the corridor/bay spine, ±1 = flanking rooms sharing the
+    // spine's wall, ±2 = the row behind those). Doors are openings cut into
+    // genuinely shared walls; only spaces that can't touch get a short
+    // connector throat. This is the plan the 3D world extrudes.
     const LEN = this.data?.playableLengthM ?? 220;
     this.deckHeightM = this.data?.deckHeightM ?? 4.2;
-    const BAND = 52, TOP = 18, PADX = 12;
+    const BAND = 56, TOP = 18, PADX = 12;
     this.lengthM = LEN;
-    this.width = LEN + 2 * PADX;
     this.height = TOP + 5 * BAND + 8;
     this.deckBands = [];
+    const stdNeighbors = (idx) => this.edges
+      .filter((e) => e.a === idx || e.b === idx)
+      .map((e) => this.nodes[e.a === idx ? e.b : e.a]);
     for (let d = 1; d <= 5; d++) {
-      const band = this.nodes.filter((n) => n.deck === d).sort((a, b) => a.foreAft - b.foreAft);
+      const band = this.nodes.filter((n) => n.deck === d);
       const y0 = TOP + (d - 1) * BAND;
       this.deckBands.push({ y0, y1: y0 + BAND });
       const yC = y0 + BAND / 2;
-      let flip = 1;
-      for (const n of band) {
-        n.w = n.w ?? 10; n.d = n.d ?? 8;
-        n.x = PADX + n.foreAft * LEN;
-        if (n.type === 'corridor') { n.y = yC; }
-        else { n.y = yC + flip * (2.5 + 1.5 + n.d / 2); flip = -flip; }
-        n.r = Math.max(2, Math.min(n.w, n.d) / 2 - 1); // scatter radius inside the room
+      for (const n of band) { n.w = n.w ?? 10; n.d = n.d ?? 8; n.row = n.row ?? 1; }
+
+      // 1. the spine (row 0): corridors and bay chains on the centerline.
+      //    Directly-connected consecutive spine spaces are snapped FLUSH so
+      //    a corridor run or the hangar chain is one continuous volume.
+      const spine = band.filter((n) => n.row === 0).sort((a, b) => a.foreAft - b.foreAft);
+      for (const n of spine) { n.x = PADX + n.foreAft * LEN; n.y = yC; }
+      for (let i = 1; i < spine.length; i++) {
+        const prev = spine[i - 1], n = spine[i];
+        const connected = stdNeighbors(n.idx).some((m) => m.idx === prev.idx);
+        if (connected) n.x = prev.x + prev.w / 2 + n.w / 2; // flush, shared wall
+        else n.x = Math.max(n.x, prev.x + prev.w / 2 + n.w / 2 + 3); // separate segment
       }
-      // de-overlap same-side rooms along x (deterministic left-to-right push)
-      for (const side of [-1, 1]) {
-        const row = band.filter((n) => n.type !== 'corridor' && Math.sign(n.y - yC) === side);
-        row.sort((a, b) => a.x - b.x);
-        for (let i = 1; i < row.length; i++) {
-          const minX = row[i - 1].x + row[i - 1].w / 2 + row[i].w / 2 + 2;
-          if (row[i].x < minX) row[i].x = minX;
+
+      // 2. rows ±1 then ±2: each room sits flush against the parent it opens
+      //    into, x clamped so the shared wall genuinely overlaps
+      for (const tier of [1, 2]) {
+        for (const side of [1, -1]) {
+          const row = band.filter((n) => n.row === side * tier).sort((a, b) => a.foreAft - b.foreAft);
+          for (const n of row) {
+            const parents = stdNeighbors(n.idx).filter((m) => m.deck === d
+              && (tier === 1 ? m.row === 0 : Math.abs(m.row) === tier - 1));
+            const p = parents[0] ?? spine[0];
+            n.x = PADX + n.foreAft * LEN;
+            if (p) {
+              n.y = p.y + side * (p.d / 2 + n.d / 2);
+              // keep the shared wall real: center within the parent's span
+              const lo = p.x - p.w / 2 + Math.min(n.w, p.w) / 2;
+              const hi = p.x + p.w / 2 - Math.min(n.w, p.w) / 2;
+              n.x = Math.max(lo, Math.min(hi, n.x));
+            } else {
+              n.y = yC + side * (4 + n.d / 2);
+            }
+          }
+          // de-overlap along x (deterministic left-to-right push, zero gap)
+          row.sort((a, b) => a.x - b.x);
+          for (let i = 1; i < row.length; i++) {
+            const minX = row[i - 1].x + row[i - 1].w / 2 + row[i].w / 2;
+            if (row[i].x < minX) row[i].x = minX;
+          }
         }
       }
+      for (const n of band) n.r = Math.max(2, Math.min(n.w, n.d) / 2 - 1);
     }
+    this.width = Math.max(...this.nodes.map((n) => n.x + n.w / 2)) + PADX;
     // per-link real distances: horizontal walk + vertical climb components.
     // Same-deck links measure center-to-center in the deck plane; cross-deck
     // links measure real fore-aft offset plus the deck-height climb (the
@@ -105,30 +136,57 @@ export class ShipGraph {
     const measure = (l) => {
       const a = this.nodes[l.a], b = this.nodes[l.b];
       if (a.deck === b.deck) {
-        // spaces are ROOMS, not points (user note): the connection is a real
-        // doorway on the shared wall. Find where the center-to-center segment
-        // leaves rect A and enters rect B; the door sits between those, and
-        // the walk is measured through it. flipT is the fraction of the walk
-        // at which the mover passes the door — the moment it stops being in
-        // space A and starts being in space B.
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const L = Math.max(0.001, Math.hypot(dx, dy));
-        const ux = Math.abs(dx) / L, uy = Math.abs(dy) / L;
-        const exitA = Math.min(ux > 1e-6 ? (a.w / 2) / ux : Infinity, uy > 1e-6 ? (a.d / 2) / uy : Infinity);
-        const entryB = Math.min(ux > 1e-6 ? (b.w / 2) / ux : Infinity, uy > 1e-6 ? (b.d / 2) / uy : Infinity);
-        let doorDist = (exitA + (L - entryB)) / 2; // midpoint of the gap
-        if (exitA + entryB >= L) doorDist = L / 2;  // rects touch/overlap
-        doorDist = Math.min(L - 0.5, Math.max(0.5, doorDist));
-        l.door = { x: a.x + dx / L * doorDist, y: a.y + dy / L * doorDist };
-        // the doorway SPAN: where the walk leaves rect A and enters rect B —
-        // the walkable throat between the two footprints (3D layer collision)
-        const tA = Math.min(exitA, doorDist), tB = Math.max(L - entryB, doorDist);
-        l.doorA = { x: a.x + dx / L * tA, y: a.y + dy / L * tA };
-        l.doorB = { x: a.x + dx / L * tB, y: a.y + dy / L * tB };
-        const lenA = doorDist, lenB = L - doorDist;
-        l.flipT = lenA / (lenA + lenB);
-        l.horizM = Math.max(3, lenA + lenB);
-        l.vertM = 0;
+        // With the plan contiguous, most connections are an opening cut in a
+        // GENUINELY SHARED WALL: find the wall two flush rects share and put
+        // the door at the middle of the overlap. Only spaces that don't touch
+        // fall back to a short connector throat between their footprints.
+        const eps = 0.6, minOv = 1.4;
+        const xOv = Math.min(a.x + a.w / 2, b.x + b.w / 2) - Math.max(a.x - a.w / 2, b.x - b.w / 2);
+        const yOv = Math.min(a.y + a.d / 2, b.y + b.d / 2) - Math.max(a.y - a.d / 2, b.y - b.d / 2);
+        const yGap = Math.abs(a.y - b.y) - (a.d + b.d) / 2; // negative = overlapping
+        const xGap = Math.abs(a.x - b.x) - (a.w + b.w) / 2;
+        let door = null;
+        if (xOv >= minOv && Math.abs(yGap) < eps) {
+          // horizontal shared wall (rooms stacked in depth)
+          const wallY = a.y < b.y ? (a.y + a.d / 2 + b.y - b.d / 2) / 2 : (a.y - a.d / 2 + b.y + b.d / 2) / 2;
+          const cx = (Math.max(a.x - a.w / 2, b.x - b.w / 2) + Math.min(a.x + a.w / 2, b.x + b.w / 2)) / 2;
+          door = { x: cx, y: wallY };
+        } else if (yOv >= minOv && Math.abs(xGap) < eps) {
+          // vertical shared wall (rooms side by side)
+          const wallX = a.x < b.x ? (a.x + a.w / 2 + b.x - b.w / 2) / 2 : (a.x - a.w / 2 + b.x + b.w / 2) / 2;
+          const cy = (Math.max(a.y - a.d / 2, b.y - b.d / 2) + Math.min(a.y + a.d / 2, b.y + b.d / 2)) / 2;
+          door = { x: wallX, y: cy };
+        }
+        if (door) {
+          l.door = door;
+          l.doorA = { ...door };
+          l.doorB = { ...door };
+          l.shared = true; // a real opening, no throat needed
+          const lenA = Math.max(0.5, Math.hypot(a.x - door.x, a.y - door.y));
+          const lenB = Math.max(0.5, Math.hypot(b.x - door.x, b.y - door.y));
+          l.flipT = lenA / (lenA + lenB);
+          l.horizM = Math.max(2, lenA + lenB);
+          l.vertM = 0;
+        } else {
+          // no shared wall: a short throat spans the gap (as before)
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const L = Math.max(0.001, Math.hypot(dx, dy));
+          const ux = Math.abs(dx) / L, uy = Math.abs(dy) / L;
+          const exitA = Math.min(ux > 1e-6 ? (a.w / 2) / ux : Infinity, uy > 1e-6 ? (a.d / 2) / uy : Infinity);
+          const entryB = Math.min(ux > 1e-6 ? (b.w / 2) / ux : Infinity, uy > 1e-6 ? (b.d / 2) / uy : Infinity);
+          let doorDist = (exitA + (L - entryB)) / 2;
+          if (exitA + entryB >= L) doorDist = L / 2;
+          doorDist = Math.min(L - 0.5, Math.max(0.5, doorDist));
+          l.door = { x: a.x + dx / L * doorDist, y: a.y + dy / L * doorDist };
+          const tA = Math.min(exitA, doorDist), tB = Math.max(L - entryB, doorDist);
+          l.doorA = { x: a.x + dx / L * tA, y: a.y + dy / L * tA };
+          l.doorB = { x: a.x + dx / L * tB, y: a.y + dy / L * tB };
+          l.shared = false;
+          const lenA = doorDist, lenB = L - doorDist;
+          l.flipT = lenA / (lenA + lenB);
+          l.horizM = Math.max(3, lenA + lenB);
+          l.vertM = 0;
+        }
       } else {
         l.horizM = Math.max(2, Math.abs(a.x - b.x));
         l.vertM = Math.abs(a.deck - b.deck) * this.deckHeightM;

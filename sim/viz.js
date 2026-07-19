@@ -123,6 +123,20 @@ export class Viz {
       const band = g.deckBands[d - 1];
       ctx.fillStyle = this.deckFilter && this.deckFilter !== d ? '#0b0e12' : (d % 2 ? '#11151c' : '#0e1218');
       ctx.fillRect(0, band.y0, g.width, band.y1 - band.y0);
+      // the hull: everything between compartments is ship structure, not void
+      const deckNodes = g.nodes.filter((n) => n.deck === d);
+      if (deckNodes.length && (!this.deckFilter || this.deckFilter === d)) {
+        const x0 = Math.min(...deckNodes.map((n) => n.x - n.w / 2)) - 1.6;
+        const x1 = Math.max(...deckNodes.map((n) => n.x + n.w / 2)) + 1.6;
+        const yy0 = Math.min(...deckNodes.map((n) => n.y - n.d / 2)) - 1.6;
+        const yy1 = Math.max(...deckNodes.map((n) => n.y + n.d / 2)) + 1.6;
+        ctx.fillStyle = '#151b26';
+        ctx.strokeStyle = '#28324a';
+        ctx.lineWidth = this._lw(1.6);
+        ctx.beginPath();
+        ctx.roundRect(x0, yy0, x1 - x0, yy1 - yy0, 3);
+        ctx.fill(); ctx.stroke();
+      }
       ctx.fillStyle = '#3a4556';
       ctx.fillText(`DECK ${d}${d === 1 ? ' — COMMAND' : d === 5 ? ' — ENGINEERING' : ''}`, 3, band.y0 + 14 / this.s);
     }
@@ -131,42 +145,71 @@ export class Viz {
     ctx.fillText('► STERN', g.width - 60 / this.s, g.deckBands[0].y0 - 4 / this.s);
   }
 
+  // Connector throats for the few spaces that don't share a wall: drawn as
+  // small filled passages (walkable floor), UNDER the rooms
   _edges(g) {
     const { ctx } = this;
     for (const e of g.edges) {
       if (!this._visible(e.a) && !this._visible(e.b)) continue;
       const a = g.node(e.a), b = g.node(e.b);
-      ctx.strokeStyle = e.locked ? '#5a2626' : '#26313f';
-      ctx.lineWidth = e.type === 'blastdoor' ? this._lw(3) : this._lw(1.5);
-      ctx.setLineDash(e.type === 'lift' || e.type === 'ladder' ? [this._lw(3), this._lw(4)] : []);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      if (e.door) ctx.lineTo(e.door.x, e.door.y); // the walk goes THROUGH the doorway
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (a.deck !== b.deck || e.shared || !e.doorA) continue;
+      const dx = e.doorB.x - e.doorA.x, dy = e.doorB.y - e.doorA.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.1) continue;
+      ctx.save();
+      ctx.translate((e.doorA.x + e.doorB.x) / 2, (e.doorA.y + e.doorB.y) / 2);
+      ctx.rotate(Math.atan2(dy, dx));
+      ctx.fillStyle = '#1c2330';
+      ctx.strokeStyle = '#3a4a61';
+      ctx.lineWidth = this._lw(1);
+      ctx.fillRect(-len / 2 - 0.3, -0.9, len + 0.6, 1.8);
+      ctx.strokeRect(-len / 2 - 0.3, -0.9, len + 0.6, 1.8);
+      ctx.restore();
     }
   }
 
-  // locks, door pips and connection labels — drawn on TOP of the rooms
+  // DOORS (user note: a real plan, no abstract lines): every same-deck
+  // connection is an opening drawn on the actual shared wall — a light slot
+  // when open, glowing red when locked. Cross-deck lifts/ladders are round
+  // pads inside the rooms they serve, matching the 3D world.
   _edgeMarkers(g) {
     const { ctx } = this;
+    const DOOR_W = 1.7;
     for (const e of g.edges) {
       if (!this._visible(e.a) && !this._visible(e.b)) continue;
       const a = g.node(e.a), b = g.node(e.b);
-      const mx = e.door ? e.door.x : (a.x + b.x) / 2;
-      const my = e.door ? e.door.y : (a.y + b.y) / 2;
-      // the doorway itself: a real feature on the shared wall
-      if (e.door) {
-        const r = Math.max(0.5, this._lw(2));
-        ctx.fillStyle = e.locked ? '#c0392b' : '#4a5a72';
-        ctx.fillRect(mx - r, my - r, r * 2, r * 2);
-      } else if (e.locked) {
-        const r = this._lw(3);
-        ctx.fillStyle = '#c0392b';
-        ctx.fillRect(mx - r, my - r, r * 2, r * 2);
+      if (a.deck === b.deck && e.door) {
+        // orientation: slot lies ALONG the wall (perpendicular to a->b axis)
+        const horizWall = Math.abs(a.y - b.y) >= Math.abs(a.x - b.x);
+        const wl = DOOR_W / 2, wt = 0.55;
+        ctx.fillStyle = e.locked ? '#c0392b' : '#9fb4d4';
+        if (horizWall) ctx.fillRect(e.door.x - wl, e.door.y - wt / 2, DOOR_W, wt);
+        else ctx.fillRect(e.door.x - wt / 2, e.door.y - wl, wt, DOOR_W);
+        if (e.type === 'blastdoor') {
+          ctx.strokeStyle = e.locked ? '#ff8877' : '#5a708f';
+          ctx.lineWidth = this._lw(1.6);
+          if (horizWall) ctx.strokeRect(e.door.x - wl - 0.3, e.door.y - wt / 2 - 0.25, DOOR_W + 0.6, wt + 0.5);
+          else ctx.strokeRect(e.door.x - wt / 2 - 0.25, e.door.y - wl - 0.3, wt + 0.5, DOOR_W + 0.6);
+        }
+        if (this.overlays.conns) this._connLabel(e.door.x, e.door.y, e.label, e.locked ? '#e06a5a' : '#5a708f');
+      } else if (a.deck !== b.deck) {
+        // lift/ladder pads at both ends (same placement rule as the 3D world)
+        for (const [n, other] of [[a, b], [b, a]]) {
+          if (!this._visible(n.idx)) continue;
+          const px = Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x));
+          const lift = e.type === 'lift';
+          ctx.fillStyle = lift ? '#173a42' : '#3d3117';
+          ctx.strokeStyle = lift ? '#2fd7f0' : '#f0a52f';
+          ctx.lineWidth = this._lw(1.4);
+          ctx.beginPath(); ctx.arc(px, n.y, 1.05, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = lift ? '#7fe3f2' : '#f0c264';
+          ctx.font = this._font(9);
+          ctx.textAlign = 'center';
+          ctx.fillText(lift ? 'L' : 'K', px, n.y + this._lw(3));
+          ctx.textAlign = 'left';
+          if (this.overlays.conns) this._connLabel(px, n.y - 2, e.label, '#5a708f');
+        }
       }
-      if (this.overlays.conns) this._connLabel(mx, my, e.label, e.locked ? '#e06a5a' : '#5a708f');
     }
     for (const s of g.shafts) {
       if (!this._visible(s.a) && !this._visible(s.b)) continue;
@@ -256,7 +299,9 @@ export class Viz {
         ctx.fillStyle = 'rgba(20,20,30,0.45)';
         ctx.fillRect(x0, y0, n.w, n.d);
       }
-      if (this.overlays.labels) {
+      // labels: at far zoom only the big spaces are named (the fit view was
+      // a pile of overlapping text); zoom in and every room is labeled
+      if (this.overlays.labels && (this.s >= 2.4 || n.w >= 22)) {
         ctx.fillStyle = '#7e90aa';
         ctx.font = this._font(12);
         ctx.textAlign = 'center';
