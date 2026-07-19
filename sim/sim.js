@@ -66,6 +66,8 @@ export class Sim {
       hardness: new Float32Array(graph.n),
     };
     this._floodAt = new Float32Array(graph.n);
+    this._humanAt = new Uint16Array(graph.n);
+    this.floodHoldSec = new Float64Array(graph.n); // solo-occupancy clock (darkness)
     this.gunfireTick = new Int32Array(graph.n).fill(-9999);
     this.screamTick = new Int32Array(graph.n).fill(-9999);
     this.sweptAt = new Float64Array(graph.n).fill(-9999); // last time a marine cleared a room
@@ -273,6 +275,7 @@ export class Sim {
     this._advanceMovement(dt);
     this._separate(dt);
     this._refreshOccupancy();
+    this._advanceDarkness(dt);
     resolveCombat(this, dt);
 
     // scream noise from panic + grabs
@@ -397,6 +400,7 @@ export class Sim {
     const g = this.graph;
     this._occ = Array.from({ length: g.n }, () => []);
     this._floodAt.fill(0);
+    this._humanAt.fill(0);
     this._panicked.fill(0);
     for (const a of this.agents) {
       if (a.dead) continue;
@@ -404,6 +408,9 @@ export class Sim {
       this._occ[a.pnode].push(a);
       if (isActiveFloodForm(a) || (a.faction === FACTION.CARRIER && a.hp > 0)) {
         this._floodAt[a.pnode] += W_FLOOD[a.faction];
+      }
+      if (a.hp > 0 && !a.dead && (a.faction === FACTION.CIVILIAN || a.faction === FACTION.ARMED || a.faction === FACTION.MARINE)) {
+        this._humanAt[a.pnode]++;
       }
       if (a.panicked && a.hp > 0) this._panicked[a.pnode] = 1;
     }
@@ -784,6 +791,35 @@ export class Sim {
       }
     }
   }
+
+  // FLOOD DARKNESS (user rule): a room held by the flood ALONE accumulates
+  // hold time — 60 s kills the lights (overgrown fixtures), 120 s fills it
+  // with spore fog. Contested rooms hold their clock; rooms with no flood
+  // recover at double speed (the crew's systems fight back). Deterministic:
+  // a pure function of occupancy.
+  _advanceDarkness(dt) {
+    const D = this.P.darkness;
+    for (let n = 0; n < this.graph.n; n++) {
+      const was = this.floodHoldSec[n];
+      if (this._floodAt[n] > 0 && this._humanAt[n] === 0) {
+        this.floodHoldSec[n] = Math.min(D.maxHoldSec, was + dt);
+      } else if (this._floodAt[n] === 0 && this._humanAt[n] > 0) {
+        // humans holding the room WITHOUT flood beat the growth back
+        this.floodHoldSec[n] = Math.max(0, was - dt * 2);
+      } // empty or contested: the growth neither spreads nor dies
+      const now = this.floodHoldSec[n];
+      if (was < D.soloDarkSec && now >= D.soloDarkSec) {
+        this.log('hive', `the lights die in ${this.graph.node(n).name} — the growth has taken the room`, n);
+      } else if (was < D.fogSec && now >= D.fogSec) {
+        this.log('hive', `spore fog thickens in ${this.graph.node(n).name}`, n);
+      } else if (was >= D.soloDarkSec && now < D.soloDarkSec) {
+        this.log('radio', `power flickers back on in ${this.graph.node(n).name}`, n);
+      }
+    }
+  }
+
+  darkAt(node) { return this.floodHoldSec[node] >= this.P.darkness.soloDarkSec; }
+  fogAt(node) { return this.floodHoldSec[node] >= this.P.darkness.fogSec; }
 
   // GRENADES (game layer): a radial blast at a real point. Damage falls off
   // toward the edge, walls contain the burst (same physical room only), the

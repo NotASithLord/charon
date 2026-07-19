@@ -74,6 +74,23 @@ export class Agents3D {
     this.floodTracers.frustumCulled = false;
     scene.add(this.floodTracers);
     this.flash = makeInstanced(scene, new THREE.SphereGeometry(0.14, 6, 5), 0xfff2c8, 0xffdf8a, 3.0);
+    // FLASHLIGHT BEAMS (user rule): marines and armed crew fighting in a
+    // flood-darkened room sweep visible torch cones. Additive translucent
+    // cone, +X-forward like the carry rifle, one instance per light-bearer
+    // standing in a dark room.
+    {
+      const beamGeo = new THREE.ConeGeometry(0.55, 7, 10, 1, true);
+      beamGeo.rotateZ(Math.PI / 2);      // point the cone along +X
+      beamGeo.translate(3.5, 0, 0);      // apex at the carrier's hands
+      const beamMat = new THREE.MeshBasicMaterial({
+        color: 0xd8e8ff, transparent: true, opacity: 0.10,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      });
+      this.beams = new THREE.InstancedMesh(beamGeo, beamMat, CAP);
+      this.beams.count = 0;
+      this.beams.frustumCulled = false;
+      scene.add(this.beams);
+    }
     this.floodFlash = makeInstanced(scene, new THREE.SphereGeometry(0.13, 6, 5), 0xd8ffc0, 0x8fef5a, 3.0);
 
     this._m = new THREE.Matrix4();
@@ -156,7 +173,7 @@ export class Agents3D {
     const { sim, world } = this;
     const buf = sim.buffer;
     const k = Math.min(1, dt * 14);
-    const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0 };
+    const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
     let clip = 0, animT = 0, curId = 0;
     const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId);
 
@@ -222,6 +239,10 @@ export class Agents3D {
           stamp(this.armedSet, counts.armed++);
           this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
+          if (sim.darkAt(buf.nodeId[i])) {
+            this._rifleAt(wx, elev + 1.2, wz, heading);
+            this.beams.setMatrixAt(counts.beam++, this._m);
+          }
           break;
         }
         case FACTION.MARINE: {
@@ -229,6 +250,10 @@ export class Agents3D {
           stamp(this.marineSet, counts.marine++);
           this._rifleAt(wx, elev + 1.25, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
+          if (sim.darkAt(buf.nodeId[i])) {
+            this._rifleAt(wx, elev + 1.3, wz, heading);
+            this.beams.setMatrixAt(counts.beam++, this._m);
+          }
           break;
         }
         case FACTION.INFECTION: {
@@ -355,7 +380,8 @@ export class Agents3D {
       for (const mesh of set) { mesh.count = c; mesh.instanceMatrix.needsUpdate = true; }
     }
     for (const [mesh, c] of [[this.carrier, counts.carrier],
-    [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash]]) {
+    [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash],
+    [this.beams, counts.beam]]) {
       mesh.count = c;
       mesh.instanceMatrix.needsUpdate = true;
     }

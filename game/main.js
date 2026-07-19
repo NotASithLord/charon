@@ -30,9 +30,16 @@ const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 220);
 
 const hemi = new THREE.HemisphereLight(0x9fb2d0, 0x141821, 1.4);
 scene.add(hemi);
-scene.add(new THREE.AmbientLight(0x7d879e, 1.1));
+const ambient = new THREE.AmbientLight(0x7d879e, 1.1);
+scene.add(ambient);
 const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
 scene.add(lamp);
+// FLASHLIGHT (user rule): in flood-held darkness this is all you have. In
+// spore fog its throw clamps to a few meters instead of the whole room.
+const torch = new THREE.SpotLight(0xeaf2ff, 0, 30, 0.46, 0.45, 1.2);
+const torchTarget = new THREE.Object3D();
+scene.add(torch, torchTarget);
+torch.target = torchTarget;
 
 // --- boot: random ship every run unless a seed is pinned in the URL
 // (?seed=... for a reproducible one), starting flood kept light (20
@@ -496,7 +503,33 @@ function frame(now) {
   // seeded room lighting: your lamp follows the room fixture's state, so a
   // faulty compartment strobes around you and a dead one goes near-black
   world.updateLights(now * 0.001);
-  lamp.intensity = 15 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  world.updateDarkness(sim, player.agent.node, dtReal);
+  const inDark = sim.darkAt(player.agent.node);
+  const inFog = sim.fogAt(player.agent.node);
+  // FLOOD DARKNESS (user rule): inside a held room the world's light dies —
+  // your flashlight is all that works. Spore fog closes the flashlight's
+  // throw down to a few meters and stains the air green-brown.
+  const dimT = Math.min(1, dtReal * 3);
+  const ambTarget = inDark ? 0.03 : 1.1;
+  const hemiTarget = inDark ? 0.025 : 1.4;
+  ambient.intensity += (ambTarget - ambient.intensity) * dimT;
+  hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
+  lamp.intensity = inDark ? 0.4 : 15 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  torch.intensity += ((inDark ? 65 : 22) - torch.intensity) * dimT;
+  torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
+  {
+    const tp = player.cameraPose();
+    const tdir = new THREE.Vector3();
+    camera.getWorldDirection(tdir);
+    torch.position.set(tp.x, tp.y - 0.1, tp.z);
+    torchTarget.position.set(tp.x + tdir.x * 10, tp.y + tdir.y * 10, tp.z + tdir.z * 10);
+  }
+  // fog wall: global exponential-ish fog closes in inside a spore room
+  const fogTarget = inFog ? sim.P.darkness.fogViewM + 3 : inDark ? 34 : 60;
+  scene.fog.far += (fogTarget - scene.fog.far) * dimT;
+  scene.fog.near = inFog ? 1.5 : 18;
+  scene.fog.color.setHex(inFog ? 0x1c2410 : 0x05070a);
+  scene.background.setHex(inFog ? 0x151b0a : 0x05070a);
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
 

@@ -172,7 +172,12 @@ export function resolveCombat(sim, dt) {
         const gun = s.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
         s.nextShotAt = sim.t + 1 / gun.rof;
         const range = Math.hypot(best.x - s.x, best.y - s.y);
-        const acc = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
+        let acc = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
+        // FLOOD DARKNESS (user rule): humans fight the held rooms by
+        // flashlight — accuracy suffers, and spore fog stacks on top.
+        // The flood needs no light.
+        if (sim.darkAt(node)) acc *= P.darkness.darkAccMult;
+        if (sim.fogAt(node)) acc *= P.darkness.fogAccMult;
         if (sim.rng.chance(acc)) hurtFloodForm(sim, best, gun.dmg, false, s.id);
       }
       // stomp infection forms (they're fragile, §6.6) — but only the ones

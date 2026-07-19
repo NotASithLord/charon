@@ -186,6 +186,18 @@ export const PARAMS = {
     rifleFalloffM: 12,         // full NPC rifle effect inside this — beyond it, a dark
     rifleFarFactor: 0.5,       // ship and a sprinting target halve effective fire
   },
+  // FLOOD DARKNESS (user rule): a room the flood holds ALONE goes dark at
+  // 60 s (biomass overgrows the fixtures) and fills with spore fog at
+  // 120 s. Humans fight in it by flashlight — accuracy suffers, more in
+  // fog. If no flood is present the room recovers at double speed.
+  darkness: {
+    soloDarkSec: 60,
+    fogSec: 120,
+    maxHoldSec: 150,
+    darkAccMult: 0.75,   // flashlight fighting
+    fogAccMult: 0.8,     // stacked on top in spore fog (net ~0.6)
+    fogViewM: 8,         // how far the player's flashlight cuts into the fog
+  },
   marineDoctrine: {
     firstSweepDelaySec: 10,    // muster time before the crash sweep launches (§5.3)
     officers: 4,               // officer civilians who stay put in Officer Country

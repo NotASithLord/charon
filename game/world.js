@@ -55,6 +55,7 @@ export class World {
     // rooms never roll steady. Render-only randomness (own RNG stream).
     this._fxRng = new RNG(String(seed) + ':lights');
     this.roomLights = []; // per node idx: {mat, mode, phase, lvl}
+    this.darkVeils = [];  // per node idx: veil mesh (flood-held darkness)
     this.trunks = []; // vertical circulation, see _buildTrunks
     this.doors = [];  // sliding door panels, see _buildDoors
     this.doorEvents = []; // door open starts, drained by the game for audio
@@ -152,6 +153,23 @@ export class World {
       const sign = this._label(n.name);
       sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
       this.scene.add(sign);
+      (this.roomSigns ??= [])[n.idx] = sign;
+
+      // flood-darkness veil: fills the room volume; invisible until the sim
+      // says the flood has held the room long enough (updateDarkness)
+      {
+        const veil = new THREE.Mesh(
+          new THREE.BoxGeometry(n.w - 0.1, CLEAR_H - 0.08, n.d - 0.1),
+          new THREE.MeshBasicMaterial({
+            color: 0x000000, transparent: true, opacity: 0,
+            depthWrite: false, side: THREE.FrontSide,
+          }));
+        veil.position.set(wx, elev + CLEAR_H / 2, wz);
+        veil.visible = false;
+        veil.renderOrder = 5;
+        this.scene.add(veil);
+        this.darkVeils[n.idx] = veil;
+      }
 
       // ceiling light strip with a per-run seeded state
       {
@@ -480,6 +498,29 @@ export class World {
         L.lvl = s > -0.25 ? 0.55 + 0.45 * Math.abs(s) : 0.05;
       }
       L.mat.emissiveIntensity = 1.25 * L.lvl;
+    }
+  }
+
+  // drive the veils + room fixtures from the sim's darkness clocks. The
+  // player's own room is exempted from its veil (interior darkness is done
+  // with real lights by the game) — you see INTO held rooms as black murk.
+  updateDarkness(sim, playerNode, dt) {
+    for (let n = 0; n < sim.graph.n; n++) {
+      const veil = this.darkVeils[n];
+      if (!veil) continue;
+      const fog = sim.fogAt(n);
+      const target = n === playerNode ? 0 : sim.darkAt(n) ? (fog ? 0.96 : 0.88) : 0;
+      const m = veil.material;
+      m.opacity += (target - m.opacity) * Math.min(1, dt * 2.5);
+      veil.visible = m.opacity > 0.03;
+      // spore fog reads green-brown, plain darkness reads black
+      m.color.setHex(fog ? 0x18200c : 0x000000);
+      // an overgrown room's fixture dies with it — and its sign fades into
+      // the dark instead of glowing through the murk
+      const L = this.roomLights[n];
+      if (L && sim.darkAt(n)) { L.lvl = 0.02; L.mat.emissiveIntensity = 0.02; }
+      const sign = this.roomSigns?.[n];
+      if (sign) sign.material.opacity = sim.darkAt(n) ? 0.06 : 0.95;
     }
   }
 
