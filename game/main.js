@@ -40,10 +40,14 @@ agents.playerId = player.agent.id;
 // --- HUD ---
 const el = (id) => document.getElementById(id);
 const overlay = el('overlay');
+const ghostAlive = () => {
+  const gh = sim.playerConvertedTo ? sim.byId.get(sim.playerConvertedTo) : null;
+  return gh && !gh.dead && gh.damage < 100 ? gh : null;
+};
 overlay.addEventListener('click', () => {
-  if (player.dead) return; // no coming back from that
+  if (player.dead && !ghostAlive()) return; // no coming back from that
   overlay.classList.add('hidden');
-  canvas.requestPointerLock();
+  if (!player.dead) canvas.requestPointerLock();
 });
 let ended = false;
 function endScreen(title, text, final = true) {
@@ -89,6 +93,7 @@ resize();
 // --- main loop: fixed-step sim, per-frame player + render ---
 let acc = 0;
 let shownLost = false;
+let spectateShown = false;
 let last = performance.now();
 function frame(now) {
   const dtReal = Math.min(0.1, (now - last) / 1000);
@@ -106,27 +111,49 @@ function frame(now) {
 
   agents.update(dtReal);
 
-  const pose = player.cameraPose();
-  camera.position.set(pose.x, pose.y, pose.z);
-  camera.rotation.set(0, 0, 0);
-  camera.rotateY(pose.yaw);
-  camera.rotateX(pose.pitch);
-  lamp.position.set(pose.x, pose.y + 0.2, pose.z);
+  // camera: your own eyes — or, once taken, the eyes of what you became
+  // (you can see, but it is not you moving)
+  const ghost = player.dead ? ghostAlive() : null;
+  if (ghost) {
+    const [gx, gz] = world.simToWorld(ghost.x, ghost.y, ghost.deck);
+    const gy = elevOf(ghost.deck) + (ghost.downed ? 0.45 : 1.5);
+    camera.position.set(gx, gy, gz);
+    camera.rotation.set(0, 0, 0);
+    camera.rotateY(Math.atan2(-Math.cos(ghost.heading), -Math.sin(ghost.heading)));
+    lamp.position.set(gx, gy + 0.2, gz);
+  } else {
+    const pose = player.cameraPose();
+    camera.position.set(pose.x, pose.y, pose.z);
+    camera.rotation.set(0, 0, 0);
+    camera.rotateY(pose.yaw);
+    camera.rotateX(pose.pitch);
+    lamp.position.set(pose.x, pose.y + 0.2, pose.z);
+  }
 
   // HUD
   el('clock').textContent = fmtTime(sim.t);
-  const room = sim.graph.node(player.agent.node);
+  const povAgent = ghost ?? player.agent;
+  const room = sim.graph.node(povAgent.node);
   el('room').textContent = room ? room.name : '—';
-  el('deckLabel').textContent = `DECK ${player.deck}`;
-  const hp = Math.max(0, Math.ceil(player.agent.hp));
+  el('deckLabel').textContent = `DECK ${povAgent.deck}`;
+  const hp = Math.max(0, Math.ceil(povAgent.hp));
   const hpEl = el('hp');
-  hpEl.textContent = `HP ${hp}`;
-  hpEl.classList.toggle('low', hp <= 8);
+  hpEl.textContent = ghost ? `IT ${hp}` : `HP ${hp}`;
+  hpEl.classList.toggle('low', hp <= 8 || !!ghost);
   el('pinned').style.display = player.pinned && !player.dead ? 'block' : 'none';
   renderLog();
 
-  if (player.dead) {
-    endScreen('YOU WERE TAKEN', 'The ship fights on without you. The last thing you hear is the hive, singing.');
+  if (player.dead && ghost) {
+    if (!spectateShown) {
+      spectateShown = true;
+      endScreen('YOU WERE TAKEN',
+        'It is wearing you now. You can see — but it is not you moving. What you are will fight for the hive until it is put down; it will never be allowed to root.', false);
+    }
+  } else if (player.dead) {
+    endScreen(sim.playerConvertedTo ? 'PUT DOWN' : 'YOU DIED',
+      sim.playerConvertedTo
+        ? 'What was left of you is finally still.'
+        : 'The ship fights on without you. The last thing you hear is the hive, singing.');
   } else if (sim.outcome === 'contained') {
     endScreen('OUTBREAK CONTAINED', 'The marines burned it out. The Charon survives.');
   } else if (!ended && !shownLost && sim.tickCount % 30 === 0) {

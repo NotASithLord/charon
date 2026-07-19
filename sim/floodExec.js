@@ -191,7 +191,8 @@ export function updateFloodTick(sim, dt) {
         // a combat form roots itself into a carrier (user economy: carriers
         // are converted combat forms, and the hive picks the ratio). Do it in
         // place — the hive only assigns this to a form already in a safe den.
-        if (a.faction !== FACTION.COMBAT || a.downed) { a.task = null; break; }
+        // A form raised from the PLAYER never becomes a carrier (game rule).
+        if (a.faction !== FACTION.COMBAT || a.downed || a.fromPlayer) { a.task = null; break; }
         if (a.move) break;
         a.taskProgress += dt;
         if (a.taskProgress >= sim.P.carrier.transformSec) {
@@ -381,6 +382,12 @@ function convertHuman(sim, form, target) {
   target.dead = true;
   const cf = spawnCombatForm(sim, target.node);
   cf.hostArmed = target.faction === FACTION.ARMED || target.faction === FACTION.MARINE;
+  if (target.isPlayer) {
+    // the player lives on inside the thing that took them: spectate-only POV
+    // (game rule), and a player form NEVER roots into a carrier
+    cf.fromPlayer = true;
+    sim.playerConvertedTo = cf.id;
+  }
   sim.removeAgent(form); // 1 infection form spent on a living host (§6.6)
   sim.stats.conversions++; sim.stats.conversionsRound++;
   sim.stats.humansConverted++;

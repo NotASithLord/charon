@@ -348,6 +348,10 @@ export class Hive {
       // a form staged for a muster holds its ground — the gathering point is
       // deliberately near the target, and evade would bleed the muster dry
       if (f.task?.kind === TASK.GUARD && f.task.muster !== undefined) continue;
+      // a form LATCHED ONTO a victim finishes or dies — evade was yanking it
+      // off every round, the reflex re-grabbed instantly, and the 7s
+      // conversion timer restarted forever (victim pinned, never taken)
+      if (f.state === STATE.GRABBING) continue;
       const threat = this.localThreat(f.node);
       const own = sim.influence.floodStr[f.node];
       if (threat > Math.max(own, 0.8)) {
@@ -519,7 +523,8 @@ export class Hive {
       if (carriersNow + transforming >= wantCarriers) break;
       if (this.localThreat(den) >= 0.6) continue;
       if (sim.agents.some((a) => !a.dead && a.faction === FACTION.CARRIER && a.node === den)) continue;
-      const cf = combat.find((c) => c.node === den && !c.move && (!c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.DRAG));
+      const cf = combat.find((c) => c.node === den && !c.move && !c.fromPlayer
+        && (!c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.DRAG));
       if (cf) { this.assign(cf, { kind: TASK.TRANSFORM }); transforming++; }
     }
     // and keep the military up: an infection form sitting on a den body turns
@@ -584,11 +589,16 @@ export class Hive {
     // REPRODUCTION IS THE FIRST INSTINCT (user note): with no carriers the
     // hive roots one NOW, whatever else is happening — production precedes
     // defense, hunting, everything.
-    const wantK = Math.min(4, 2 + Math.floor((I + C) / 22));
+    // MAX BREEDING while a muster is banned for lack of numbers (user rule):
+    // the hive wants more carriers than usual until the force catches up
+    let wantK = Math.min(4, 2 + Math.floor((I + C) / 22));
+    if (sim.t < (this._breedUntil ?? 0)) wantK = Math.min(6, wantK + 2);
     if (K < wantK && (C > K || K === 0)) {
       const target = this.bestCarrierNode();
       if (target !== -1) {
-        const spares = combat.filter((c) => !c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.ATTACK);
+        // a form raised from the PLAYER never roots into a carrier (game rule)
+        const spares = combat.filter((c) => !c.fromPlayer
+          && (!c.task || c.task.kind === TASK.GUARD || c.task.kind === TASK.ATTACK));
         const c = this.nearest(spares, target, ['std', 'shaft'], this.bigPass);
         if (c) {
           if (c.node === target && !c.move && this.localThreat(target) < 0.5) this.assign(c, { kind: TASK.TRANSFORM });
@@ -618,7 +628,7 @@ export class Hive {
         // last survivor wandering for a quarter hour instead of seeding
         c.desperateSince ??= sim.t;
         const overdue = sim.t - c.desperateSince > 30;
-        if ((this.localThreat(c.node) < 0.9 || overdue) && !c.move) {
+        if ((this.localThreat(c.node) < 0.9 || overdue) && !c.move && !c.fromPlayer) {
           this.assign(c, { kind: TASK.TRANSFORM });
         } else {
           const quiet = this.quietNodeNear(c.node, 'big');
@@ -660,7 +670,8 @@ export class Hive {
       if (f.task?.seed) continue; // carrier-seed detail is off-limits to the draft
       const target = this.nearestBelievedHuman(f.node);
       if (target === -1) continue;
-      if ((this._musterBan?.get(target) ?? 0) > sim.t) continue; // given up on it for now
+      const ban = this._musterBan?.get(target);
+      if (ban && sim.t < ban.until && combat.length < ban.needed) continue; // breeding until the numbers exist
       const defense = this.believedHumanStr[target] + this.believedHardness[target];
       if (defense > 0.8) {
         // a defended position is NEVER attacked piecemeal: every form stages
@@ -708,15 +719,26 @@ export class Hive {
           sim.log('rampage', `the muster is up — ${forms.length} forms storm ${g.node(target).name} together`);
           continue;
         }
-        // a muster that CANNOT fill — every form the hive owns still short of
-        // the wave — disbands and goes back to breeding. Standing outside the
-        // line forever while production is dead was a stalemate, not patience.
+        // NUMBERS FIRST (user rule): if every combat form the hive owns
+        // still couldn't meet the ratio, waiting is pointless — disband NOW
+        // and go max-breeding until the numbers exist. The flood's advantage
+        // IS numbers; a muster it can't fill is forms not making more forms.
+        if (combat.length < needed) {
+          this._musterStart.delete(target);
+          this._musterBan.set(target, { until: sim.t + 300, needed });
+          this._breedUntil = sim.t + 300;
+          for (const f of forms) f.task = null;
+          sim.log('hive', `the hive cannot make the numbers for ${g.node(target).name} — everything turns to breeding`);
+          continue;
+        }
+        // force exists but is tied up elsewhere: give recruitment a couple of
+        // minutes, then release this muster too
         if (!this._musterStart.has(target)) this._musterStart.set(target, sim.t);
         const spareCount = combat.filter((c) => !c.task
           || (c.task.kind === TASK.GUARD && c.task.muster === undefined && !c.task.seed)).length;
         if (sim.t - this._musterStart.get(target) > 120 && forms.length + spareCount < needed) {
           this._musterStart.delete(target);
-          this._musterBan.set(target, sim.t + 180);
+          this._musterBan.set(target, { until: sim.t + 180, needed });
           for (const f of forms) f.task = null;
           sim.log('hive', `the hive breaks off the muster at ${g.node(target).name} — not enough mass; it turns back to breeding`);
           continue;
@@ -887,6 +909,14 @@ export class Hive {
     const g = this.sim.graph;
     const carrierNodes = this.sim.agents
       .filter((a) => !a.dead && a.faction === FACTION.CARRIER).map((a) => a.node);
+    // bodies per node (+ spillover to neighbors): a carrier rooted on food
+    // means every minted form converts within seconds of being born
+    const bodyAt = new Float32Array(g.n);
+    for (const b of this.sim.agents) {
+      if (b.dead || b.faction !== FACTION.CORPSE || b.damage >= 100) continue;
+      bodyAt[b.node] += 1;
+      for (const { to } of g.neighbors(b.node, ['std'], () => true)) bodyAt[to] += 0.3;
+    }
     let best = -1, bestScore = 0.2; // need a genuinely good spot
     for (const n of g.nodes) {
       const idx = n.idx;
@@ -894,6 +924,10 @@ export class Hive {
       if (this.localThreat(idx) > 0.4) continue;
       if (this.exitCount(idx) < 2) continue;
       let score = this.sim.influence.floodStr[idx] * 0.6;   // near our own forms
+      // ROOT WHERE THE BODIES ARE (user rule) — but never in a spot cut off
+      // from the swarm: an isolated carrier is a free kill
+      score += Math.min(bodyAt[idx], 8) * 0.35;
+      if (this.sim.influence.floodStr[idx] < 0.05) score -= 1.2; // known isolation
       if (n.roles.includes('maintenance') || n.roles.includes('cargo') || n.roles.includes('corpse_cache')) score += 1;
       if (n.type === 'corridor' || n.type === 'open') score -= 1.5;
       score -= this.trafficPenalty(idx) * 0.5;
