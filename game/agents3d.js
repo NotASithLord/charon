@@ -267,7 +267,10 @@ export class Agents3D {
       const rp = this.rpos.get(id);
       const deck = rp.deck;
       const [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
-      const elev = elevOf(deck);
+      // feet on the ground surface — in a stairwell room that follows the
+      // mezzanine/ramp/hall, so bodies walk the stairs instead of floating
+      // at one deck level (user: navigable stairwell room)
+      const elev = world.groundHeightAt(deck, wx, wz);
       const heading = -buf.headingR[i];
 
       if (f === FACTION.CORPSE) {

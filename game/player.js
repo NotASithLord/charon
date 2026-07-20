@@ -142,15 +142,19 @@ export class Player {
       // --- integrate horizontal with wall slide ---
       this._move(this.vx * dt, this.vz * dt);
 
-      // --- integrate vertical: floor only (falling through an open hatch
-      // is not a traversal method here — climbing is explicit, via W) ---
-      let footY = elevOf(this.deck) + this.h + this.vy * dt;
-      this.h = footY - elevOf(this.deck);
-      if (this.h <= 0) { this.h = 0; this.vy = 0; this.onGround = true; }
+      // --- vertical: feet rest on the ground surface, which in a stairwell
+      // room follows the mezzanine / ramp / hall (user: walk the stairs) ---
+      const base = elevOf(this.deck);
+      const groundY = this.world.groundHeightAt(this.deck, this.x, this.z);
+      let footY = base + this.h + this.vy * dt;
+      if (footY <= groundY) { footY = groundY; this.vy = 0; this.onGround = true; }
       else this.onGround = false;
-      if (this.h > CLEAR_H - 1.85) { this.h = CLEAR_H - 1.85; this.vy = Math.min(0, this.vy); }
+      this.h = footY - base;
+      const ceilH = this.world.ceilHeightAt(this.deck, this.x, this.z);
+      if (this.h > ceilH - 1.85) { this.h = ceilH - 1.85; this.vy = Math.min(0, this.vy); }
     }
 
+    this._stairPortal();
     this._syncAgent();
   }
 
@@ -192,6 +196,41 @@ export class Player {
     const e = this.queuedTrunk?.edge;
     if (e && e.reservedBy === this.agent.id) e.reservedBy = undefined;
     this.queuedTrunk = null;
+  }
+
+  // GRAND STAIRWELL walk-through (user: navigate it normally, no L). The
+  // stairwell room is on the lower deck; its mezzanine sits at the UPPER
+  // deck's floor level and flows into the corridor there. Crossing the fore
+  // edge flips the player between the corridor (deck above) and the mezzanine
+  // (stairwell deck) with world height preserved — a seamless step. Direction
+  // (vx sign) gives hysteresis so it doesn't oscillate on the boundary.
+  _stairPortal() {
+    if (this.climb) return;
+    const w = this.world;
+    for (const g of (w.stairRooms ?? [])) {
+      const inZ = this.z >= g.cz - g.hz && this.z <= g.cz + g.hz;
+      if (!inZ) continue;
+      if (this.deck === g.deck - 1) {
+        // on the corridor above: stepping aft into the footprint drops onto
+        // the mezzanine (same world Y = the deck-above floor). Nudge well
+        // inside so we clear the return threshold (no boundary oscillation).
+        if (this.x >= g.cx - g.hx && this.x <= g.cx + g.hx) {
+          this.deck = g.deck;
+          this.x = g.cx - g.hx + 0.9;
+          this.h = g.hiElev - elevOf(g.deck);   // one deck up from the low floor
+          this.vy = 0; this.onGround = true;
+        }
+      } else if (this.deck === g.deck) {
+        // in the stairwell on the mezzanine: stepping fore off the front edge
+        // (and actually moving fore) returns to the corridor floor above
+        const onMezz = Math.abs(elevOf(g.deck) + this.h - g.hiElev) < 0.6;
+        if (onMezz && this.x <= g.cx - g.hx + 0.4 && this.vx < -0.03) {
+          this.deck = g.deck - 1;
+          this.x = g.cx - g.hx - 0.9;            // nudge onto the corridor floor
+          this.h = 0; this.vy = 0; this.onGround = true;
+        }
+      }
+    }
   }
 
   _stepClimb(dt) {

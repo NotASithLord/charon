@@ -120,6 +120,8 @@ export class World {
     this._matWall = new THREE.MeshStandardMaterial({ map: wallTexBase, color: 0xaebdd8, roughness: 0.7, metalness: 0.5 });
     const matWall = this._matWall;
     const matCeil = new THREE.MeshStandardMaterial({ color: 0x141a26, emissive: 0x2a3a58, emissiveIntensity: 0.35, roughness: 1, side: THREE.DoubleSide });
+    this._matCeil = matCeil;
+    this._mkFloorMat = mkFloorMat; // reused by _buildStairRoom (separate method)
 
     // ---- vertical circulation first (its hatches cut the decks) ----
     this._buildTrunks();
@@ -129,9 +131,20 @@ export class World {
     const ceilHoles = new Map();  // nodeIdx -> holes in its CEILING
     for (const t of this.trunks) {
       if (!t.vertical) continue;
-      const hole = t.stair ? { x: t.stair.holeX, z: t.stair.holeZ, hw: t.stair.hw, hd: t.stair.hd } : { x: t.x, z: t.z };
+      const hole = { x: t.x, z: t.z };
       (floorHoles.get(t.upperNode) ?? floorHoles.set(t.upperNode, []).get(t.upperNode)).push(hole);
       (ceilHoles.get(t.lowerNode) ?? ceilHoles.set(t.lowerNode, []).get(t.lowerNode)).push(hole);
+    }
+    // a grand stairwell opens up through the corridor above it: cut the whole
+    // stairwell footprint out of the upper room's floor (its own tall room is
+    // rendered by _buildStairRoom). The corridor's own floor survives outside
+    // the footprint fore/aft, so it still reads as the corridor opening onto
+    // the stairwell hall.
+    for (const s of g.stairwells) {
+      const lo = g.node(s.lower); // the stairwell room (deck below)
+      const [cx, cz] = this.simToWorld(lo.x, lo.y, lo.deck);
+      (floorHoles.get(s.upper) ?? floorHoles.set(s.upper, []).get(s.upper))
+        .push({ x: cx, z: cz, hw: lo.w / 2, hd: lo.d / 2 });
     }
 
     for (const n of g.nodes) {
@@ -140,22 +153,26 @@ export class World {
       const isBreach = n.idx === g.breachNode;
       const tint = isBreach ? 0xff8866 : g.unpowered[n.idx] ? 0x4a5261 : (n.type === 'corridor' ? 0xbccbe4 : 0x9daabf);
       const fmat = mkFloorMat(n.w, n.d, tint);
+      // GRAND STAIRWELL room: its own two-storey geometry (mezzanine + ramp +
+      // hall) instead of a flat floor + single-height walls.
+      const isStair = n.roles.includes('stairwell');
+      if (isStair) this._buildStairRoom(n);
 
       // floor + ceiling with hatch holes where shafts pierce them
       const fh = floorHoles.get(n.idx) ?? [];
-      for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, fh)) {
+      if (!isStair) for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, fh)) {
         const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.12, b1 - b0), fmat);
         slab.position.set((a0 + a1) / 2, elev - 0.06, (b0 + b1) / 2);
         this.scene.add(slab);
       }
       const ch = ceilHoles.get(n.idx) ?? [];
-      for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
+      if (!isStair) for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
         const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.1, b1 - b0), matCeil);
         slab.position.set((a0 + a1) / 2, elev + CLEAR_H, (b0 + b1) / 2);
         this.scene.add(slab);
       }
       const sign = this._label(n.name);
-      sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
+      sign.position.set(wx, elev + (isStair ? DECK_H + CLEAR_H : CLEAR_H) - 0.45, wz);
       this.scene.add(sign);
       (this.roomSigns ??= [])[n.idx] = sign;
 
@@ -192,9 +209,10 @@ export class World {
         this.roomLights[n.idx] = { mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1 };
       }
 
-      // walls with door openings, inset half a thickness (no z-fighting)
+      // walls with door openings, inset half a thickness (no z-fighting).
+      // stair rooms build their own two-storey walls in _buildStairRoom.
       const sides = { N: [], S: [], W: [], E: [] };
-      for (const e of g.edges) {
+      if (!isStair) for (const e of g.edges) {
         if (!e.door) continue;
         if (e.a !== n.idx && e.b !== n.idx) continue;
         const other = g.node(e.a === n.idx ? e.b : e.a);
@@ -324,10 +342,10 @@ export class World {
       const oz1 = Math.min(uaz + upper.d / 2, lbz + lower.d / 2) - 1.1;
       const vertical = ox1 - ox0 >= 0.2 && oz1 - oz0 >= 0.2;
       const lift = e.type === 'lift';
-      if (e.type === 'stairwell' && vertical) {
-        this._buildStairwell(e, upper, lower, ox0, ox1, oz0, oz1);
-        continue;
-      }
+      // the grand stairwell is a walkable ramp between the room and the deck
+      // above (handled by _buildStairRoom on the room itself) — no trunk, so
+      // no ladder/queue and no NPC pile-up on a single pad.
+      if (e.type === 'stairwell') continue;
       if (vertical) {
         const [x, z] = pickSpot(ox0, ox1, oz0, oz1,
           [...doorPts(lower.idx, lower.deck), ...doorPts(upper.idx, upper.deck)],
@@ -402,82 +420,131 @@ export class World {
     }
   }
 
-  // GRAND STAIRWELL (user: Pillar-of-Autumn style) — a two-storey open volume
-  // between an upper catwalk and the room below. A straight run of steps
-  // descends fore-aft down the overlap column; the upper floor is cut open
-  // above it (big hole) with a railing, so you can stand on the catwalk and
-  // fire down onto the stairs. Traversal reuses a vertical trunk (L to climb).
-  _buildStairwell(e, upper, lower, ox0, ox1, oz0, oz1) {
-    const lowElev = elevOf(lower.deck), highElev = elevOf(upper.deck);
-    const rise = highElev - lowElev;              // one deck (~4.2 m)
-    const wZ = Math.min(3.0, oz1 - oz0);          // athwartships width (the narrow axis)
-    const cz = (oz0 + oz1) / 2;
-    const runLen = Math.min(9, ox1 - ox0 - 0.5);  // fore-aft length of the flight
-    // put the flight toward the fore end of the overlap, landing pad at top
-    const x1 = ox1 - 0.5;                          // bottom of the stairs (aft-most)
-    const x0 = x1 - runLen;                        // top of the stairs (fore)
-    const steps = Math.max(6, Math.round(rise / 0.28));
-    const stepRun = runLen / steps, stepRise = rise / steps;
+  // GRAND STAIRWELL (user: its own huge two-storey room, walked not climbed).
+  // Geometry of the ramp, shared by the renderer, the player's floor collider
+  // and the agent renderer. Fore end is a mezzanine at the DECK ABOVE's floor
+  // level (meets the corridor there); a full-width flight descends aft to the
+  // hall floor, which opens onto the hangar. `_stairGeom` is a pure function
+  // of the room rect so everything agrees on where the steps are.
+  _stairGeom(n) {
+    const [cx, cz] = this.simToWorld(n.x, n.y, n.deck);
+    const hx = n.w / 2, hz = n.d / 2;
+    const loElev = elevOf(n.deck), hiElev = elevOf(n.deck - 1);
+    const x0 = cx - hx;                       // fore wall (mezzanine end)
+    const mezLen = Math.min(8, n.w * 0.26);
+    const rampLen = Math.min(16, n.w * 0.45);
+    const mezEnd = x0 + mezLen, rampEnd = mezEnd + rampLen;
+    return { cx, cz, hx, hz, loElev, hiElev, x0, mezEnd, rampEnd, xEnd: cx + hx };
+  }
+
+  // floor elevation under a world point — normally the deck floor, but inside
+  // a stairwell room it follows the mezzanine / ramp / hall (user: walk it).
+  groundHeightAt(deck, wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (g.deck !== deck) continue;
+      if (wx < g.cx - g.hx || wx > g.cx + g.hx || wz < g.cz - g.hz || wz > g.cz + g.hz) continue;
+      if (wx <= g.mezEnd) return g.hiElev;
+      if (wx >= g.rampEnd) return g.loElev;
+      return g.hiElev - (g.hiElev - g.loElev) * (wx - g.mezEnd) / (g.rampEnd - g.mezEnd);
+    }
+    return elevOf(deck);
+  }
+
+  // clear height (floor to ceiling) at a point — two storeys in a stairwell.
+  ceilHeightAt(deck, wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (g.deck !== deck) continue;
+      if (wx < g.cx - g.hx || wx > g.cx + g.hx || wz < g.cz - g.hz || wz > g.cz + g.hz) continue;
+      return DECK_H + CLEAR_H;
+    }
+    return CLEAR_H;
+  }
+
+  // the stairwell room whose footprint contains this world point (any deck).
+  stairRoomAt(wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (wx >= g.cx - g.hx && wx <= g.cx + g.hx && wz >= g.cz - g.hz && wz <= g.cz + g.hz) return g;
+    }
+    return null;
+  }
+
+  // is this world point on a stairwell room's raised mezzanine (deck-above
+  // floor level)? — used for the corridor<->stairwell walk-through portal.
+  stairMezzanineAt(deck, wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (g.deck !== deck) continue;
+      if (wx >= g.cx - g.hx && wx <= g.mezEnd && wz >= g.cz - g.hz && wz <= g.cz + g.hz) return g;
+    }
+    return null;
+  }
+
+  _buildStairRoom(n) {
+    const g = this._stairGeom(n);
+    (this.stairRooms ??= []).push({ deck: n.deck, node: n.idx, ...g });
+    const { cx, cz, hx, hz, loElev, hiElev, x0, mezEnd, rampEnd, xEnd } = g;
+    const topH = hiElev + CLEAR_H;                 // two storeys of clear height
     const matStep = new THREE.MeshStandardMaterial({ color: 0x6c7789, roughness: 0.75, metalness: 0.4 });
-    const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.5, metalness: 0.7 });
-    // steps: from the bottom (lower floor, x1) climbing fore to the top
+    const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.45, metalness: 0.7 });
+    const fmat = this._mkFloorMat(n.w, n.d, 0x93a1b8);
+    // mezzanine platform (fore, deck-above level)
+    const mez = new THREE.Mesh(new THREE.BoxGeometry(mezEnd - x0, 0.16, hz * 2), fmat);
+    mez.position.set((x0 + mezEnd) / 2, hiElev - 0.08, cz);
+    this.scene.add(mez);
+    // main hall floor (aft, hangar level)
+    const flr = new THREE.Mesh(new THREE.BoxGeometry(xEnd - rampEnd, 0.16, hz * 2), fmat);
+    flr.position.set((rampEnd + xEnd) / 2, loElev - 0.08, cz);
+    this.scene.add(flr);
+    // the flight of steps, full width
+    const rise = hiElev - loElev, runLen = rampEnd - mezEnd;
+    const steps = Math.max(8, Math.round(rise / 0.26));
+    const stepRun = runLen / steps, stepRise = rise / steps;
     for (let i = 0; i < steps; i++) {
-      const sx = x1 - (i + 0.5) * stepRun;
-      const sy = lowElev + (i + 0.5) * stepRise;
-      const tread = new THREE.Mesh(new THREE.BoxGeometry(stepRun + 0.02, 0.14, wZ), matStep);
+      const sx = mezEnd + (i + 0.5) * stepRun;
+      const sy = hiElev - (i + 0.5) * stepRise;
+      const tread = new THREE.Mesh(new THREE.BoxGeometry(stepRun + 0.03, 0.14, hz * 2), matStep);
       tread.position.set(sx, sy, cz);
       this.scene.add(tread);
-      // riser face
-      const riser = new THREE.Mesh(new THREE.BoxGeometry(0.06, stepRise, wZ), matStep);
-      riser.position.set(sx + stepRun / 2, sy - stepRise / 2 + 0.07, cz);
+      const riser = new THREE.Mesh(new THREE.BoxGeometry(0.06, stepRise, hz * 2), matStep);
+      riser.position.set(sx - stepRun / 2, sy - stepRise / 2 + 0.07, cz);
       this.scene.add(riser);
     }
-    // side stringers (solid — also stops bodies falling off the sides)
-    for (const zz of [cz - wZ / 2 - 0.05, cz + wZ / 2 + 0.05]) {
-      const str = new THREE.Mesh(new THREE.BoxGeometry(runLen, 0.5, 0.1), matStep);
-      str.position.set((x0 + x1) / 2, lowElev + rise / 2, zz);
-      str.rotation.z = Math.atan2(rise, runLen);
-      this.scene.add(str);
-      this.wallMeshes.push(str);
+    // mezzanine safety rails along the two athwartships sides of the platform
+    for (const zz of [cz - hz + 0.2, cz + hz - 0.2]) {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(mezEnd - x0, 0.07, 0.07), matRail);
+      r.position.set((x0 + mezEnd) / 2, hiElev + 1.0, zz);
+      this.scene.add(r); this.wallMeshes.push(r);
     }
-    // upper catwalk railing around the opening (fore edge + the two sides),
-    // aft edge left open so you walk off the catwalk onto the top step
-    const railH = 1.0;
-    const post = (px, pz) => {
-      const p = new THREE.Mesh(new THREE.BoxGeometry(0.08, railH, 0.08), matRail);
-      p.position.set(px, highElev + railH / 2, pz);
-      this.scene.add(p);
+    // perimeter walls, two storeys tall (skip the fore wall over the mezzanine
+    // doorway to the corridor, and leave the aft wall for the hangar hatch —
+    // both handled by the normal door builder on those edges)
+    const matWall = this._matWall ?? matStep;
+    const H = topH - loElev;
+    const wallBox = (px, pz, w, d) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, H, d), matWall);
+      m.position.set(px, loElev + H / 2, pz);
+      this.scene.add(m); this.wallMeshes.push(m);
     };
-    const rail = (px, pz, len, horiz) => {
-      const r = new THREE.Mesh(horiz
-        ? new THREE.BoxGeometry(len, 0.06, 0.06) : new THREE.BoxGeometry(0.06, 0.06, len), matRail);
-      r.position.set(px, highElev + railH, pz);
-      this.scene.add(r);
-      this.wallMeshes.push(r);
-    };
-    const oHw = runLen / 2 + 0.3, oHd = wZ / 2 + 0.3, ocx = (x0 + x1) / 2;
-    for (const pz of [cz - oHd, cz + oHd]) {           // the two long sides
-      rail(ocx, pz, runLen + 0.6, true);
-      post(x0 - 0.3, pz); post(x1 + 0.3, pz);
+    wallBox(cx, cz - hz, hx * 2, WALL_T);    // port side (tall)
+    wallBox(cx, cz + hz, hx * 2, WALL_T);    // stbd side (tall)
+    // aft wall (shared with the hangar) — tall, with a doorway gap at the
+    // grandStair<->hangar hatch so you can walk out onto the hangar deck
+    const hatch = this.graph.edges.find((e) => (e.a === n.idx || e.b === n.idx) && e.door
+      && this.graph.node(e.a === n.idx ? e.b : e.a).deck === n.deck);
+    let gapZ = null;
+    if (hatch) { const [, dz] = this.simToWorld(hatch.door.x, hatch.door.y, n.deck); gapZ = dz; }
+    if (gapZ === null) { wallBox(cx + hx, cz, WALL_T, hz * 2); }
+    else {
+      for (const [a, b] of [[cz - hz, gapZ - DOOR_W / 2], [gapZ + DOOR_W / 2, cz + hz]]) {
+        if (b - a > 0.1) { const seg = new THREE.Mesh(new THREE.BoxGeometry(WALL_T, H, b - a), matWall);
+          seg.position.set(cx + hx, loElev + H / 2, (a + b) / 2); this.scene.add(seg); this.wallMeshes.push(seg); }
+      }
     }
-    rail(x0 - 0.3, cz, wZ + 0.6, false);               // fore end rail
-    // trunk record: the climb PAD sits on solid floor at the top landing (a
-    // little fore of the opening), so the player can reach it to press L; the
-    // big floor hole is cut at its own centre (holeX/holeZ + hw/hd).
-    const landX = x0 - 0.9;
-    this.trunks.push({
-      vertical: true, kind: 'stairwell', edge: e, x: landX, z: cz,
-      lowerDeck: lower.deck, upperDeck: upper.deck,
-      lowerNode: lower.idx, upperNode: upper.idx,
-      lowElev, highElev, stair: { holeX: ocx, holeZ: cz, hw: oHw, hd: oHd },
-    });
-    // block the OPENING for walking on the upper deck (so you don't stroll
-    // out onto thin air) — cross it by the stairs/L at the landing. Sim
-    // coords: world z -> sim y adds the deck band centre.
-    this.props.push({
-      deck: upper.deck, x: ocx, y: cz + this.bandCenter(upper.deck),
-      hw: oHw - 0.2, hd: oHd - 0.2,
-    });
+    // the FORE wall is left open: the mezzanine flows up into the mid corridor
+    // (deck above) — that's the walk-through the player and NPCs use.
+    // ceiling at the top storey
+    const ceil = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, 0.12, hz * 2), this._matCeil);
+    ceil.position.set(cx, topH, cz);
+    this.scene.add(ceil);
   }
 
   // ---- sliding doors (user note): panels that open for ANY movement near
