@@ -146,6 +146,13 @@ export const SHIP = {
     { a: 'lowerCorr', b: 'corrA', ambushCorners: 2 },
     { a: 'hangarA', b: 'cargo1', ambushCorners: 1 },
     { a: 'workshop', b: 'vehicle', ambushCorners: 1 },
+    // CROSS-DECK VENTS up top (user: cross-deck ducts the infection AND combat
+    // forms use between decks) — the command/hab/ops decks get their own duct
+    // risers so the flood isn't forced onto the visible ladders/lifts there.
+    { a: 'officer', b: 'crewB', ambushCorners: 1 },   // deck 1 <-> deck 2
+    { a: 'signal', b: 'd2store', ambushCorners: 1 },  // deck 1 <-> deck 2
+    { a: 'crewA', b: 'gym', ambushCorners: 1 },       // deck 2 <-> deck 3
+    { a: 'cryo', b: 'stores3', ambushCorners: 1 },    // deck 2 <-> deck 3
   ],
   vents: [
     { a: 'medbay', b: 'cryo', breakable: true },

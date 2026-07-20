@@ -65,7 +65,8 @@ export class Hive {
   infectionPass = (link, from, to) => {
     if (this.sim.graph.burningUntil[to ?? -1] > this.sim.t) return false;
     if (link.kind === 'std') return !this.knownLocked.has(link.i) || !link.lockable;
-    return link.kind === 'vent' && !this.knownBlockedVents.has(link.i);
+    if (link.kind === 'vent') return !this.knownBlockedVents.has(link.i);
+    return link.kind === 'shaft'; // cross-deck ducts (user: infection uses them too)
   };
   bigPass = (link, from, to) => {
     if (this.sim.graph.burningUntil[to ?? -1] > this.sim.t) return false;
@@ -81,7 +82,7 @@ export class Hive {
     return link.kind === 'vent' && !this.knownBlockedVents.has(link.i);
   };
   _layersFor(kind) {
-    return kind === 'infection' ? ['std', 'vent'] : kind === 'combat' ? ['std', 'shaft', 'vent'] : ['std', 'shaft'];
+    return kind === 'infection' ? ['std', 'vent', 'shaft'] : kind === 'combat' ? ['std', 'shaft'] : ['std', 'shaft'];
   }
   _passFor(kind) {
     return kind === 'infection' ? this.infectionPass : kind === 'combat' ? this.combatPass : this.bigPass;

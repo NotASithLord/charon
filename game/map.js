@@ -49,7 +49,7 @@ export class MarineMap {
       if (a.faction === FACTION.INFECTION || a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER) {
         // a form transiting a vent is out of everyone's sight — it counts
         // toward nothing on this board (same rule as the player's eyes)
-        if (!(a.move && a.move.layer === 'vent')) {
+        if (!(a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft'))) {
           this._floodScratch[a.node] += a.faction === FACTION.CARRIER ? 2 : 1;
         }
         continue;
@@ -278,7 +278,7 @@ export class MarineMap {
     // hostiles and civilians — only where a marine has eyes right now
     for (const a of sim.agents) {
       if (a.dead || !this.liveObs[a.node]) continue;
-      if (a.move && a.move.layer === 'vent') continue; // in the ducts — unseen
+      if (a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft')) continue; // in the ducts — unseen
       const f = a.faction;
       if (f === FACTION.INFECTION || f === FACTION.COMBAT || f === FACTION.CARRIER) {
         const r = f === FACTION.INFECTION ? this._rr(0.35, 2) : f === FACTION.CARRIER ? this._rr(0.85, 4) : this._rr(0.6, 3);

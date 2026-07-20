@@ -243,8 +243,11 @@ export const PARAMS = {
     ladderClimbMps: 1.2,      // vertical speed on ladder runs — a deck in ~3.5s;
                               // with one-body-at-a-time ladders (user rule), the
                               // old 0.5 crawl turned every queue into minutes
-    shaftMps: 0.7,            // crawl pace in maintenance shafts
-    ventMps: 0.55,            // infection-form pace in ducting
+    // FLOOD DUCT HIGHWAY (user: vent travel ~3x faster) — the ducts are the
+    // flood's fast private network; a form rips through them far quicker than
+    // it crosses open floor, which is what makes them worth using.
+    shaftMps: 2.1,            // crawl pace in cross-deck ducts (was 0.7)
+    ventMps: 1.65,           // infection-form pace in same-deck ducting (was 0.55)
     crawlWindingFactor: 1.35, // shafts/vents are never straight lines
   },
   // command path (companion spec §0/§3.4). In single-player the producer

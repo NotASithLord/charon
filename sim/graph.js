@@ -47,15 +47,35 @@ export class ShipGraph {
     // authored runs: one duct behind every same-deck doorway.
     {
       const seen = new Set(this.vents.map((v) => `${Math.min(v.a, v.b)}:${Math.max(v.a, v.b)}`));
-      for (const e of this.edges) {
-        if (this.nodes[e.a].deck !== this.nodes[e.b].deck) continue;
-        const key = `${Math.min(e.a, e.b)}:${Math.max(e.a, e.b)}`;
-        if (seen.has(key)) continue;
+      const addVent = (a, b) => {
+        const key = `${Math.min(a, b)}:${Math.max(a, b)}`;
+        if (seen.has(key) || a === b) return;
         seen.add(key);
         this.vents.push({
-          i: this.vents.length, a: e.a, b: e.b, breakable: true,
+          i: this.vents.length, a, b, breakable: true,
           blocked: false, kind: LAYER.VENT, label: 'V-' + String(this.vents.length + 1).padStart(2, '0'),
         });
+      };
+      for (const e of this.edges) {
+        if (this.nodes[e.a].deck !== this.nodes[e.b].deck) continue;
+        addVent(e.a, e.b);
+      }
+      // EVERY ROOM ON A DECK IS DUCTED TO ITS NEIGHBOURS (user: every room
+      // should have vents attaching it to the rooms on the same deck). Beyond
+      // the door-parallel ducts, tie each room to its two nearest same-deck
+      // rooms — so the flood's duct net reaches everywhere, not just where the
+      // doors already go. Deterministic (distance + index tie-break).
+      const byDeck = {};
+      for (const n of this.nodes) (byDeck[n.deck] ??= []).push(n);
+      for (const deck of Object.keys(byDeck)) {
+        const rooms = byDeck[deck];
+        for (const n of rooms) {
+          const near = rooms.filter((m) => m.idx !== n.idx)
+            .map((m) => ({ m, d: (m.x - n.x) ** 2 + (m.y - n.y) ** 2 }))
+            .sort((p, q) => p.d - q.d || p.m.idx - q.m.idx)
+            .slice(0, 2);
+          for (const { m } of near) addVent(n.idx, m.idx);
+        }
       }
     }
 
@@ -277,8 +297,12 @@ export class ShipGraph {
   // packs into shafts and read as "the flood spawns and never moves".
   linkCost(l) {
     const run = l.horizM + l.vertM;
-    if (l.kind === 'shaft') return run * 1.35 / 0.7;
-    if (l.kind === 'vent') return run * 1.35 / 0.55;
+    // ducts are a FAST FLOOD HIGHWAY now (3x speed) and the flood PREFERS
+    // them (user) — the extra <1 factor biases flood routes into the vents
+    // and cross-deck shafts wherever they exist. Only flood pathing reads
+    // vent/shaft costs (humans are std-only), so this never affects the crew.
+    if (l.kind === 'shaft') return run * 1.35 / 2.1 * 0.8;
+    if (l.kind === 'vent') return run * 1.35 / 1.65 * 0.65;
     if (l.type === 'lift') return l.horizM / 1.4 + 10;
     if (l.type === 'ladder') return 1.0 + l.vertM / 1.2; // mount + climb (matches travelSec)
     return run / 1.4 + (l.type === 'blastdoor' ? 2.5 : 0.8);
@@ -342,19 +366,20 @@ export class ShipGraph {
 
 // --- passability predicates ---
 
-// Humans: standard edges only, blocked by locks; marines may also take shafts.
+// Humans NEVER use the ducts (user rule): standard edges only, blocked by
+// locks. The vent/shaft network is the flood's alone.
 export function humanPass(link) {
   return link.kind === LAYER.STD ? !link.locked : false;
 }
-export function marinePass(link) {
-  if (link.kind === LAYER.STD) return !link.locked;
-  return link.kind === LAYER.SHAFT;
-}
-// Flood, ground truth: infection forms use std (unlocked) + vents (unblocked);
-// combat/carrier use std (unlocked) + shafts.
+export const marinePass = humanPass; // marines use the standard methods too
+// Flood, ground truth (user model): infection forms crawl same-deck VENTS and
+// the cross-deck SHAFTS ("cross-deck vents"); combat forms are too big for the
+// tight same-deck ducts but squeeze the cross-deck shafts. Neither is blocked
+// by door locks — the ducts route around them.
 export function infectionPass(link) {
   if (link.kind === LAYER.STD) return !link.locked;
-  return link.kind === LAYER.VENT && !link.blocked;
+  if (link.kind === LAYER.VENT) return !link.blocked;
+  return link.kind === LAYER.SHAFT; // cross-deck ducts too
 }
 export function bigFormPass(link) {
   if (link.kind === LAYER.STD) return !link.locked;
@@ -363,8 +388,8 @@ export function bigFormPass(link) {
 export function layersFor(kind) {
   switch (kind) {
     case 'human': return ['std'];
-    case 'marine': return ['std', 'shaft'];
-    case 'infection': return ['std', 'vent'];
+    case 'marine': return ['std'];               // humans never use the ducts
+    case 'infection': return ['std', 'vent', 'shaft']; // same-deck + cross-deck ducts
     case 'big': return ['std', 'shaft'];
     default: return ['std'];
   }

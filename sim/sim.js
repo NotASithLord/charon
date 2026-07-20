@@ -773,6 +773,18 @@ export class Sim {
         // moment a move began
         a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0,
           sx: a.x, sy: a.y, travelSec: this.travelSec(link, mult) * pace };
+        // DUCT NOISES (user: vents don't show on the map — the crew only
+        // HEARS them): a form slipping into the ducting drops an ominous
+        // log line, throttled per duct so it stays sparse.
+        if ((link.kind === 'vent' || link.kind === 'shaft')
+          && this.t - (link._ductLogAt ?? -99) > 12) {
+          link._ductLogAt = this.t;
+          const A = this.graph.node(link.a), B = this.graph.node(link.b);
+          this.log('duct', A.deck === B.deck
+            ? `something scuttles through the ducts near ${A.name}`
+            : `noises in the ducts between decks ${Math.min(A.deck, B.deck)} and ${Math.max(A.deck, B.deck)}`,
+            a.node);
+        }
         // NO TELEPORTING TO LIFTS/STAIRS (user rule): a cross-deck leg pays
         // for the walk to the trunk pad at real walking speed BEFORE the
         // climb/ride time starts — appT marks where approach ends
