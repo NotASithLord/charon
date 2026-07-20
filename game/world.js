@@ -557,6 +557,9 @@ export class World {
       mess: { n: 3, w: 1.4, h: 0.85 }, quarters: { n: 3, w: 1.0, h: 0.6 },
       hangar: { n: 4, w: 1.7, h: 1.3 }, medbay: { n: 2, w: 1.1, h: 0.85 },
       vehicles: { n: 3, w: 1.6, h: 1.2 },
+      // weapon halls (the flank batteries + magazines): gun mounts along the
+      // outboard wall, ammo racks in the magazines
+      battery: { n: 6, w: 1.5, h: 1.5 }, magazine: { n: 7, w: 1.3, h: 1.1 },
     };
     for (const n of g.nodes) {
       if (n.type === 'corridor') continue;

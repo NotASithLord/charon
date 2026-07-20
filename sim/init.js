@@ -133,9 +133,10 @@ export function initRun(seed, rng, P) {
   // calls like any squad, then pick the round back up. Staggered around the
   // loop so the ship always has coverage somewhere.
   {
-    const route = ['d1corr', 'd2corrF', 'mess', 'd2corrA', 'corrM', 'corrF', 'maintF',
-      'hangar', 'hangarA', 'vehicle', 'cargo1', 'lowerCorr', 'eng', 'lowerCorr',
-      'hangarA', 'corrA', 'corrM'].map((id) => graph.byId.get(id));
+    // ship-wide circuit down the new deck stack (command -> hangar) and back
+    const route = ['d1corr', 'd2corrF', 'mess', 'd2corrA', 'corrM', 'corrF', 'corrA',
+      'engCorrF', 'eng', 'engCorrA', 'hangarA', 'hangar', 'vehicle', 'cargo1',
+      'hangarA', 'engCorrA', 'corrM'].map((id) => graph.byId.get(id));
     for (let p = 0; p < M.patrols; p++) {
       const leg = Math.floor((p * route.length) / Math.max(1, M.patrols));
       const node = route[leg];

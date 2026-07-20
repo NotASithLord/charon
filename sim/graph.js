@@ -126,7 +126,11 @@ export class ShipGraph {
     const S = this.data?.sizeScale ?? 1;
     const LEN = (this.data?.playableLengthM ?? 220) * S;
     this.deckHeightM = this.data?.deckHeightM ?? 4.2;
-    const BAND = 56 * S, TOP = 18, PADX = 12;
+    // BAND widened (user: the decks should be WIDE — substantial battery bays
+    // on both flanks, not a thin spine). Room now for a third athwartships
+    // tier (row ±3) of outboard weapon/machinery halls without the 2D deck
+    // plans overlapping. (3D is unaffected: each deck sits at its own Y.)
+    const BAND = 88 * S, TOP = 18, PADX = 12;
     this.lengthM = LEN;
     this.height = TOP + 5 * BAND + 8;
     this.deckBands = [];
@@ -152,9 +156,11 @@ export class ShipGraph {
         else n.x = Math.max(n.x, prev.x + prev.w / 2 + n.w / 2 + 3); // separate segment
       }
 
-      // 2. rows ±1 then ±2: each room sits flush against the parent it opens
-      //    into, x clamped so the shared wall genuinely overlaps
-      for (const tier of [1, 2]) {
+      // 2. rows ±1, ±2, ±3: each room sits flush against the parent it opens
+      //    into, x clamped so the shared wall genuinely overlaps. Tier 3 is
+      //    the outboard flank — the big port/starboard battery & magazine
+      //    halls that give each deck real width (user note).
+      for (const tier of [1, 2, 3]) {
         for (const side of [1, -1]) {
           const row = band.filter((n) => n.row === side * tier).sort((a, b) => a.foreAft - b.foreAft);
           for (const n of row) {

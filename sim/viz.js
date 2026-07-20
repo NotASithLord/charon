@@ -138,7 +138,7 @@ export class Viz {
         ctx.fill(); ctx.stroke();
       }
       ctx.fillStyle = '#3a4556';
-      ctx.fillText(`DECK ${d}${d === 1 ? ' — COMMAND' : d === 5 ? ' — ENGINEERING' : ''}`, 3, band.y0 + 14 / this.s);
+      ctx.fillText(`DECK ${d} — ${['COMMAND', 'HABITATION', 'OPERATIONS', 'ENGINEERING', 'FLIGHT'][d - 1]}`, 3, band.y0 + 14 / this.s);
     }
     ctx.fillStyle = '#232b38';
     ctx.fillText('BOW ◄', 3, g.deckBands[0].y0 - 4 / this.s);
