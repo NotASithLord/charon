@@ -78,13 +78,16 @@ export const SHIP = {
     { a: 'mess', b: 'crewB', type: 'hatch', lockable: true },
     { a: 'mess', b: 'galley', type: 'hatch', lockable: true },
     { a: 'd2corrF', b: 'd2corrA', type: 'hatch', lockable: true },
+    // mid lift: hab-aft corridor straight down to the ops mid corridor
+    // (spine-to-spine, so it drops vertically — was mess->corrM, which put
+    // the shaft on a diagonal since the Mess is offset off the spine)
+    { a: 'd2corrA', b: 'corrM', type: 'lift', lockable: false },
     { a: 'd2corrA', b: 'd2store', type: 'hatch', lockable: true },
     { a: 'd2corrA', b: 'medbay', type: 'hatch', lockable: true },
     { a: 'd2corrA', b: 'brig', type: 'blastdoor', lockable: true },
     { a: 'd2corrA', b: 'cryo', type: 'hatch', lockable: true },
     { a: 'd2corrA', b: 'chapel', type: 'hatch', lockable: true },
     { a: 'd2corrF', b: 'corrF', type: 'ladder', lockable: false },
-    { a: 'mess', b: 'corrM', type: 'lift', lockable: false },
     // deck 3
     { a: 'corrF', b: 'gym', type: 'hatch', lockable: true },
     { a: 'corrF', b: 'armory', type: 'blastdoor', lockable: true },
@@ -108,7 +111,6 @@ export const SHIP = {
     { a: 'vehicle', b: 'cargo1', type: 'hatch', lockable: true },
     { a: 'cargo1', b: 'cargo2', type: 'hatch', lockable: true },
     { a: 'hangarA', b: 'lowerCorr', type: 'ladder', lockable: false },
-    { a: 'maintF', b: 'corrF', type: 'ladder', lockable: false },
     // deck 5
     { a: 'lowerCorr', b: 'pumps', type: 'hatch', lockable: true },
     { a: 'lowerCorr', b: 'lifesup', type: 'hatch', lockable: true },
@@ -116,11 +118,16 @@ export const SHIP = {
     { a: 'lowerCorr', b: 'eng', type: 'hatch', lockable: true },
     { a: 'eng', b: 'reactor', type: 'blastdoor', lockable: true },
     { a: 'eng', b: 'maintA', type: 'hatch', lockable: true },
-    { a: 'cargo1', b: 'eng', type: 'ladder', lockable: false },
   ],
+  // NOTE: the fore maintF<->corrF and aft cargo1<->eng cross-deck runs used
+  // to be human ladders, but those rooms sit far apart athwartships so their
+  // shaft could only ever be a diagonal (the "fly through space" the climb
+  // read as). They're maintenance shafts now — enclosed, flood-only crawls —
+  // and the crew reaches those decks by the vertical ladders/lifts instead.
   maintShafts: [
     { a: 'hangar', b: 'maintF', ambushCorners: 2 },
     { a: 'maintF', b: 'lowerCorr', ambushCorners: 2 },
+    { a: 'maintF', b: 'corrF', ambushCorners: 2 },
     { a: 'eng', b: 'cargo1', ambushCorners: 1 },
     { a: 'reactor', b: 'lowerCorr', ambushCorners: 1 },
     { a: 'vehicle', b: 'cargo2', ambushCorners: 1 },
