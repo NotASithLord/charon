@@ -660,6 +660,9 @@ export class Sim {
             a.x += Math.cos(a.heading + Math.PI / 2) * lane;
             a.y += Math.sin(a.heading + Math.PI / 2) * lane;
           }
+          // the lane/weave offset must never push a body through the wall of
+          // the room it's currently standing in (user report: hallway clip)
+          this._clampToRoom(a, this.graph.node(a.node));
         }
         a.animTime += dt;
         if (a.move.t >= 1) {
@@ -864,10 +867,7 @@ export class Sim {
       const step = Math.min(dist - stopAt, mps * dt);
       a.x += (dx / dist) * step;
       a.y += (dy / dist) * step;
-      // stay inside the room's real footprint
-      const hw = Math.max(0.4, room.w / 2 - 0.3), hd = Math.max(0.4, room.d / 2 - 0.3);
-      a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x));
-      a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y));
+      this._clampToRoom(a, room); // stay inside the room's real footprint
     }
     a.animTime += dt;
     return true;
@@ -890,21 +890,35 @@ export class Sim {
     }
   }
 
+  // clamp a body so its whole RADIUS stays inside the room's walls (user
+  // report: NPCs clipping through hallway walls when crowded — the old fixed
+  // 0.3 m margin was smaller than a body radius, so a shoved body poked
+  // through). In a corridor thinner than a body, at least pin to centerline.
+  _clampToRoom(a, room) {
+    const r = this._bodyRadius(a);
+    const hw = Math.max(0, room.w / 2 - r), hd = Math.max(0, room.d / 2 - r);
+    a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x));
+    a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y));
+  }
+
   _separate(dt) {
     const relax = Math.min(1, dt * 10);
     for (let n = 0; n < this.graph.n; n++) {
       const occ = this._occ[n];
       if (!occ || occ.length < 2) continue;
       const room = this.graph.node(n);
-      const hw = Math.max(0.4, room.w / 2 - 0.3), hd = Math.max(0.4, room.d / 2 - 0.3);
+      // thin corridors can't absorb a sideways pile-up, so bias the push
+      // ALONG the room's long axis when it's much longer than it is wide —
+      // crowds spread down the hallway instead of squeezing into the walls
+      const along = room.w >= room.d ? 0 : 1; // 0 = x is the long axis
+      const narrow = Math.min(room.w, room.d) < 6;
       for (let i = 0; i < occ.length; i++) {
         const a = occ[i];
         if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.move) continue;
-        const ra = this._bodyRadius(a);
         for (let j = i + 1; j < occ.length; j++) {
           const b = occ[j];
           if (b.dead || b.faction === FACTION.CORPSE || b.downed || b.move) continue;
-          const need = ra + this._bodyRadius(b);
+          const need = this._bodyRadius(a) + this._bodyRadius(b);
           let dx = b.x - a.x, dy = b.y - a.y;
           const d2 = dx * dx + dy * dy;
           if (d2 >= need * need) continue;
@@ -913,18 +927,18 @@ export class Sim {
             const ang = ((a.id * 31 + b.id * 17) % 628) / 100;
             dx = Math.cos(ang); dy = Math.sin(ang);
           } else { dx /= dist; dy /= dist; }
+          // in a narrow hallway, redirect a mostly-sideways shove into a
+          // fore/aft one so nobody is driven into the bulkhead
+          if (narrow) {
+            if (along === 0 && Math.abs(dx) < 0.5) { dx = dx < 0 ? -1 : 1; dy = 0; }
+            else if (along === 1 && Math.abs(dy) < 0.5) { dy = dy < 0 ? -1 : 1; dx = 0; }
+          }
           const aMoves = !a.isPlayer && a.held !== this.tickCount;
           const bMoves = !b.isPlayer && b.held !== this.tickCount;
           if (!aMoves && !bMoves) continue;
           const push = (need - dist) * relax * (aMoves && bMoves ? 0.5 : 1);
-          if (aMoves) {
-            a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x - dx * push));
-            a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y - dy * push));
-          }
-          if (bMoves) {
-            b.x = Math.max(room.x - hw, Math.min(room.x + hw, b.x + dx * push));
-            b.y = Math.max(room.y - hd, Math.min(room.y + hd, b.y + dy * push));
-          }
+          if (aMoves) { a.x -= dx * push; a.y -= dy * push; this._clampToRoom(a, room); }
+          if (bMoves) { b.x += dx * push; b.y += dy * push; this._clampToRoom(b, room); }
         }
       }
     }

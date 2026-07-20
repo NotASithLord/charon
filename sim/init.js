@@ -167,6 +167,7 @@ export function initRun(seed, rng, P) {
       const a = makeAgent(FACTION.ARMED, node, graph);
       a.hp = a.maxHp = P.combat.armed.hp;
       a.hasRadio = rng.chance(P.crew.radio.armed);
+      scatterInRoom(a, graph.node(node), rng); // spread within the room, not stacked
       agents.push(a);
     }
   }
@@ -174,9 +175,22 @@ export function initRun(seed, rng, P) {
   // civilians: quarters/soft/mess; prisoners and wounded are explicit counts
   // on top, as are the stay-put officers
   {
-    const soft = graph.nodes
+    // EVEN SPREAD (user note: crew shouldn't clump in a few rooms) — the
+    // sheltering crew fills living spaces first but overflows across the
+    // whole habitable ship (any room that isn't command/hazard/hangar or the
+    // crash site), weighted by each room's capacity so big spaces hold more.
+    const softIdx = graph.nodes
       .filter((n) => n.roles.includes('soft') || n.roles.includes('quarters'))
       .map((n) => n.idx);
+    const habitable = graph.nodes.filter((n) =>
+      n.type !== 'corridor' && n.idx !== graph.breachNode
+      && !n.roles.includes('command') && !n.roles.includes('hazard')
+      && !n.roles.includes('power') && !n.roles.includes('hangar')
+      && !n.roles.includes('vehicles'));
+    // capacity-weighted pool: a room with capacity 14 appears 14× as often
+    const spreadPool = [];
+    for (const n of habitable) for (let k = 0; k < Math.max(1, n.capacity); k++) spreadPool.push(n.idx);
+    const soft = softIdx;
     const brig = graph.byId.get('brig');
     const medbay = graph.byId.get('medbay');
     const officerPost = graph.byId.get('officer');
@@ -201,12 +215,17 @@ export function initRun(seed, rng, P) {
       agents.push(a);
     }
     for (let i = 0; i < P.crew.civilians; i++) {
-      const a = makeAgent(FACTION.CIVILIAN, rng.pick(soft), graph);
+      // 55% shelter in the living spaces, 45% are spread across the wider
+      // ship (so the crew reads as a whole complement at stations, not a
+      // pile in the mess) — then scattered within whatever room they land in
+      const node = rng.chance(0.55) ? rng.pick(soft) : rng.pick(spreadPool);
+      const a = makeAgent(FACTION.CIVILIAN, node, graph);
       a.hp = a.maxHp = P.combat.civilian.hp;
       // ~20% are still working the ship (engineers, medics, techs) and move
       // with purpose; the rest shelter in place (user note)
       a.worker = rng.chance(P.civilian.workerFraction);
       a.hasRadio = a.worker || rng.chance(P.crew.radio.civilian);
+      scatterInRoom(a, graph.node(node), rng);
       agents.push(a);
     }
 

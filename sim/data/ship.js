@@ -10,7 +10,7 @@
 // This plan is the source the navigable 3D map will be extruded from.
 export const SHIP = {
   playableLengthM: 220, // pressurized crew section, bow datum at x=0
-  sizeScale: 1.25,      // global hull scale (user tuning: a bigger ship)
+  sizeScale: 1.6,       // global hull scale (user tuning: a bigger ship)
   deckHeightM: 4.2,
   nodes: [
     // ---- deck 1 · command ----
