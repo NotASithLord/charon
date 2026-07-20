@@ -73,7 +73,7 @@ export class ShipGraph {
           const near = rooms.filter((m) => m.idx !== n.idx)
             .map((m) => ({ m, d: (m.x - n.x) ** 2 + (m.y - n.y) ** 2 }))
             .sort((p, q) => p.d - q.d || p.m.idx - q.m.idx)
-            .slice(0, 2);
+            .slice(0, 1); // nearest same-deck room (door-parallel ducts cover the rest)
           for (const { m } of near) addVent(n.idx, m.idx);
         }
       }
@@ -301,8 +301,8 @@ export class ShipGraph {
     // them (user) — the extra <1 factor biases flood routes into the vents
     // and cross-deck shafts wherever they exist. Only flood pathing reads
     // vent/shaft costs (humans are std-only), so this never affects the crew.
-    if (l.kind === 'shaft') return run * 1.35 / 2.1 * 0.8;
-    if (l.kind === 'vent') return run * 1.35 / 1.65 * 0.65;
+    if (l.kind === 'shaft') return run * 1.35 / 2.1 * 0.92;
+    if (l.kind === 'vent') return run * 1.35 / 1.65 * 0.82;
     if (l.type === 'lift') return l.horizM / 1.4 + 10;
     if (l.type === 'ladder') return 1.0 + l.vertM / 1.2; // mount + climb (matches travelSec)
     return run / 1.4 + (l.type === 'blastdoor' ? 2.5 : 0.8);

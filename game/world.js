@@ -135,16 +135,15 @@ export class World {
       (floorHoles.get(t.upperNode) ?? floorHoles.set(t.upperNode, []).get(t.upperNode)).push(hole);
       (ceilHoles.get(t.lowerNode) ?? ceilHoles.set(t.lowerNode, []).get(t.lowerNode)).push(hole);
     }
-    // a grand stairwell opens up through the corridor above it: cut the whole
-    // stairwell footprint out of the upper room's floor (its own tall room is
-    // rendered by _buildStairRoom). The corridor's own floor survives outside
-    // the footprint fore/aft, so it still reads as the corridor opening onto
-    // the stairwell hall.
+    // the grand stairwell's switchback descends through the hangar's ceiling
+    // below it: cut a hole in the LOWER room's ceiling over the stair well so
+    // the steps drop into it (grandStair's own floor is built with the well
+    // cut out by _buildStairRoom).
     for (const s of g.stairwells) {
-      const lo = g.node(s.lower); // the stairwell room (deck below)
-      const [cx, cz] = this.simToWorld(lo.x, lo.y, lo.deck);
-      (floorHoles.get(s.upper) ?? floorHoles.set(s.upper, []).get(s.upper))
-        .push({ x: cx, z: cz, hw: lo.w / 2, hd: lo.d / 2 });
+      const up = g.node(s.upper);
+      const gm = this._stairGeom(up);
+      (ceilHoles.get(s.lower) ?? ceilHoles.set(s.lower, []).get(s.lower))
+        .push({ x: gm.wellCx, z: gm.wellCz, hw: gm.wellHx, hd: gm.wellHz });
     }
 
     for (const n of g.nodes) {
@@ -153,8 +152,8 @@ export class World {
       const isBreach = n.idx === g.breachNode;
       const tint = isBreach ? 0xff8866 : g.unpowered[n.idx] ? 0x4a5261 : (n.type === 'corridor' ? 0xbccbe4 : 0x9daabf);
       const fmat = mkFloorMat(n.w, n.d, tint);
-      // GRAND STAIRWELL room: its own two-storey geometry (mezzanine + ramp +
-      // hall) instead of a flat floor + single-height walls.
+      // GRAND STAIRWELL room: normal deck-3 room, but the floor is built with a
+      // central well + switchback by _buildStairRoom (skip the flat floor).
       const isStair = n.roles.includes('stairwell');
       if (isStair) this._buildStairRoom(n);
 
@@ -166,13 +165,13 @@ export class World {
         this.scene.add(slab);
       }
       const ch = ceilHoles.get(n.idx) ?? [];
-      if (!isStair) for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
+      for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
         const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.1, b1 - b0), matCeil);
         slab.position.set((a0 + a1) / 2, elev + CLEAR_H, (b0 + b1) / 2);
         this.scene.add(slab);
       }
       const sign = this._label(n.name);
-      sign.position.set(wx, elev + (isStair ? DECK_H + CLEAR_H : CLEAR_H) - 0.45, wz);
+      sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
       this.scene.add(sign);
       (this.roomSigns ??= [])[n.idx] = sign;
 
@@ -209,10 +208,9 @@ export class World {
         this.roomLights[n.idx] = { mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1 };
       }
 
-      // walls with door openings, inset half a thickness (no z-fighting).
-      // stair rooms build their own two-storey walls in _buildStairRoom.
+      // walls with door openings, inset half a thickness (no z-fighting)
       const sides = { N: [], S: [], W: [], E: [] };
-      if (!isStair) for (const e of g.edges) {
+      for (const e of g.edges) {
         if (!e.door) continue;
         if (e.a !== n.idx && e.b !== n.idx) continue;
         const other = g.node(e.a === n.idx ? e.b : e.a);
@@ -420,42 +418,51 @@ export class World {
     }
   }
 
-  // GRAND STAIRWELL (user: its own huge two-storey room, walked not climbed).
-  // Geometry of the ramp, shared by the renderer, the player's floor collider
-  // and the agent renderer. Fore end is a mezzanine at the DECK ABOVE's floor
-  // level (meets the corridor there); a full-width flight descends aft to the
-  // hall floor, which opens onto the hangar. `_stairGeom` is a pure function
-  // of the room rect so everything agrees on where the steps are.
+  // GRAND STAIRWELL (user: big room off the corridor, central switchback
+  // staircase you walk down). A deck-3 room you enter at floor level (hiElev)
+  // from the corridor; a compact dog-leg well in the middle descends two
+  // decks to the hangar floor (loElev), leaving floor to walk all around the
+  // stairs. `_stairGeom` is a pure function of the room rect so the renderer,
+  // the player collider and the agent renderer all agree.
   _stairGeom(n) {
     const [cx, cz] = this.simToWorld(n.x, n.y, n.deck);
     const hx = n.w / 2, hz = n.d / 2;
-    const loElev = elevOf(n.deck), hiElev = elevOf(n.deck - 1);
-    const x0 = cx - hx;                       // fore wall (mezzanine end)
-    const mezLen = Math.min(8, n.w * 0.26);
-    const rampLen = Math.min(16, n.w * 0.45);
-    const mezEnd = x0 + mezLen, rampEnd = mezEnd + rampLen;
-    return { cx, cz, hx, hz, loElev, hiElev, x0, mezEnd, rampEnd, xEnd: cx + hx };
+    const hiElev = elevOf(n.deck);       // entry floor (this deck)
+    const loElev = elevOf(n.deck + 1);   // bottom = the deck below (hangar)
+    const midElev = (hiElev + loElev) / 2;
+    // the well sits a little AFT of centre so the fore corridor doorway stays
+    // clear; two flights split left/right of wellCx (the switchback spine)
+    const wellCx = cx + hx * 0.12, wellCz = cz;
+    const wellHx = Math.min(6.5, hx * 0.42), wellHz = Math.min(6, hz * 0.34);
+    return { cx, cz, hx, hz, hiElev, loElev, midElev, wellCx, wellCz, wellHx, wellHz };
   }
 
-  // floor elevation under a world point — normally the deck floor, but inside
-  // a stairwell room it follows the mezzanine / ramp / hall (user: walk it).
+  // where in the switchback a well-point sits (or null if outside the well)
+  _switchbackY(g, wx, wz) {
+    if (wx < g.wellCx - g.wellHx || wx > g.wellCx + g.wellHx
+      || wz < g.wellCz - g.wellHz || wz > g.wellCz + g.wellHz) return null;
+    const t = (wz - (g.wellCz - g.wellHz)) / (2 * g.wellHz); // 0 at -Z front, 1 at +Z back
+    if (wx < g.wellCx) return g.hiElev - (g.hiElev - g.midElev) * t;  // flight A: top->mid
+    return g.loElev + (g.midElev - g.loElev) * t;                     // flight B: mid->bottom
+  }
+
+  // floor elevation under a world point — the deck floor normally; in a
+  // stairwell room, the entry floor or the switchback where it descends.
   groundHeightAt(deck, wx, wz) {
     for (const g of (this.stairRooms ?? [])) {
       if (g.deck !== deck) continue;
       if (wx < g.cx - g.hx || wx > g.cx + g.hx || wz < g.cz - g.hz || wz > g.cz + g.hz) continue;
-      if (wx <= g.mezEnd) return g.hiElev;
-      if (wx >= g.rampEnd) return g.loElev;
-      return g.hiElev - (g.hiElev - g.loElev) * (wx - g.mezEnd) / (g.rampEnd - g.mezEnd);
+      const sy = this._switchbackY(g, wx, wz);
+      return sy === null ? g.hiElev : sy;   // entry floor, or the stairs
     }
     return elevOf(deck);
   }
 
-  // clear height (floor to ceiling) at a point — two storeys in a stairwell.
+  // headroom is generous over the well (the volume is two decks tall)
   ceilHeightAt(deck, wx, wz) {
     for (const g of (this.stairRooms ?? [])) {
       if (g.deck !== deck) continue;
-      if (wx < g.cx - g.hx || wx > g.cx + g.hx || wz < g.cz - g.hz || wz > g.cz + g.hz) continue;
-      return DECK_H + CLEAR_H;
+      if (wx >= g.cx - g.hx && wx <= g.cx + g.hx && wz >= g.cz - g.hz && wz <= g.cz + g.hz) return CLEAR_H;
     }
     return CLEAR_H;
   }
@@ -468,83 +475,70 @@ export class World {
     return null;
   }
 
-  // is this world point on a stairwell room's raised mezzanine (deck-above
-  // floor level)? — used for the corridor<->stairwell walk-through portal.
-  stairMezzanineAt(deck, wx, wz) {
+  // the stairwell room this world point is INSIDE the well of (any deck).
+  stairWellAt(wx, wz) {
     for (const g of (this.stairRooms ?? [])) {
-      if (g.deck !== deck) continue;
-      if (wx >= g.cx - g.hx && wx <= g.mezEnd && wz >= g.cz - g.hz && wz <= g.cz + g.hz) return g;
+      if (wx >= g.wellCx - g.wellHx && wx <= g.wellCx + g.wellHx
+        && wz >= g.wellCz - g.wellHz && wz <= g.wellCz + g.wellHz) return g;
     }
     return null;
   }
 
+  // Build the switchback + the entry floor with a central well cut out. The
+  // room's walls/ceiling/doors are the NORMAL deck-3 ones (grandStair is a
+  // regular room now), so the corridor doorway just works — only the floor is
+  // special. The well descends through the hangar's ceiling (cut elsewhere).
   _buildStairRoom(n) {
     const g = this._stairGeom(n);
     (this.stairRooms ??= []).push({ deck: n.deck, node: n.idx, ...g });
-    const { cx, cz, hx, hz, loElev, hiElev, x0, mezEnd, rampEnd, xEnd } = g;
-    const topH = hiElev + CLEAR_H;                 // two storeys of clear height
+    const { cx, cz, hx, hz, hiElev, loElev, midElev, wellCx, wellCz, wellHx, wellHz } = g;
     const matStep = new THREE.MeshStandardMaterial({ color: 0x6c7789, roughness: 0.75, metalness: 0.4 });
     const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.45, metalness: 0.7 });
     const fmat = this._mkFloorMat(n.w, n.d, 0x93a1b8);
-    // mezzanine platform (fore, deck-above level)
-    const mez = new THREE.Mesh(new THREE.BoxGeometry(mezEnd - x0, 0.16, hz * 2), fmat);
-    mez.position.set((x0 + mezEnd) / 2, hiElev - 0.08, cz);
-    this.scene.add(mez);
-    // main hall floor (aft, hangar level)
-    const flr = new THREE.Mesh(new THREE.BoxGeometry(xEnd - rampEnd, 0.16, hz * 2), fmat);
-    flr.position.set((rampEnd + xEnd) / 2, loElev - 0.08, cz);
-    this.scene.add(flr);
-    // the flight of steps, full width
-    const rise = hiElev - loElev, runLen = rampEnd - mezEnd;
-    const steps = Math.max(8, Math.round(rise / 0.26));
-    const stepRun = runLen / steps, stepRise = rise / steps;
-    for (let i = 0; i < steps; i++) {
-      const sx = mezEnd + (i + 0.5) * stepRun;
-      const sy = hiElev - (i + 0.5) * stepRise;
-      const tread = new THREE.Mesh(new THREE.BoxGeometry(stepRun + 0.03, 0.14, hz * 2), matStep);
-      tread.position.set(sx, sy, cz);
-      this.scene.add(tread);
-      const riser = new THREE.Mesh(new THREE.BoxGeometry(0.06, stepRise, hz * 2), matStep);
-      riser.position.set(sx - stepRun / 2, sy - stepRise / 2 + 0.07, cz);
-      this.scene.add(riser);
+    // entry floor at deck level, with the well cut out (walk all the way round)
+    const hole = { x: wellCx, z: wellCz, hw: wellHx, hd: wellHz };
+    for (const [a0, b0, a1, b1] of rectMinusHoles(cx - hx, cz - hz, cx + hx, cz + hz, [hole])) {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.14, b1 - b0), fmat);
+      slab.position.set((a0 + a1) / 2, hiElev - 0.07, (b0 + b1) / 2);
+      this.scene.add(slab);
     }
-    // mezzanine safety rails along the two athwartships sides of the platform
-    for (const zz of [cz - hz + 0.2, cz + hz - 0.2]) {
-      const r = new THREE.Mesh(new THREE.BoxGeometry(mezEnd - x0, 0.07, 0.07), matRail);
-      r.position.set((x0 + mezEnd) / 2, hiElev + 1.0, zz);
-      this.scene.add(r); this.wallMeshes.push(r);
-    }
-    // perimeter walls, two storeys tall (skip the fore wall over the mezzanine
-    // doorway to the corridor, and leave the aft wall for the hangar hatch —
-    // both handled by the normal door builder on those edges)
-    const matWall = this._matWall ?? matStep;
-    const H = topH - loElev;
-    const wallBox = (px, pz, w, d) => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, H, d), matWall);
-      m.position.set(px, loElev + H / 2, pz);
-      this.scene.add(m); this.wallMeshes.push(m);
-    };
-    wallBox(cx, cz - hz, hx * 2, WALL_T);    // port side (tall)
-    wallBox(cx, cz + hz, hx * 2, WALL_T);    // stbd side (tall)
-    // aft wall (shared with the hangar) — tall, with a doorway gap at the
-    // grandStair<->hangar hatch so you can walk out onto the hangar deck
-    const hatch = this.graph.edges.find((e) => (e.a === n.idx || e.b === n.idx) && e.door
-      && this.graph.node(e.a === n.idx ? e.b : e.a).deck === n.deck);
-    let gapZ = null;
-    if (hatch) { const [, dz] = this.simToWorld(hatch.door.x, hatch.door.y, n.deck); gapZ = dz; }
-    if (gapZ === null) { wallBox(cx + hx, cz, WALL_T, hz * 2); }
-    else {
-      for (const [a, b] of [[cz - hz, gapZ - DOOR_W / 2], [gapZ + DOOR_W / 2, cz + hz]]) {
-        if (b - a > 0.1) { const seg = new THREE.Mesh(new THREE.BoxGeometry(WALL_T, H, b - a), matWall);
-          seg.position.set(cx + hx, loElev + H / 2, (a + b) / 2); this.scene.add(seg); this.wallMeshes.push(seg); }
+    // two flights of the switchback (spine at wellCx). Flight A (left/-X) drops
+    // top->mid front-to-back; a mid landing at the back; flight B (right/+X)
+    // drops mid->bottom back-to-front, so you turn 180 on the landing.
+    const steps = 9;
+    const mkFlight = (xLo, xHi, yStart, yEnd, frontToBack) => {
+      const dz = (2 * wellHz) / steps, dy = (yStart - yEnd) / steps;
+      for (let i = 0; i < steps; i++) {
+        const zc = frontToBack ? (wellCz - wellHz) + (i + 0.5) * dz : (wellCz + wellHz) - (i + 0.5) * dz;
+        const yc = yStart - (i + 0.5) * dy;
+        const tread = new THREE.Mesh(new THREE.BoxGeometry(xHi - xLo, 0.13, dz + 0.03), matStep);
+        tread.position.set((xLo + xHi) / 2, yc, zc);
+        this.scene.add(tread);
       }
+    };
+    mkFlight(wellCx - wellHx, wellCx, hiElev, midElev, true);   // flight A (left)
+    mkFlight(wellCx, wellCx + wellHx, midElev, loElev, false);  // flight B (right)
+    // mid landing (at the back, both halves)
+    const land = new THREE.Mesh(new THREE.BoxGeometry(2 * wellHx, 0.14, 2.0), matStep);
+    land.position.set(wellCx, midElev - 0.07, wellCz + wellHz - 1.0);
+    this.scene.add(land);
+    // switchback spine wall between the two flights
+    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.12, hiElev - loElev, 2 * wellHz - 2.2), matStep);
+    spine.position.set(wellCx, (hiElev + loElev) / 2, wellCz - 1.0);
+    this.scene.add(spine); this.wallMeshes.push(spine);
+    // railings around the well opening on the entry floor (so you don't just
+    // step off into it — you go down the stairs)
+    for (const [px, pz, w, d] of [
+      [wellCx, wellCz - wellHz, 2 * wellHx, 0.06], [wellCx, wellCz + wellHz, 2 * wellHx, 0.06],
+      [wellCx - wellHx, wellCz, 0.06, 2 * wellHz], [wellCx + wellHx, wellCz, 0.06, 2 * wellHz]]) {
+      // gap the fore rail where flight A meets the entry floor (top of stairs)
+      if (pz === wellCz - wellHz) continue; // front edge is the stair mouth — open
+      const r = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, d), matRail);
+      r.position.set(px, hiElev + 1.0, pz);
+      this.scene.add(r); this.wallMeshes.push(r);
+      const rl = new THREE.Mesh(new THREE.BoxGeometry(Math.max(w, 0.08), 1.0, Math.max(d, 0.08)), matRail);
+      rl.visible = false; // (posts omitted for brevity; rail bar reads fine)
     }
-    // the FORE wall is left open: the mezzanine flows up into the mid corridor
-    // (deck above) — that's the walk-through the player and NPCs use.
-    // ceiling at the top storey
-    const ceil = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, 0.12, hz * 2), this._matCeil);
-    ceil.position.set(cx, topH, cz);
-    this.scene.add(ceil);
   }
 
   // ---- sliding doors (user note): panels that open for ANY movement near

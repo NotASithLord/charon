@@ -44,16 +44,18 @@ export const SHIP = {
     { id: 'stores3', name: 'Deck 3 Stores', deck: 3, foreAft: 0.55, type: 'room', capacity: 5, w: 8, d: 6, row: 1, roles: ['cargo'] },
     { id: 'barracks', name: 'Barracks', deck: 3, foreAft: 0.60, type: 'room', capacity: 16, w: 18, d: 12, row: -1, roles: ['marines', 'odst'] },
     { id: 'workshop', name: 'Workshop', deck: 3, foreAft: 0.66, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['maintenance'] },
+    // GRAND STAIRWELL (user: its own big room at the end of the hall, walk in
+    // and take a switchback staircase down). A deck-3 room you enter from the
+    // mid corridor by a normal doorway (the corridor is never cut), stacked
+    // over the hangar; inside, a central dog-leg staircase descends two decks
+    // to a lower platform that opens onto the hangar. Big enough to walk all
+    // the way around the stairs on both levels.
+    { id: 'grandStair', name: 'Grand Stairwell', deck: 3, foreAft: 0.615, type: 'open', capacity: 18, w: 26, d: 22, row: 0, roles: ['stairwell', 'large'] },
     { id: 'podPort', name: 'Lifepod Bay Port', deck: 3, foreAft: 0.71, type: 'room', capacity: 10, w: 14, d: 8, row: -1, roles: ['lifepods', 'objective'] },
     { id: 'podStbd', name: 'Lifepod Bay Stbd', deck: 3, foreAft: 0.79, type: 'room', capacity: 10, w: 14, d: 8, row: -1, roles: ['lifepods', 'objective'] },
     // ---- deck 4 · flight & cargo ----
     { id: 'maintF', name: 'Maintenance Fore', deck: 4, foreAft: 0.32, type: 'corridor', capacity: 6, w: 26, d: 2.5, row: 1, roles: ['maintenance'] },
     { id: 'pumpRoom', name: 'Pump Room', deck: 4, foreAft: 0.38, type: 'room', capacity: 5, w: 8, d: 7, row: 2, roles: ['maintenance', 'systems'] },
-    // GRAND STAIRWELL (user: its own huge two-storey room): a deck-4 hall whose
-    // floor meets the hangar and whose mezzanine meets the mid corridor above.
-    // Walk the ramp between levels — no ladder. Sits under corrM, fore of the
-    // hangar. `stairwell` role marks it two decks tall with a walkable ramp.
-    { id: 'grandStair', name: 'Grand Stairwell', deck: 4, foreAft: 0.47, type: 'open', capacity: 20, w: 24, d: 18, row: 0, roles: ['stairwell', 'large'] },
     { id: 'hangar', name: 'Hangar Fore', deck: 4, foreAft: 0.58, type: 'open', capacity: 30, w: 34, d: 20, row: 0, roles: ['hangar', 'large', 'crash_candidate'] },
     { id: 'hangarCtl', name: 'Hangar Control', deck: 4, foreAft: 0.56, type: 'room', capacity: 5, w: 8, d: 6, row: -1, roles: ['systems'] },
     { id: 'hangarA', name: 'Hangar Aft', deck: 4, foreAft: 0.63, type: 'open', capacity: 30, w: 34, d: 20, row: 0, roles: ['hangar', 'large', 'crash_candidate'] },
@@ -105,11 +107,11 @@ export const SHIP = {
     { a: 'corrA', b: 'podPort', type: 'blastdoor', lockable: true },
     { a: 'corrA', b: 'podStbd', type: 'blastdoor', lockable: true },
     // deck 4
-    // GRAND STAIRWELL (user: Pillar-of-Autumn style, its own huge room) — you
-    // walk the ramp between the mid corridor (mezzanine) and the hall floor,
-    // which opens onto the hangar. The two levels see and shoot across.
-    { a: 'corrM', b: 'grandStair', type: 'stairwell', lockable: false },
-    { a: 'grandStair', b: 'hangar', type: 'hatch', lockable: false },
+    // GRAND STAIRWELL: entered from the mid corridor by a normal deck-3
+    // doorway (the corridor is never cut / blocked); the switchback stairs
+    // INSIDE descend two decks to the hangar (the 'stairwell' link, walked).
+    { a: 'corrM', b: 'grandStair', type: 'hatch', lockable: false },
+    { a: 'grandStair', b: 'hangar', type: 'stairwell', lockable: false },
     { a: 'hangar', b: 'hangarA', type: 'hatch', lockable: false },
     { a: 'hangar', b: 'hangarCtl', type: 'hatch', lockable: true },
     { a: 'hangarA', b: 'hangarCtl', type: 'hatch', lockable: true },

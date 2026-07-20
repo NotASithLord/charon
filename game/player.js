@@ -198,36 +198,34 @@ export class Player {
     this.queuedTrunk = null;
   }
 
-  // GRAND STAIRWELL walk-through (user: navigate it normally, no L). The
-  // stairwell room is on the lower deck; its mezzanine sits at the UPPER
-  // deck's floor level and flows into the corridor there. Crossing the fore
-  // edge flips the player between the corridor (deck above) and the mezzanine
-  // (stairwell deck) with world height preserved — a seamless step. Direction
-  // (vx sign) gives hysteresis so it doesn't oscillate on the boundary.
+  // GRAND STAIRWELL (user: walk in from the corridor, take the switchback
+  // down). Entering the room from the corridor is a NORMAL same-deck doorway —
+  // no portal. The only deck change is at the BOTTOM of the stairs, where the
+  // switchback lands on the hangar deck below: crossing the stair mouth flips
+  // the player between the stairwell room and the hangar with world height
+  // preserved. vz direction gives hysteresis so it doesn't oscillate.
   _stairPortal() {
     if (this.climb) return;
-    const w = this.world;
-    for (const g of (w.stairRooms ?? [])) {
-      const inZ = this.z >= g.cz - g.hz && this.z <= g.cz + g.hz;
-      if (!inZ) continue;
-      if (this.deck === g.deck - 1) {
-        // on the corridor above: stepping aft into the footprint drops onto
-        // the mezzanine (same world Y = the deck-above floor). Nudge well
-        // inside so we clear the return threshold (no boundary oscillation).
-        if (this.x >= g.cx - g.hx && this.x <= g.cx + g.hx) {
-          this.deck = g.deck;
-          this.x = g.cx - g.hx + 0.9;
-          this.h = g.hiElev - elevOf(g.deck);   // one deck up from the low floor
+    for (const g of (this.world.stairRooms ?? [])) {
+      const hangarDeck = g.deck + 1;
+      const baseZ = g.wellCz - g.wellHz;   // front edge = foot of the stairs
+      const inWellX = this.x >= g.wellCx - 0.3 && this.x <= g.wellCx + g.wellHx + 0.5;
+      const worldY = elevOf(this.deck) + this.h;
+      if (this.deck === g.deck) {
+        // reached the foot of the stairs — step out onto the hangar deck
+        if (worldY <= g.loElev + 0.45 && inWellX && this.z <= baseZ + 0.4 && this.vz < 0.05) {
+          this.deck = hangarDeck;
+          this.z = baseZ - 0.8;
+          this.h = worldY - elevOf(hangarDeck); // continuous world height (~0)
           this.vy = 0; this.onGround = true;
         }
-      } else if (this.deck === g.deck) {
-        // in the stairwell on the mezzanine: stepping fore off the front edge
-        // (and actually moving fore) returns to the corridor floor above
-        const onMezz = Math.abs(elevOf(g.deck) + this.h - g.hiElev) < 0.6;
-        if (onMezz && this.x <= g.cx - g.hx + 0.4 && this.vx < -0.03) {
-          this.deck = g.deck - 1;
-          this.x = g.cx - g.hx - 0.9;            // nudge onto the corridor floor
-          this.h = 0; this.vy = 0; this.onGround = true;
+      } else if (this.deck === hangarDeck) {
+        // at the foot in the hangar — step onto the bottom of the stairs
+        if (inWellX && this.z >= baseZ - 0.6 && this.z <= baseZ + 0.15 && this.vz > 0.05) {
+          this.deck = g.deck;
+          this.z = baseZ + 0.6;
+          this.h = worldY - elevOf(g.deck);     // negative (below the entry floor)
+          this.vy = 0; this.onGround = true;
         }
       }
     }
