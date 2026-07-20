@@ -223,12 +223,42 @@ function endScreen(title, text, final = true) {
 }
 
 let lastEvent = 0;
+// FOG OF WAR FOR THE FEED (user rule): the GAME's ship log never narrates
+// the flood's mind. Flood-POV events are dropped outright, or replaced by
+// what a crew would actually perceive — screams, noises, something stirring.
+// The sim debug page keeps the full omniscient log.
+const _ominousAt = {};
+function gameLogView(e) {
+  const room = e.node >= 0 ? sim.graph.node(e.node).name : null;
+  const throttle = (key, sec = 20) => {
+    if (e.t - (_ominousAt[key] ?? -999) < sec) return false;
+    _ominousAt[key] = e.t;
+    return true;
+  };
+  switch (e.type) {
+    case 'hive': case 'carrier': case 'bait': case 'ambush': case 'vent':
+      return null; // the hive does not report to the bridge
+    case 'convert':
+      if (!room || !throttle('c' + e.node)) return null;
+      return { t: e.t, type: 'radio', msg: e.msg.includes('taken')
+        ? `screams heard from ${room}` : `strange noises reported from ${room}` };
+    case 'rampage':
+      if (!room || !throttle('m' + e.node, 15)) return null;
+      return { t: e.t, type: 'combat', msg: `heavy movement reported near ${room}` };
+    case 'revive': case 'reanimate':
+      if (!room || !throttle('r' + e.node)) return null;
+      return { t: e.t, type: 'radio', msg: `something stirs in ${room}` };
+    default:
+      return e;
+  }
+}
 function renderLog() {
   const log = el('log');
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   let added = false;
   while (lastEvent < sim.events.length) {
-    const e = sim.events[lastEvent++];
+    const e = gameLogView(sim.events[lastEvent++]);
+    if (!e) continue;
     const div = document.createElement('div');
     div.className = `ev ev-${e.type}`;
     div.innerHTML = `<span class="t">${fmtTime(e.t)}</span> ${e.msg.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}`;
@@ -373,9 +403,10 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   muzzleFlash.position.copy(muzzle);
   muzzleFlash.intensity = 8;
   if (best) {
-    // combat forms soak twice the hits FROM THE PLAYER (user tuning) — the
-    // sim's own marine-vs-form balance is untouched
-    hurtFloodForm(sim, best, best.faction === 4 ? dmg * 0.5 : dmg, false, player.agent.id);
+    // parity (user rule): a combat form soaks the same fire from the player
+    // as from any marine — its durability lives in the sim's hp, not in a
+    // player-only multiplier
+    hurtFloodForm(sim, best, dmg, false, player.agent.id);
     hitFlash = 1;
     audio.play('tick', null, 0.5, 'tick', 40);
   } else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }

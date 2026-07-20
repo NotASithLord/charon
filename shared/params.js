@@ -44,8 +44,8 @@ export const PARAMS = {
   // flood should win most runs — the marines alone can't hold the ship. Tune
   // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 26, // difficulty lever — live input in the sim UI (re-leveled
-    initialCombatForms: 5,     // after pods became rifle targets; game mode starts lighter)
+    initialInfectionForms: 14, // difficulty lever — LEAN by design (user rule): the flood's
+    initialCombatForms: 3,     // strength is per-form durability + hive tactics, not headcount
     initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
   },
   // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling
@@ -160,11 +160,12 @@ export const PARAMS = {
     armed:    { hp: 30, dps: 9, stompPerSec: 0.2,
                 gun: { rof: 2, dmg: 6.5, accNear: 0.70, accFar: 0.30 } },
     civilian: { hp: 20 },
-    // Tuned so a combat form's death (2*marineDps) lands right at the moment
-    // it downs its first marine (marineHp/cfDps): with 2 marines it's a
-    // coin-flip whether they kill it clean or trade one, 3 win clean, 1 loses.
+    // HALO-DURABLE (user rule: difficulty lives in damage/health and hive
+    // tactics, not starting headcount — and the player gets NO special
+    // multiplier): ~1/3 of an MA5 mag on target drops one, a marine PAIR now
+    // trades a man for a form more often than not, 3 marines win clean.
     // swing: 18 dmg / 0.9 s = the same 20 dps sustained, delivered in chunks.
-    combatForm: { hp: 63, dps: 20, hpJitter: 0.18,   // spawn hp varies ±18% -> real 50/50 at 2v1
+    combatForm: { hp: 90, dps: 20, hpJitter: 0.18,   // spawn hp varies ±18%
                   swing: { dmg: 18, cooldownSec: 0.9 } },
     hostWeaponDps: 5,          // nominal (shaft pools / hive estimates)
     // the armed MINORITY of forms spray the host's weapon one-handed and

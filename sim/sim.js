@@ -1052,7 +1052,11 @@ export class Sim {
     const hw = Math.max(0.7, nd.w / 2 - 1.0), hd = Math.max(0.7, nd.d / 2 - 1.0);
     const ang = h1 * Math.PI * 2 + nd.idx * 0.7;
     const u = Math.sqrt(h2);
-    return [nd.x + Math.cos(ang) * u * Math.min(hw, 6), nd.y + Math.sin(ang) * u * Math.min(hd, 6)];
+    // full-footprint spread — a 6m cap clustered every big room's slots at
+    // its center, so arrivals converged there and the separation pass then
+    // shoved them apart (user report: marines "zipping to the middle of the
+    // room then randomly deploying outward")
+    return [nd.x + Math.cos(ang) * u * hw, nd.y + Math.sin(ang) * u * hd];
   }
 
   // FIRE IS REAL (user rule): standing in a fire hurts — humans and flood

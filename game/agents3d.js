@@ -311,9 +311,26 @@ export class Agents3D {
         else stamp(this.combatCivSet, counts.combatCiv++);
         continue;
       }
-      if (this._downAt.has(id)) this._downAt.delete(id); // revived — back on its feet
+      // REVIVE TELEGRAPH (user note: forms "getting back up just happen
+      // suddenly, seems like a bug"): a form that was down last frame RISES
+      // through a reverse of its death fall, with a shudder — 0.85 s of
+      // clearly-readable "it's getting back up"
+      if (this._downAt.has(id)) {
+        this._downAt.delete(id);
+        (this._riseAt ??= new Map()).set(id, performance.now());
+      }
+      let rise = 0;
+      const riseT0 = this._riseAt?.get(id);
+      if (riseT0 !== undefined) {
+        const p = Math.min(1, (performance.now() - riseT0) / 850);
+        if (p >= 1) this._riseAt.delete(id);
+        else {
+          const ease = p * p * (3 - 2 * p);
+          rise = -Math.PI / 2 * (1 - ease) + Math.sin(performance.now() * 0.05 + id) * 0.07 * (1 - p);
+        }
+      }
       // FLINCH (hit feedback): a freshly-hurt body jerks
-      const flinch = flags & FLAG.FLINCH ? Math.sin(performance.now() * 0.06 + id) * 0.09 - 0.14 : 0;
+      const flinch = (flags & FLAG.FLINCH ? Math.sin(performance.now() * 0.06 + id) * 0.09 - 0.14 : 0) + rise;
 
       switch (f) {
         case FACTION.CIVILIAN: {
@@ -482,8 +499,15 @@ export class Agents3D {
   }
 
   _rifleAt(x, y, z, rotY) {
-    this._e.set(0, rotY, 0);
+    // HELD, not floating (user note: "not even holding a weapon correctly"):
+    // offset to the grip point — forward and into the right hand — and
+    // pitched to a two-hand low-ready instead of hovering level mid-chest
+    const fx = Math.cos(rotY), fz = -Math.sin(rotY); // +X-forward after rotY
+    const rx = -fz, rz = fx;                          // right-hand direction
+    this._e.set(0, rotY, -0.16);
     this._q.setFromEuler(this._e);
-    this._m.compose(this._p.set(x, y, z), this._q, this._s.set(1, 1, 1));
+    this._m.compose(
+      this._p.set(x + fx * 0.26 + rx * 0.15, y - 0.06, z + fz * 0.26 + rz * 0.15),
+      this._q, this._s.set(1, 1, 1));
   }
 }
