@@ -30,7 +30,11 @@ export function updateFloodTick(sim, dt) {
     // survival reflex: an infection form standing among shooters dives for
     // the safest opening NOW instead of waiting for the 2.5 s strategic
     // brain — the currency is too precious to stand in a fire lane
+    // COMMITTED (user rule): once a form has begun burrowing — into a corpse,
+    // a downed form, or a live host — it CANNOT stop. It ignores the survival
+    // reflex entirely; the only way off is killing it.
     if (a.faction === FACTION.INFECTION && !a.move && a.state !== STATE.GRABBING
+      && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE
       && (sim.hive.lastScarcity ?? 3) > 0.8) {
       const roomies = sim.occupants(a.pnode ?? a.node);
       const hot = roomies.some((h) => h.hp > 0 && !h.dead &&
@@ -63,20 +67,18 @@ export function updateFloodTick(sim, dt) {
           if (danger < bestDanger) { bestDanger = danger; best = { to, link }; }
         }
         if (best && bestDanger < hereDanger) {
-          // a form mid-conversion ABANDONS the body properly — task cleared,
-          // corpse unclaimed for whoever comes later. Keeping the CONVERT
-          // task alive pulled the form straight back into the fire lane the
-          // moment it finished bolting: an endless drop-and-return carousel
-          // (user report: "begin to infect corpses and just drop them").
-          if (a.task?.kind === TASK.CONVERT) {
+          // fleeing for its life = the errand is OFF. Keeping the old task
+          // pulled the form straight back through the vent into the guns it
+          // just escaped (user report: pointless vent double-backs). The
+          // next strategic round retasks it from wherever it lands — and if
+          // it lands among unclaimed corpses, the arrive-and-eat rule roots
+          // it there on the spot. (Committed burrowers never reach this
+          // branch — they're excluded above.)
+          if (a.task?.corpseId !== undefined) {
             const b = sim.byId.get(a.task.corpseId);
-            if (b) b.claimed = false;
-            a.task = null; a.taskProgress = 0;
-          } else if (a.task?.kind === TASK.REANIMATE) {
-            const d = sim.byId.get(a.task.targetId);
-            if (d) d.claimed = false;
-            a.task = null;
+            if (b && !b.dead) b.claimed = false;
           }
+          a.task = null; a.taskProgress = 0;
           a.path = [];
           sim.setPath(a, [{ to: best.to, link: best.link, layer: best.link.kind }]);
           a.state = STATE.MOVE;
@@ -225,8 +227,20 @@ export function updateFloodTick(sim, dt) {
           if (sim.P.combat.grabPins) target.held = sim.tickCount;
           sim.hurtHuman(target, sim.P.combat.latchDps * dt, a.id); // the spike works while it burrows
           a.grabTimer += dt;
+          // RIDE THE HOST (user rule: the latch cannot be broken) — the host
+          // runs screaming in circles, and the form stays ON them, clamped
+          // to their back, so no amount of running opens the gap. Only
+          // shooting the attached form ends it.
+          a.x = target.x - Math.cos(target.heading) * 0.45;
+          a.y = target.y - Math.sin(target.heading) * 0.45;
+          a.heading = target.heading;
           const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
           if (a.grabTimer >= need && !target.dead) convertHuman(sim, a, target);
+        } else if (samePhys && a.grabTimer > 0) {
+          // latched but momentarily out of the range gate (host spun away
+          // this same tick): stay committed — snap back onto them
+          a.x = target.x - Math.cos(target.heading) * 0.45;
+          a.y = target.y - Math.sin(target.heading) * 0.45;
         } else if (samePhys) {
           // same open space, not yet in reach: _spatialSteer closes the gap
           // straight at the victim's live position

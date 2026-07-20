@@ -73,6 +73,47 @@ export class Sim {
     this.sweptAt = new Float64Array(graph.n).fill(-9999); // last time a marine cleared a room
     this._panicked = new Uint8Array(graph.n);
 
+    // FIRES (user rule): the breach burns, and the ship's BROKEN (jammed)
+    // doors are the other fire sites — a broken door IS the damage showing.
+    // Each fire is a real sim object: it hurts anyone standing in it, and
+    // every NPC steers clear. Locked doors were already impassable, so the
+    // door fires add area denial around the jam, not new blockage.
+    this.fires = [];
+    {
+      const br = graph.node(graph.breachNode);
+      this.fires.push({
+        deck: br.deck, node: br.idx,
+        x: br.x + this.rng.range(-br.w / 4, br.w / 4),
+        y: br.y + this.rng.range(-br.d / 4, br.d / 4), scale: 1.7,
+      });
+      const brokenDoors = graph.edges.filter((e) => e.locked && e.door
+        && graph.node(e.a).deck === graph.node(e.b).deck);
+      const count = Math.min(brokenDoors.length, 2 + this.rng.int(3)); // 2-4 per seed
+      for (let i = 0; i < count; i++) {
+        const e = brokenDoors.splice(this.rng.int(brokenDoors.length), 1)[0];
+        e.burning = true; // the renderer tints the panel; pathing already blocks it (locked)
+        this.fires.push({ deck: graph.node(e.a).deck, node: e.a, x: e.door.x, y: e.door.y, scale: 0.9 });
+      }
+      // nobody SPAWNS inside a blaze (the initial swarm lands at the breach,
+      // right where the biggest fire is): nudge the living out to the rim;
+      // corpses caught inside it at the event are already charred husks
+      for (const a of this.agents) {
+        for (const f of this.fires) {
+          if (a.deck !== f.deck) continue;
+          const R = this.P.fire.radiusM * f.scale;
+          const dx = a.x - f.x, dy = a.y - f.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 >= R * R) continue;
+          if (a.faction === FACTION.CORPSE) { a.damage = 100; continue; }
+          const d = Math.sqrt(d2) || 0.001;
+          const room = graph.node(a.node);
+          const hw = Math.max(0.4, room.w / 2 - 0.3), hd = Math.max(0.4, room.d / 2 - 0.3);
+          a.x = Math.max(room.x - hw, Math.min(room.x + hw, f.x + (dx / d) * (R + 0.6)));
+          a.y = Math.max(room.y - hd, Math.min(room.y + hd, f.y + (dy / d) * (R + 0.6)));
+        }
+      }
+    }
+
     this.hive = new Hive(this);
     assignFirstSweep(this);
     this._refreshOccupancy();
@@ -274,6 +315,8 @@ export class Sim {
     updateFloodTick(this, dt);
     this._advanceMovement(dt);
     this._separate(dt);
+    this._fireAvoid(dt);
+    this._fireDamage(dt);
     this._refreshOccupancy();
     this._advanceDarkness(dt);
     resolveCombat(this, dt);
@@ -502,8 +545,28 @@ export class Sim {
       if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) continue;
       // the player's body is moved by the game, not the pathfinder
       if (a.isPlayer) { a.animTime += dt; continue; }
-      // a human currently in a Flood form's grip can't move (§ grabPins)
-      if (a.held === this.tickCount) { a.move = null; continue; }
+      // a human with a form burrowing in (§ grabPins): the latch CANNOT be
+      // broken — the host runs screaming in tight frantic circles until
+      // someone physically shoots the thing off (user rule). The player's
+      // own body stays game-driven (the pinned UX handles them).
+      if (a.held === this.tickCount) {
+        a.move = null;
+        if (!a.isPlayer && (a.faction === FACTION.CIVILIAN || a.faction === FACTION.ARMED || a.faction === FACTION.MARINE)) {
+          a.panicked = true;
+          a.heading += dt * 4.6; // tight spin — frantic circles
+          const mps = this.P.movement.baseMps * 1.15;
+          a.x += Math.cos(a.heading) * mps * dt;
+          a.y += Math.sin(a.heading) * mps * dt;
+          const room = this.graph.node(a.pnode ?? a.node);
+          const hw = Math.max(0.4, room.w / 2 - 0.4), hd = Math.max(0.4, room.d / 2 - 0.4);
+          a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x));
+          a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y));
+          a.animTime += dt;
+          // and never stops screaming
+          if ((this.tickCount + a.id) % 15 === 0) this.screamTick[a.node] = this.tickCount;
+        }
+        continue;
+      }
       // LINE-OF-SIGHT ENGAGEMENT (user note): a form that physically shares
       // an open space with prey abandons its track and closes on the body
       // itself — see _spatialSteer
@@ -553,16 +616,22 @@ export class Sim {
           // then on the destination pad.
           const padX = (n, other) => Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x));
           const flipT = link.flipT ?? 0.5;
-          if (k < flipT) {
-            // WALK to the pad first (user note: jerky movement) — snapping
-            // straight onto it teleported every climber across the room
+          // the leg = WALK to the pad at real speed (0..appT), ride/climb at
+          // the origin pad (appT..handT), then stand on the far pad. appT is
+          // sized from real meters at move start — the walk takes as long as
+          // walking there normally would (user report: NPCs teleporting to
+          // lifts and stairs)
+          const appT = a.move.appT ?? 0.15;
+          const handT = appT + (1 - appT) * flipT;
+          if (k < appT) {
             const px = padX(from, to), py = from.y;
             const sx = a.move.sx ?? px, sy = a.move.sy ?? py;
-            const approach = Math.max(0.12, flipT * 0.5);
-            const kk = Math.min(1, k / approach);
+            const kk = k / appT;
             a.x = sx + (px - sx) * kk;
             a.y = sy + (py - sy) * kk;
-            if (kk < 1) a.heading = Math.atan2(py - sy, px - sx);
+            a.heading = Math.atan2(py - sy, px - sx);
+          } else if (k < handT) {
+            a.x = padX(from, to); a.y = from.y;
           } else {
             a.x = padX(to, from); a.y = to.y;
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
@@ -658,6 +727,19 @@ export class Sim {
         // moment a move began
         a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0,
           sx: a.x, sy: a.y, travelSec: this.travelSec(link, mult) * pace };
+        // NO TELEPORTING TO LIFTS/STAIRS (user rule): a cross-deck leg pays
+        // for the walk to the trunk pad at real walking speed BEFORE the
+        // climb/ride time starts — appT marks where approach ends
+        if (link.kind === 'std') {
+          const fromN = this.graph.node(a.node), toN = this.graph.node(step.to);
+          if (fromN.deck !== toN.deck) {
+            const px = Math.max(fromN.x - fromN.w / 2 + 1.2, Math.min(fromN.x + fromN.w / 2 - 1.2, toN.x));
+            const appSec = Math.hypot(px - a.x, fromN.y - a.y)
+              / Math.max(0.5, this.P.movement.baseMps * mult);
+            a.move.appT = appSec / (appSec + a.move.travelSec);
+            a.move.travelSec += appSec;
+          }
+        }
         if (ladder) link.occupiedBy = a.id; // claim the ladder
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
@@ -917,9 +999,76 @@ export class Sim {
     a.animTime += dt;
   }
 
+  // FIRE IS REAL (user rule): standing in a fire hurts — humans and flood
+  // alike, the player included. Flame damage counts as fire for the flood
+  // economy (burned husks don't convert).
+  _fireDamage(dt) {
+    const F = this.P.fire;
+    for (const f of this.fires) {
+      for (const a of this.agents) {
+        if (a.dead || a.deck !== f.deck) continue;
+        const dx = a.x - f.x, dy = a.y - f.y;
+        const r = F.radiusM * f.scale;
+        if (dx * dx + dy * dy > r * r) continue;
+        if (a.faction === FACTION.CORPSE) {
+          // a body in the flames chars — and a charred husk converts to nothing
+          if (a.damage < 100) {
+            a.damage = Math.min(100, a.damage + F.dps * dt * 2);
+            if (a.damage >= 100) this.stats.corpsesBurned++;
+          }
+        } else if (a.faction === FACTION.INFECTION || a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER) {
+          hurtFloodForm(this, a, F.dps * dt, true);
+        } else if (a.hp > 0) {
+          this.hurtHuman(a, F.dps * dt);
+        }
+      }
+    }
+  }
+
+  // ...and every NPC gives it a wide berth: a steady push out of the hot
+  // zone that overrides parking and steering (movers passing near the
+  // breach blaze take their lumps from _fireDamage instead)
+  _fireAvoid(dt) {
+    const F = this.P.fire;
+    for (const f of this.fires) {
+      const R = F.radiusM * f.scale + 1.0;
+      for (const a of this.agents) {
+        if (a.dead || a.isPlayer || a.deck !== f.deck || a.faction === FACTION.CORPSE) continue;
+        if (a.held === this.tickCount) continue; // a frantic host isn't steering anything
+        const dx = a.x - f.x, dy = a.y - f.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > R * R || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2);
+        const push = (R - d) * Math.min(1, dt * 6);
+        const room = this.graph.node(a.pnode ?? a.node);
+        const hw = Math.max(0.4, room.w / 2 - 0.3), hd = Math.max(0.4, room.d / 2 - 0.3);
+        a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x + (dx / d) * push));
+        a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y + (dy / d) * push));
+      }
+    }
+  }
+
   _reap() {
     let changed = false;
-    for (const a of this.agents) if (a.dead) { changed = true; this.byId.delete(a.id); }
+    for (const a of this.agents) {
+      if (!a.dead) continue;
+      changed = true;
+      // a dead claimant RELEASES its claims — leaked claims left whole rooms
+      // of corpses "spoken for" forever, so later forms crossed to them and
+      // doubled straight back with nothing to eat (user report)
+      const t = a.task;
+      if (t) {
+        if (t.corpseId !== undefined) {
+          const b = this.byId.get(t.corpseId);
+          if (b && !b.dead) b.claimed = false;
+        }
+        if (t.targetId !== undefined) {
+          const d = this.byId.get(t.targetId);
+          if (d && !d.dead && d.claimed) d.claimed = false;
+        }
+      }
+      this.byId.delete(a.id);
+    }
     if (changed) this.agents = this.agents.filter((a) => !a.dead);
   }
 

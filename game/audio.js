@@ -109,6 +109,7 @@ export class GameAudio {
       const rightX = Math.cos(this.listener.yaw), rightZ = -Math.sin(this.listener.yaw);
       pan = d > 0.5 ? clamp((dx * rightX + dz * rightZ) / d, -1, 1) * 0.8 : 0;
     }
+    if (!Number.isFinite(gain) || !Number.isFinite(pan)) return; // never feed NaN to an AudioParam
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = 0.94 + ((now * 7919) % 100) / 830; // tiny human variation

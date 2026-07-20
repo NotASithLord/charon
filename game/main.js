@@ -68,23 +68,22 @@ function toggleMap(open = !mapOpen) {
 const audio = new GameAudio();
 canvas.addEventListener('click', () => audio.ensure());
 
-// FIRE (user note): seeded per run — the crash site always burns, plus a
-// few damaged spots that differ every seed; the sim's own flamethrower
-// burns light up live below. Render-only randomness (own RNG stream).
+// FIRE (user rule): fires are SIM objects now — the breach blaze plus the
+// ship's broken (jammed) doors, all seeded in the sim itself so the flames
+// that hurt you are exactly the flames you see. The sim's flamethrower
+// burns still light up live below.
 const fire = new FireFX(scene);
-{
-  const frng = new RNG(seed + ':fires');
-  const br = sim.graph.node(sim.graph.breachNode);
-  const [bx, bz] = world.simToWorld(
-    br.x + frng.range(-br.w / 4, br.w / 4), br.y + frng.range(-br.d / 4, br.d / 4), br.deck);
-  fire.add('breach', bx, bz, elevOf(br.deck), 1.7);
-  const candidates = sim.graph.nodes.filter((n) => n.idx !== sim.graph.breachNode && n.deck >= 3);
-  const count = 2 + Math.floor(frng.next() * 3); // 2-4 extra fires, seeded
-  for (let i = 0; i < count && candidates.length; i++) {
-    const n = candidates.splice(Math.floor(frng.next() * candidates.length), 1)[0];
-    const [fx2, fz2] = world.simToWorld(
-      n.x + frng.range(-n.w / 3, n.w / 3), n.y + frng.range(-n.d / 3, n.d / 3), n.deck);
-    fire.add(`amb${i}`, fx2, fz2, elevOf(n.deck), 0.6 + frng.next() * 0.6);
+for (let i = 0; i < sim.fires.length; i++) {
+  const f = sim.fires[i];
+  const [fx2, fz2] = world.simToWorld(f.x, f.y, f.deck);
+  fire.add(`sim${i}`, fx2, fz2, elevOf(f.deck), f.scale);
+}
+// burning broken doors glow hot
+for (const d of world.doors) {
+  if (d.edge.burning) {
+    d.mesh.material.color.setHex(0x8a4020);
+    d.mesh.material.emissive.setHex(0xff5510);
+    d.mesh.material.emissiveIntensity = 0.9;
   }
 }
 // live flamethrower burns from the sim
@@ -323,7 +322,7 @@ function shotCandidates() {
   for (const a of sim.agents) {
     if (a.dead) continue;
     if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
-    if (a.move && a.move.layer === 'vent') continue; // in the ducts — no line of fire
+    if (a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft')) continue; // in the ducts — no line of fire
     if (a.deck === player.deck || (shaftNode !== -1 && a.node === shaftNode)) out.push(a);
   }
   return out;

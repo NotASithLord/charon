@@ -264,6 +264,7 @@ export class World {
     }
 
     this._buildDoors();
+    this._buildShaftGrates();
     this._buildProps();
   }
 
@@ -457,7 +458,19 @@ export class World {
       if (a.deck !== b.deck) continue;
       const deck = a.deck, elev = elevOf(deck);
       const [dx, dz] = this.simToWorld(e.door.x, e.door.y, deck);
-      const horizWall = Math.abs(a.y - b.y) >= Math.abs(a.x - b.x);
+      // PANEL LIES ALONG ITS WALL (user report: doors turned 90°). The old
+      // room-center-delta guess breaks whenever a room sits offset along a
+      // long corridor — the real answer is which axis the two footprints
+      // actually overlap on (that's the axis the shared wall runs along).
+      // Throat doors face down the throat instead.
+      let phi; // long-axis direction of the panel, radians in sim space
+      if (e.doorA && e.doorB && !e.shared) {
+        phi = Math.atan2(e.doorB.y - e.doorA.y, e.doorB.x - e.doorA.x) + Math.PI / 2;
+      } else {
+        const xov = Math.min(a.x + a.w / 2, b.x + b.w / 2) - Math.max(a.x - a.w / 2, b.x - b.w / 2);
+        const yov = Math.min(a.y + a.d / 2, b.y + b.d / 2) - Math.max(a.y - a.d / 2, b.y - b.d / 2);
+        phi = xov >= yov ? 0 : Math.PI / 2;
+      }
       const mat = new THREE.MeshStandardMaterial({
         color: e.locked ? 0x7a2723 : 0x55637d,
         emissive: e.locked ? 0xa03020 : 0x101820,
@@ -465,9 +478,8 @@ export class World {
         roughness: 0.5, metalness: 0.6,
       });
       const panel = new THREE.Mesh(
-        horizWall ? new THREE.BoxGeometry(DOOR_W + 0.1, CLEAR_H - 0.15, 0.14)
-          : new THREE.BoxGeometry(0.14, CLEAR_H - 0.15, DOOR_W + 0.1),
-        mat);
+        new THREE.BoxGeometry(DOOR_W + 0.1, CLEAR_H - 0.15, 0.14), mat);
+      panel.rotation.y = -phi; // sim direction (cos phi, sin phi) -> world x/z
       panel.position.set(dx, elev + (CLEAR_H - 0.15) / 2, dz);
       this.scene.add(panel);
       this.doors.push({
@@ -476,6 +488,41 @@ export class World {
         closedY: elev + (CLEAR_H - 0.15) / 2,
         open01: 0, // slides UP into the frame
       });
+    }
+  }
+
+  // MAINTENANCE SHAFT ACCESS (user report: the shaft connections were
+  // invisible — nothing in the world marked where the between-deck ducts
+  // begin and end): every shaft mouth gets a floor grate with a warning
+  // rim. The crawlers themselves are hidden while inside (agents3d).
+  _buildShaftGrates() {
+    const g = this.graph;
+    const plateMat = new THREE.MeshStandardMaterial({ color: 0x11161c, roughness: 0.9, metalness: 0.35 });
+    const slatMat = new THREE.MeshStandardMaterial({ color: 0x39424e, roughness: 0.7, metalness: 0.5 });
+    const rimMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2416, emissive: 0xc09030, emissiveIntensity: 0.5, roughness: 0.6,
+    });
+    for (const s of g.shafts) {
+      for (const [na, nb] of [[s.a, s.b], [s.b, s.a]]) {
+        const n = g.node(na), other = g.node(nb);
+        // toward the far end, clamped inside the room and off the walls
+        const dx = other.x - n.x, dy = other.y - n.y;
+        const L = Math.hypot(dx, dy) || 1;
+        const px = Math.max(n.x - n.w / 2 + 1.1, Math.min(n.x + n.w / 2 - 1.1, n.x + (dx / L) * (n.w / 2 - 1.1)));
+        const py = Math.max(n.y - n.d / 2 + 1.1, Math.min(n.y + n.d / 2 - 1.1, n.y + (dy / L) * (n.d / 2 - 1.1)));
+        const [wx, wz] = this.simToWorld(px, py, n.deck);
+        const elev = elevOf(n.deck);
+        const rim = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.04, 1.5), rimMat);
+        rim.position.set(wx, elev + 0.02, wz);
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.07, 1.3), plateMat);
+        plate.position.set(wx, elev + 0.045, wz);
+        this.scene.add(rim, plate);
+        for (let k = -2; k <= 2; k++) {
+          const slat = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.03, 0.12), slatMat);
+          slat.position.set(wx, elev + 0.09, wz + k * 0.24);
+          this.scene.add(slat);
+        }
+      }
     }
   }
 

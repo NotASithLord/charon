@@ -179,8 +179,12 @@ export class Viz {
       if (!this._visible(e.a) && !this._visible(e.b)) continue;
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck === b.deck && e.door) {
-        // orientation: slot lies ALONG the wall (perpendicular to a->b axis)
-        const horizWall = Math.abs(a.y - b.y) >= Math.abs(a.x - b.x);
+        // orientation: slot lies ALONG the wall — judged by which axis the
+        // two footprints overlap on (center deltas lie for rooms offset
+        // along a long corridor; same fix as the 3D panels)
+        const xov = Math.min(a.x + a.w / 2, b.x + b.w / 2) - Math.max(a.x - a.w / 2, b.x - b.w / 2);
+        const yov = Math.min(a.y + a.d / 2, b.y + b.d / 2) - Math.max(a.y - a.d / 2, b.y - b.d / 2);
+        const horizWall = xov >= yov;
         const wl = DOOR_W / 2, wt = 0.55;
         ctx.fillStyle = e.locked ? '#c0392b' : '#9fb4d4';
         if (horizWall) ctx.fillRect(e.door.x - wl, e.door.y - wt / 2, DOOR_W, wt);

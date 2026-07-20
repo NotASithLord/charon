@@ -1273,6 +1273,18 @@ export class Hive {
     const same = t && t.kind === task.kind && t.node === task.node
       && t.targetId === task.targetId && t.corpseId === task.corpseId
       && t.muster === task.muster;
+    // a REPLACED task releases its claims (same leak as death: a corpse
+    // "spoken for" by a form that got retasked was locked away forever)
+    if (!same && t) {
+      if (t.corpseId !== undefined) {
+        const b = this.sim.byId.get(t.corpseId);
+        if (b && !b.dead) b.claimed = false;
+      }
+      if (t.kind === TASK.REANIMATE && t.targetId !== undefined) {
+        const d = this.sim.byId.get(t.targetId);
+        if (d && d.claimed) d.claimed = false;
+      }
+    }
     form.task = task;
     if (!same) {
       form.path = [];

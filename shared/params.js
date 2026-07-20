@@ -29,6 +29,9 @@ export const PARAMS = {
     patrolSize: 2,
     garrison: 6,              // permanent Command Corridor guard detail
   },
+  // open flame on the deck (breach blaze + burning broken doors): real
+  // environmental damage inside the radius, and every NPC steers clear
+  fire: { dps: 10, radiusM: 2.1 },
   bodies: {
     eventCorpses: 60,         // portal-event dead scattered through the ship
                               // (user note: "less bodies, it's not a graveyard")

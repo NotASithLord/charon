@@ -197,7 +197,10 @@ export class Agents3D {
       const flags = buf.flags[i];
       // inside the ductwork: a form transiting a vent is genuinely out of
       // sight — don't render a body standing in the room it left
-      if (flags & FLAG.EXPOSED) continue;
+      // inside the ductwork — vent OR maintenance shaft — nobody can see it.
+      // (Un-hidden shaft movers ghosted through walls at the wrong deck and
+      // then teleported — user report at Maintenance Aft.)
+      if (flags & (FLAG.EXPOSED | FLAG.IN_SHAFT)) continue;
       clip = buf.animClip[i];
       animT = buf.animTime[i];
       curId = id;
