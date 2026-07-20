@@ -40,13 +40,14 @@ export const ODST = {
 
 export const FRAG = {
   count: 4,          // you board with four
-  throwSpeed: 15,    // m/s out of the hand
-  upBoost: 3.2,      // lofted arc
-  gravity: 22,
-  fuseS: 2.1,        // cooked from release
+  max: 12,           // how many you can carry (resupply at the armory)
+  throwSpeed: 24,    // m/s out of the hand — a real hard throw, reaches across a bay
+  upBoost: 4.2,      // lofted arc so it carries down a long corridor
+  gravity: 20,
+  fuseS: 2.4,        // cooked from release — flies far before it goes
   bounce: 0.42,      // velocity kept on impact
-  radiusM: 4.5,
-  damage: 70,        // sim explodeAt payload (falls off to edge)
+  radiusM: 8,        // heavy blast — clears a room, not just a corner
+  damage: 135,       // sim explodeAt payload (falls off to ~40% at the edge)
 };
 
 export const DOORS = {

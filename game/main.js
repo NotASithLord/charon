@@ -101,7 +101,7 @@ function syncBurnFires() {
 
 const weapon = new HeldWeapon(MA5);
 player.onAmmoTaken = (src) => {
-  if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; frags = Math.min(8, frags + 2); sim.log('combat', `you strip mags and frags from the rack (${sim.armoryStock} rifles left)`); }
+  if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; frags = Math.min(FRAG.max, frags + 4); sim.log('combat', `you strip mags and a bandolier of frags from the rack (${sim.armoryStock} rifles left)`); }
   else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
 };
 

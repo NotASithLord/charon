@@ -644,10 +644,35 @@ export class Sim {
           }
           a.heading = Math.atan2(to.y - from.y, to.x - from.x);
         } else {
-          // shafts/vents: crawl along the (drawn) duct line
-          a.x = from.x + (to.x - from.x) * k;
-          a.y = from.y + (to.y - from.y) * k;
-          a.heading = Math.atan2(to.y - from.y, to.x - from.x);
+          // VENT / SHAFT (user report: a crawler snapped to the room centre
+          // then teleported to the opening). Three legs instead: WALK to the
+          // marked duct opening (visible), CRAWL through the structure
+          // (hidden), then CLIMB OUT the far opening to a parking slot
+          // (visible). Only the middle leg is hidden, so you see them enter
+          // and leave at the grates.
+          const appT = a.move.appT ?? 0, exitT = a.move.exitT ?? 0;
+          const eFromX = a.move.eFromX ?? from.x, eFromY = a.move.eFromY ?? from.y;
+          const eToX = a.move.eToX ?? to.x, eToY = a.move.eToY ?? to.y;
+          if (k < appT) {
+            const kk = appT > 1e-6 ? k / appT : 1;
+            const sx = a.move.sx ?? from.x, sy = a.move.sy ?? from.y;
+            a.x = sx + (eFromX - sx) * kk;
+            a.y = sy + (eFromY - sy) * kk;
+            a.heading = Math.atan2(eFromY - sy, eFromX - sx);
+            a.move.hidden = false;
+          } else if (k > 1 - exitT) {
+            const kk = exitT > 1e-6 ? (k - (1 - exitT)) / exitT : 1;
+            const tx = a.move.tx ?? to.x, ty = a.move.ty ?? to.y;
+            a.x = eToX + (tx - eToX) * kk;
+            a.y = eToY + (ty - eToY) * kk;
+            a.heading = Math.atan2(ty - eToY, tx - eToX);
+            a.move.hidden = false;
+            if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
+          } else {
+            // inside the ductwork — hidden, sitting at the entry opening
+            a.x = eFromX; a.y = eFromY;
+            a.move.hidden = true;
+          }
         }
         // formation lane (user note: no stacked dots): every mover holds a
         // personal lateral offset from the column line, so a squad on the
@@ -811,6 +836,24 @@ export class Sim {
             a.move.travelSec = Math.max(0.2, ((d1 + d2) / mps) * pace);
             a.move.flipT2 = d1 / Math.max(0.1, d1 + d2);
           }
+        } else if (link.kind === 'vent' || link.kind === 'shaft') {
+          // WALK TO THE DUCT OPENING (user report: crawler snaps to room
+          // centre then teleports to the grate). The leg now pays real walk
+          // time to the marked opening in this room, crawls hidden, then walks
+          // out of the far opening to its own slot — visible at both grates.
+          const fromN = this.graph.node(a.node), toN = this.graph.node(step.to);
+          const eFrom = (a.node === link.a ? link.doorA : link.doorB) ?? link.door ?? { x: fromN.x, y: fromN.y };
+          const eTo = (a.node === link.a ? link.doorB : link.doorA) ?? link.door ?? { x: toN.x, y: toN.y };
+          const [tx, ty] = this._parkSlot(a, toN);
+          const mps = Math.max(0.5, this.P.movement.baseMps * mult);
+          const appSec = Math.hypot(eFrom.x - a.x, eFrom.y - a.y) / mps;
+          const exitSec = Math.hypot(tx - eTo.x, ty - eTo.y) / mps;
+          a.move.eFromX = eFrom.x; a.move.eFromY = eFrom.y;
+          a.move.eToX = eTo.x; a.move.eToY = eTo.y;
+          a.move.tx = tx; a.move.ty = ty;
+          a.move.travelSec += appSec + exitSec;
+          a.move.appT = appSec / a.move.travelSec;
+          a.move.exitT = exitSec / a.move.travelSec;
         }
         if (queues) link.occupiedBy = a.id; // claim the ladder (pods never do)
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
@@ -1203,11 +1246,14 @@ export class Sim {
       if (a.downed && a.damage < 100) flags |= FLAG.REANIMATABLE;
       if (a.downed) flags |= FLAG.DOWNED;
       if (a.panicked) flags |= FLAG.PANICKED;
-      if (a.move && a.move.layer === 'vent') flags |= FLAG.EXPOSED;
+      // hidden ONLY during the mid-crawl through the structure — the body is
+      // visible walking to the grate and climbing out the far one (user: no
+      // snap-to-center-then-teleport; go to a marked opening and vanish there)
+      if (a.move && a.move.layer === 'vent' && a.move.hidden) flags |= FLAG.EXPOSED;
       if (a.inShaftAmbush !== undefined) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;
-      if (a.move && a.move.layer === 'shaft') flags |= FLAG.IN_SHAFT;
+      if (a.move && a.move.layer === 'shaft' && a.move.hidden) flags |= FLAG.IN_SHAFT;
       // armed corpses carry the flag too so the renderer can lay the right
       // body down (and drop a rifle beside it)
       if (a.hostArmed || (a.faction === FACTION.CORPSE && a.wasArmed && a.damage < 100)) flags |= FLAG.ARMED_HOST;

@@ -285,6 +285,7 @@ export class World {
 
     this._buildDoors();
     this._buildShaftGrates();
+    this._buildVentGrates();
     this._buildProps();
   }
 
@@ -670,6 +671,51 @@ export class World {
         for (let k = -2; k <= 2; k++) {
           const slat = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.03, 0.12), slatMat);
           slat.position.set(wx, elev + 0.09, wz + k * 0.24);
+          this.scene.add(slat);
+        }
+      }
+    }
+  }
+
+  // MARKED VENT OPENINGS (user report: crawlers snapped to the room centre
+  // then teleported to nowhere). Every duct opening the flood uses gets a
+  // small louvered grate on the floor by the wall — the crawlers now walk to
+  // it, vanish into it, and climb out the far one. Deduped by position and
+  // kept clear of the real doorways (a shared-wall vent reads as the door).
+  _buildVentGrates() {
+    const g = this.graph;
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: 0x2a3340, emissive: 0x1a2b3a, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.5,
+    });
+    const slatMat = new THREE.MeshStandardMaterial({ color: 0x161c24, roughness: 0.85, metalness: 0.4 });
+    const seen = new Set();
+    // door panel positions per deck, to avoid dropping a grate in a doorway
+    const doorPts = [];
+    for (const e of g.edges) {
+      if (!e.door) continue;
+      const a = g.node(e.a), b = g.node(e.b);
+      if (a.deck !== b.deck) continue;
+      const [dx, dz] = this.simToWorld(e.door.x, e.door.y, a.deck);
+      doorPts.push({ deck: a.deck, x: dx, z: dz });
+    }
+    for (const v of g.vents) {
+      const a = g.node(v.a), b = g.node(v.b);
+      for (const [n, pt] of [[a, v.doorA], [b, v.doorB]]) {
+        const d = pt ?? v.door;
+        if (!d) continue;
+        const [wx, wz] = this.simToWorld(d.x, d.y, n.deck);
+        const key = `${n.deck}:${Math.round(wx)}:${Math.round(wz)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // skip openings that sit on a real doorway (the crawler uses that gap)
+        if (doorPts.some((p) => p.deck === n.deck && Math.hypot(p.x - wx, p.z - wz) < 1.4)) continue;
+        const elev = elevOf(n.deck);
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.05, 0.92), frameMat);
+        frame.position.set(wx, elev + 0.03, wz);
+        this.scene.add(frame);
+        for (let k = -1; k <= 1; k++) {
+          const slat = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.04, 0.16), slatMat);
+          slat.position.set(wx, elev + 0.06, wz + k * 0.26);
           this.scene.add(slat);
         }
       }
