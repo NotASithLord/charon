@@ -11,6 +11,66 @@ import { characterParts } from './characters.js';
 
 const CAP = 512;
 
+// CARRIER FORM (user note: "not a blob"): no source mesh exists in the tag
+// dump, so this is a sculpted procedural body — a lumpy two-lobed gas sack
+// on stubby legs with dorsal feeler stalks, merged into ONE geometry so the
+// instanced swell-scaling still works. Feet at y=0.
+function carrierGeometry() {
+  const parts = [];
+  const lumpy = (geo, amp, squashY = 1) => {
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const n = 1 + amp * Math.sin(x * 7.1 + 1.3) * Math.sin(y * 6.3 + 0.7) * Math.sin(z * 5.7 + 2.1);
+      pos.setXYZ(i, x * n, y * n * squashY, z * n);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  };
+  const sack = lumpy(new THREE.SphereGeometry(0.72, 14, 11), 0.17, 0.94);
+  sack.translate(0, 1.0, 0);
+  parts.push(sack);
+  const lobe = lumpy(new THREE.SphereGeometry(0.4, 10, 8), 0.2);
+  lobe.translate(0.42, 1.42, 0.08);
+  parts.push(lobe);
+  const belly = lumpy(new THREE.SphereGeometry(0.34, 9, 7), 0.22);
+  belly.translate(-0.35, 0.72, -0.18);
+  parts.push(belly);
+  for (const [lx, lz, tilt] of [[0.4, 0.32, 0.35], [0.42, -0.3, -0.3], [-0.38, 0.34, 0.3], [-0.4, -0.32, -0.35]]) {
+    const leg = new THREE.ConeGeometry(0.15, 0.85, 6);
+    leg.rotateX(Math.PI);           // taper to the deck
+    leg.rotateZ(tilt * 0.5);
+    leg.translate(lx, 0.42, lz);
+    parts.push(leg);
+  }
+  for (let k = 0; k < 4; k++) {
+    const st = new THREE.ConeGeometry(0.05, 0.45 + (k % 2) * 0.2, 5);
+    st.rotateZ((k - 1.5) * 0.25);
+    st.translate(-0.3 + k * 0.2, 1.85, k % 2 ? 0.17 : -0.14);
+    parts.push(st);
+  }
+  let vCount = 0, iCount = 0;
+  for (const g of parts) { vCount += g.attributes.position.count; iCount += g.index.count; }
+  const pos = new Float32Array(vCount * 3), nrm = new Float32Array(vCount * 3), uv = new Float32Array(vCount * 2);
+  const idx = new Uint32Array(iCount);
+  let vo = 0, io = 0;
+  for (const g of parts) {
+    pos.set(g.attributes.position.array, vo * 3);
+    nrm.set(g.attributes.normal.array, vo * 3);
+    uv.set(g.attributes.uv.array, vo * 2);
+    const gi = g.index.array;
+    for (let k = 0; k < gi.length; k++) idx[io + k] = gi[k] + vo;
+    vo += g.attributes.position.count;
+    io += gi.length;
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  merged.setIndex(new THREE.BufferAttribute(idx, 1));
+  return merged;
+}
+
 function makeInstanced(scene, geo, color, emissive = 0x000000, emissiveIntensity = 0.4) {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.15, emissive, emissiveIntensity });
   const mesh = new THREE.InstancedMesh(geo, mat, CAP);
@@ -51,7 +111,7 @@ export class Agents3D {
     this.infectionSet = mkSet('infection');
     this.combatCivSet = mkSet('combat_civ');
     this.combatOdstSet = mkSet('combat_odst');
-    this.carrier = makeInstanced(scene, new THREE.SphereGeometry(0.72, 12, 10), 0x9a5cc0, 0x5b2a80, 0.7);
+    this.carrier = makeInstanced(scene, carrierGeometry(), 0x8a9a58, 0x46521e, 0.55);
     this.corpse = makeInstanced(scene, new THREE.BoxGeometry(1.5, 0.28, 0.55), 0x5a5a5a);
     // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
     // call for every carried rifle on the ship (marines, armed crew, armed
@@ -309,7 +369,8 @@ export class Agents3D {
           const held = sim.byId.get(id)?.held ?? 0;
           const cap = sim.P.carrier.maxInfectionForms;
           const s = 0.8 + (held / cap) * 0.7 + (held / cap > 0.6 ? Math.sin(sim.t * 5) * 0.04 : 0);
-          this._pose(wx, elev + 0.72 * s, wz, heading, s, s, s);
+          // the sculpted body has its feet at y=0 — swell grows it upward
+          this._pose(wx, elev, wz, heading, s, s, s);
           this.carrier.setMatrixAt(counts.carrier++, this._m);
           break;
         }

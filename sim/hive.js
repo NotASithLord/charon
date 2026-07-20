@@ -327,6 +327,17 @@ export class Hive {
     const S = this.scarcity(I + K * 2); // carriers embody future forms
     this.lastScarcity = S;
 
+    // ALL IN (endgame closure): when the hive's mass dwarfs the few
+    // believed survivors, it stops counting and rises as one — muster
+    // thresholds and door-holds drop, every form converges. Without this a
+    // 150-form hive besieged 6 rifles forever (probe timeouts).
+    const mass = I + C * 2 + K * 2;
+    const wasAllIn = this.allIn;
+    // mass-ratio trigger (a count cap never fired — hiding civilians kept
+    // the believed-survivor count high while 150 forms besieged 6 rifles)
+    this.allIn = this.beliefs.size > 0 && mass >= 50 && mass >= this.beliefs.size * 3;
+    if (this.allIn && !wasAllIn) sim.log('hive', 'the hive rises as one — every form converges for the end');
+
     // re-validate queued paths against current beliefs: a route planned two
     // rounds ago may now run through a manned corridor
     for (const f of forms) {
@@ -761,12 +772,25 @@ export class Hive {
         const defense = this.believedHumanStr[target] + this.believedHardness[target];
         // a wave past maxMusterForms overwhelms ANY line — never keep waiting
         // for 2x a fear-inflated estimate of the defense
-        const needed = Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
+        const needed = this.allIn ? 1
+          : Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
         const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
         if (defense <= 0.8 || arrived >= needed) {
           this._musterStart.delete(target);
           for (const f of forms) this.assign(f, { kind: TASK.ATTACK, node: target });
           sim.log('rampage', `the muster is up — ${forms.length} forms storm ${g.node(target).name} together`);
+          continue;
+        }
+        // PATIENCE HAS LIMITS (user report: standoffs where the hive
+        // "musters and sits or trickles in"): a wave staged for over a
+        // minute at 60%+ of the target number goes anyway — a fear-inflated
+        // defense estimate must never hold a real army in place forever
+        const stagedSince = this._musterStart.get(target);
+        if (stagedSince !== undefined && sim.t - stagedSince > 75
+          && arrived >= Math.max(3, needed * 0.6)) {
+          this._musterStart.delete(target);
+          for (const f of forms) this.assign(f, { kind: TASK.ATTACK, node: target });
+          sim.log('rampage', `the hive tires of waiting — ${forms.length} forms storm ${g.node(target).name}`);
           continue;
         }
         // NUMBERS FIRST (user rule): if every combat form the hive owns

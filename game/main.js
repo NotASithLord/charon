@@ -47,12 +47,12 @@ torch.target = torchTarget;
 // infection forms, no combat forms/carriers yet) ---
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
-const sim = new Sim(seed, { flood: { initialInfectionForms: 20, initialCombatForms: 0, initialCarriers: 0 } });
+const sim = new Sim(seed, { flood: { initialInfectionForms: 15, initialCombatForms: 0, initialCarriers: 0 } });
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
 
-// spawn: Security on deck 3 — an ODST detail with a fireteam
-const player = new Player(canvas, world, sim, sim.graph.byId.get('security'));
+// spawn: CIC on the command deck (user tuning) — an ODST detail with a fireteam
+const player = new Player(canvas, world, sim, sim.graph.byId.get('cic'));
 agents.playerId = player.agent.id;
 const fireteam = sim.attachPlayerSquad(player.agent, 3);
 // MARINE TACNET (user request): the sim view's plan, filtered to what the
@@ -373,7 +373,9 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   muzzleFlash.position.copy(muzzle);
   muzzleFlash.intensity = 8;
   if (best) {
-    hurtFloodForm(sim, best, dmg, false, player.agent.id);
+    // combat forms soak twice the hits FROM THE PLAYER (user tuning) — the
+    // sim's own marine-vs-form balance is untouched
+    hurtFloodForm(sim, best, best.faction === 4 ? dmg * 0.5 : dmg, false, player.agent.id);
     hitFlash = 1;
     audio.play('tick', null, 0.5, 'tick', 40);
   } else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }

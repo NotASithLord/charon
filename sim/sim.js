@@ -594,7 +594,7 @@ export class Sim {
         // seconds ago while halfway down the corridor.
         if (a.move.layer === 'std' && link.door && from.deck === to.deck) {
           const fwd = a.move.from === link.a;
-          const flipT = fwd ? link.flipT : 1 - link.flipT;
+          const flipT = a.move.flipT2 ?? (fwd ? link.flipT : 1 - link.flipT);
           const d = link.door;
           if (k < flipT) {
             const kk = k / flipT;
@@ -604,9 +604,10 @@ export class Sim {
             a.heading = Math.atan2(d.y - sy, d.x - sx);
           } else {
             const kk = (k - flipT) / Math.max(1e-6, 1 - flipT);
-            a.x = d.x + (to.x - d.x) * kk;
-            a.y = d.y + (to.y - d.y) * kk;
-            a.heading = Math.atan2(to.y - d.y, to.x - d.x);
+            const tx = a.move.tx ?? to.x, ty = a.move.ty ?? to.y;
+            a.x = d.x + (tx - d.x) * kk;
+            a.y = d.y + (ty - d.y) * kk;
+            a.heading = Math.atan2(ty - d.y, tx - d.x);
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
           }
         } else if (a.move.layer === 'std' && from.deck !== to.deck) {
@@ -647,9 +648,18 @@ export class Sim {
         // personal lateral offset from the column line, so a squad on the
         // same route reads as a file of soldiers, not one dot
         if (a.move.layer === 'std' && from.deck === to.deck) {
-          const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5;
-          a.x += Math.cos(a.heading + Math.PI / 2) * lane;
-          a.y += Math.sin(a.heading + Math.PI / 2) * lane;
+          if (a.faction === FACTION.INFECTION) {
+            // pods don't march in file — they SKITTER, weaving side to side
+            // as they cross (user note: point-to-point pod movement read as
+            // robotic, nothing like the games)
+            const w = Math.sin(this.t * 6 + a.id * 2.09) * 0.55;
+            a.x += Math.cos(a.heading + Math.PI / 2) * w;
+            a.y += Math.sin(a.heading + Math.PI / 2) * w;
+          } else {
+            const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5;
+            a.x += Math.cos(a.heading + Math.PI / 2) * lane;
+            a.y += Math.sin(a.heading + Math.PI / 2) * lane;
+          }
         }
         a.animTime += dt;
         if (a.move.t >= 1) {
@@ -690,6 +700,31 @@ export class Sim {
           a.path = [];
           continue;
         }
+        // POD MUSTER (user report: a single-file conga of infection forms
+        // trickling into a defended room and dying one at a time, "infecting
+        // nothing"): the FINAL hop into a room with live guns waits at the
+        // threshold until the local pack outguns the defenders — then the
+        // whole group pours in together and the overwhelm rule takes over.
+        // A pod held too long gives the hunt up and goes back to breeding.
+        if (a.faction === FACTION.INFECTION && link.kind === 'std' && a.path.length === 1) {
+          let guns = 0;
+          for (const h of this._occ[step.to]) {
+            if (h.hp <= 0 || h.dead) continue;
+            if (h.faction === FACTION.MARINE) guns += 1;
+            else if (h.faction === FACTION.ARMED) guns += 0.6;
+          }
+          if (guns > 0 && !this.hive.allIn) {
+            const pack = this._floodAt[a.node] + this._floodAt[step.to];
+            if (pack < guns * this.P.swarm.killRatio) {
+              a.doorHold = (a.doorHold ?? 0) + 1;
+              if (a.doorHold > 45 * this.P.sim.tickHz) { // 45s of waiting — give it up
+                a.doorHold = 0; a.path = []; a.task = null;
+              }
+              continue; // hold at the door; the pack is still building
+            }
+          }
+          a.doorHold = 0;
+        }
         // CLIMBING IS QUEUED (user rule): a LADDER takes one body at a time —
         // everyone else waits at the pad until the rungs are clear. Lifts are
         // cars: a whole fireteam rides together, no queue.
@@ -698,8 +733,11 @@ export class Sim {
         // hold at the pad while the rungs are taken — OR while the player has
         // called "next" on this ladder (a busy ladder queues the emergency,
         // it doesn't deny it; without the reservation NPCs re-claim the rungs
-        // every tick and a human pressing a key can never win the race)
-        if (ladder && (this.vertBusy(link, a.id) || this.vertReserved(link, a.id))) continue;
+        // every tick and a human pressing a key can never win the race).
+        // INFECTION FORMS ARE EXEMPT (user rule): they're small — a swarm
+        // pours up the rungs and through lift wells all at once.
+        const queues = ladder && a.faction !== FACTION.INFECTION;
+        if (queues && (this.vertBusy(link, a.id) || this.vertReserved(link, a.id))) continue;
         a.doorBalks = 0;
         a.path.shift();
         let mult = this._speedMult(a);
@@ -738,9 +776,23 @@ export class Sim {
               / Math.max(0.5, this.P.movement.baseMps * mult);
             a.move.appT = appSec / (appSec + a.move.travelSec);
             a.move.travelSec += appSec;
+          } else if (link.door) {
+            // REAL METERS, REAL SPEED (user report: bodies "flying" faster
+            // than they walk, and everyone converging on the room's center):
+            // the leg is timed from the ACTUAL drawn path — start, through
+            // the door, to this body's OWN parking slot in the next room —
+            // and it LANDS on the slot, so nobody walks to the center point
+            // just to drift back out of it.
+            const [tx, ty] = this._parkSlot(a, toN);
+            const d1 = Math.hypot(link.door.x - a.x, link.door.y - a.y);
+            const d2 = Math.hypot(tx - link.door.x, ty - link.door.y);
+            const mps = Math.max(0.5, this.P.movement.baseMps * mult);
+            a.move.tx = tx; a.move.ty = ty;
+            a.move.travelSec = Math.max(0.2, ((d1 + d2) / mps) * pace);
+            a.move.flipT2 = d1 / Math.max(0.1, d1 + d2);
           }
         }
-        if (ladder) link.occupiedBy = a.id; // claim the ladder
+        if (queues) link.occupiedBy = a.id; // claim the ladder (pods never do)
         if (a.state === STATE.IDLE) a.state = STATE.MOVE;
       } else {
         this._parkDrift(a, dt);
@@ -982,21 +1034,25 @@ export class Sim {
   // occupants gives ~0.7 m spacing, clamped to the room's real footprint.
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
-    // STABLE SLOTS (user note: jerky movement): each body's parking spot is
-    // a pure hash of its OWN id — ranking against the room's other occupants
-    // meant every arrival/death/departure reshuffled the whole room's
-    // targets and everyone drifted to new points mid-fight. Collisions are
-    // _separate's job.
+    const [tx, ty] = this._parkSlot(a, nd);
+    a.x += (tx - a.x) * Math.min(1, dt * 3);
+    a.y += (ty - a.y) * Math.min(1, dt * 3);
+    a.animTime += dt;
+  }
+
+  // STABLE SLOTS (user note: jerky movement): each body's parking spot is
+  // a pure hash of its OWN id — ranking against the room's other occupants
+  // meant every arrival/death/departure reshuffled the whole room's
+  // targets and everyone drifted to new points mid-fight. Collisions are
+  // _separate's job. Move legs LAND here too, so arrivals never converge
+  // on the room's center point.
+  _parkSlot(a, nd) {
     const h1 = ((a.id * 2654435761) >>> 0) / 4294967296;
     const h2 = (((a.id + 7907) * 1597334677) >>> 0) / 4294967296;
     const hw = Math.max(0.7, nd.w / 2 - 1.0), hd = Math.max(0.7, nd.d / 2 - 1.0);
     const ang = h1 * Math.PI * 2 + nd.idx * 0.7;
     const u = Math.sqrt(h2);
-    const fx = Math.cos(ang) * u * Math.min(hw, 6);
-    const fy = Math.sin(ang) * u * Math.min(hd, 6);
-    a.x += (nd.x + fx - a.x) * Math.min(1, dt * 3);
-    a.y += (nd.y + fy - a.y) * Math.min(1, dt * 3);
-    a.animTime += dt;
+    return [nd.x + Math.cos(ang) * u * Math.min(hw, 6), nd.y + Math.sin(ang) * u * Math.min(hd, 6)];
   }
 
   // FIRE IS REAL (user rule): standing in a fire hurts — humans and flood

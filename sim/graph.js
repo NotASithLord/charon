@@ -8,7 +8,12 @@ const EDGE_PREFIX = { hatch: 'H', blastdoor: 'B', lift: 'L', ladder: 'K' };
 export class ShipGraph {
   constructor(data) {
     this.data = data;
-    this.nodes = data.nodes.map((n, i) => ({ ...n, idx: i }));
+    // global hull scale (user tuning: a bigger ship) — room footprints and
+    // the playable length stretch together; everything downstream is meters
+    const S = data.sizeScale ?? 1;
+    this.nodes = data.nodes.map((n, i) => ({
+      ...n, idx: i, w: (n.w ?? 10) * S, d: (n.d ?? 8) * S,
+    }));
     this.byId = new Map(this.nodes.map((n) => [n.id, n.idx]));
     this.n = this.nodes.length;
 
@@ -89,9 +94,10 @@ export class ShipGraph {
     // spine's wall, ±2 = the row behind those). Doors are openings cut into
     // genuinely shared walls; only spaces that can't touch get a short
     // connector throat. This is the plan the 3D world extrudes.
-    const LEN = this.data?.playableLengthM ?? 220;
+    const S = this.data?.sizeScale ?? 1;
+    const LEN = (this.data?.playableLengthM ?? 220) * S;
     this.deckHeightM = this.data?.deckHeightM ?? 4.2;
-    const BAND = 56, TOP = 18, PADX = 12;
+    const BAND = 56 * S, TOP = 18, PADX = 12;
     this.lengthM = LEN;
     this.height = TOP + 5 * BAND + 8;
     this.deckBands = [];

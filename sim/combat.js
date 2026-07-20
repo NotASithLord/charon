@@ -136,13 +136,18 @@ export function resolveCombat(sim, dt) {
       // Deterministic: cadence is sim-time, rolls come from the seeded RNG,
       // so lockstep multiplayer holds. Nearest combat form first; a carrier
       // only draws fire when no combat form is standing.
+      // pods are RIFLE TARGETS too (user report: marines couldn't touch a
+      // form in transit at all — pods only ever died to point-blank stomps).
+      // They rank behind combat forms (the bigger threat draws the fire),
+      // ahead of carriers, and they're small fast targets: accuracy penalty.
       for (const s of shooters) {
         if (s === flamer) continue;
         if (sim.t < (s.nextShotAt ?? 0)) continue;
         let best = null, bestD = Infinity;
-        for (const t of targets) {
+        for (const t of [...targets, ...infForms]) {
           if (t.hp <= 0 || t.dead) continue;
-          const d = Math.hypot(t.x - s.x, t.y - s.y) + (t.faction === FACTION.CARRIER ? 1000 : 0);
+          const bias = t.faction === FACTION.CARRIER ? 1000 : t.faction === FACTION.INFECTION ? 500 : 0;
+          const d = Math.hypot(t.x - s.x, t.y - s.y) + bias;
           if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; }
         }
         if (!best) break;
@@ -150,12 +155,16 @@ export function resolveCombat(sim, dt) {
         s.nextShotAt = sim.t + 1 / gun.rof;
         const range = Math.hypot(best.x - s.x, best.y - s.y);
         let acc = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
+        if (best.faction === FACTION.INFECTION) acc *= P.combat.podAccMult;
         // FLOOD DARKNESS (user rule): humans fight the held rooms by
         // flashlight — accuracy suffers, and spore fog stacks on top.
         // The flood needs no light.
         if (sim.darkAt(node)) acc *= P.darkness.darkAccMult;
         if (sim.fogAt(node)) acc *= P.darkness.fogAccMult;
-        if (sim.rng.chance(acc)) hurtFloodForm(sim, best, gun.dmg, false, s.id);
+        if (sim.rng.chance(acc)) {
+          if (best.faction === FACTION.INFECTION) { sim.removeAgent(best); sim.stats.infectionFormsKilled++; }
+          else hurtFloodForm(sim, best, gun.dmg, false, s.id);
+        }
       }
       // stomp infection forms (they're fragile, §6.6) — but only the ones
       // that have actually closed with a shooter (real space: you boot or

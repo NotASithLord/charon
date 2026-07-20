@@ -84,6 +84,21 @@ export function updateFloodTick(sim, dt) {
           a.state = STATE.MOVE;
           continue;
         }
+        if (hereDanger > 0) {
+          // CORNERED = COMMITTED (user rule: when forced, they engage and
+          // latch): no safer room to dive for, so the pod turns and goes
+          // for the nearest throat instead of milling in the fire lane
+          let close = null, closeD = Infinity;
+          for (const h of roomies) {
+            if (h.hp <= 0 || h.dead) continue;
+            if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
+            const d = Math.hypot(h.x - a.x, h.y - a.y);
+            if (d < closeD - 1e-9 || (Math.abs(d - closeD) <= 1e-9 && h.id < (close?.id ?? Infinity))) { closeD = d; close = h; }
+          }
+          if (close && a.task?.targetId !== close.id) {
+            hive.assign(a, { kind: TASK.GRAB, targetId: close.id });
+          }
+        }
       }
     }
 
@@ -199,7 +214,7 @@ export function updateFloodTick(sim, dt) {
               else if (h.faction === FACTION.ARMED) def += 0.6;
             }
             const local = sim.floodStrengthAt(a.node) + sim.floodStrengthAt(preyNode);
-            if (def === 0 || local >= def * sim.P.swarm.killRatio) t.node = preyNode; // go
+            if (def === 0 || hive.allIn || local >= def * sim.P.swarm.killRatio) t.node = preyNode; // go
             // else hold — the pack builds up here until the odds are right
           }
         }

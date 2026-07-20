@@ -44,16 +44,16 @@ export const PARAMS = {
   // flood should win most runs — the marines alone can't hold the ship. Tune
   // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 16, // difficulty lever — live input in the sim UI
-    initialCombatForms: 3,     // difficulty lever — live input in the sim UI
+    initialInfectionForms: 26, // difficulty lever — live input in the sim UI (re-leveled
+    initialCombatForms: 5,     // after pods became rifle targets; game mode starts lighter)
     initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
   },
   // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling
   // carrier and only spill out when it RUPTURES — under fire, or at the top
   // limit. Gestation starts the moment the carrier forms.
   carrier: {
-    incubationIntervalSec: 15, // PLACEHOLDER (T_inc)
-    firstIncubationSec: 6,     // first form seats quickly
+    incubationIntervalSec: 9.75, // -35% (user tuning): production runs hotter
+    firstIncubationSec: 3.9,     // first form seats quickly (-35%)
     maxInfectionForms: 8,      // top limit — the skin can't hold more; it ruptures
     seekOrExplodeFraction: 0.85, // near-full: waddle toward prey so the pop lands on someone
     explodeDamage: 20,         // to humans within the rupture radius
@@ -178,7 +178,8 @@ export const PARAMS = {
     // POINT-BLANK RISK (user rule): letting an infection form get this close
     // is always a mistake, marine or not — it lunges for the latch
     lungeRiskM: 3.0,
-    latchDps: 2,               // the embedded spike works while it burrows
+    latchDps: 4,               // the embedded spike works while it burrows (user: pods
+                               // were too unlethal to marines)
     grabPins: true,            // a grabbed target is held in place (can't flee)
     armedBraveryStrength: 0.9, // fights only if visible flood strength below this
     // REAL SPACE COMBAT (user note): claws and grabs land at arm's reach,
@@ -186,6 +187,7 @@ export const PARAMS = {
     meleeRangeM: 2.2,          // combat-form claws/lunge reach
     grabRangeM: 1.4,           // an infection form must actually reach the body (a short leap latches)
     stompRangeM: 4.0,          // boots/point-fire kill skittering forms only up close
+    podAccMult: 0.45,          // a skittering pod is a small fast rifle target
     rifleFalloffM: 12,         // full NPC rifle effect inside this — beyond it, a dark
     rifleFarFactor: 0.5,       // ship and a sprinting target halve effective fire
   },
@@ -215,7 +217,9 @@ export const PARAMS = {
   },
   speed: { // multipliers on movement.baseMps (relative ratios are user-set)
     civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.0,
-    infection: 0.9, combatForm: 1.25,
+    // pods SKITTER (user note: they were too slow) — quicker than a walking
+    // human even off the lunge, matching how the games read
+    infection: 1.35, combatForm: 1.25,
     carrier: 0.55, // lore: a slow, blundering waddle — people underestimate it
     drag: 0.5,
     // lore: combat forms don't jog at prey — they SPRINT, as fast as a
