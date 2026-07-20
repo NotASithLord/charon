@@ -100,7 +100,11 @@ export const SHIP = {
     { a: 'corrA', b: 'podPort', type: 'blastdoor', lockable: true },
     { a: 'corrA', b: 'podStbd', type: 'blastdoor', lockable: true },
     // deck 4
-    { a: 'corrM', b: 'hangar', type: 'ladder', lockable: false },
+    // GRAND STAIRWELL (user: Pillar-of-Autumn style) — the main mid corridor
+    // opens onto a two-storey staircase descending into the hangar bay. The
+    // corridor level is a catwalk: you can see and shoot down onto the stairs
+    // and hangar floor, and the flood swarms up at you.
+    { a: 'corrM', b: 'hangar', type: 'stairwell', lockable: false },
     { a: 'hangar', b: 'hangarA', type: 'hatch', lockable: false },
     { a: 'hangar', b: 'hangarCtl', type: 'hatch', lockable: true },
     { a: 'hangarA', b: 'hangarCtl', type: 'hatch', lockable: true },

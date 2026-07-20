@@ -3,7 +3,7 @@
 // position interpolation.
 
 export const LAYER = { STD: 'std', SHAFT: 'shaft', VENT: 'vent' };
-const EDGE_PREFIX = { hatch: 'H', blastdoor: 'B', lift: 'L', ladder: 'K' };
+const EDGE_PREFIX = { hatch: 'H', blastdoor: 'B', lift: 'L', ladder: 'K', stairwell: 'T' };
 
 export class ShipGraph {
   constructor(data) {
@@ -61,6 +61,15 @@ export class ShipGraph {
 
     // adjacency: adj[node] = [{to, link}] where link is an edge/shaft/vent record
     this.adj = { std: this._buildAdj(this.edges), shaft: this._buildAdj(this.shafts), vent: this._buildAdj(this.vents) };
+
+    // GRAND STAIRWELLS: cross-deck edges that open into one two-storey volume.
+    // The upper (catwalk) and lower rooms see and shoot across the opening —
+    // stored as {upper, lower} node idx so the sim can wire the sightline.
+    this.stairwells = this.edges.filter((e) => e.type === 'stairwell').map((e) => {
+      const upper = this.nodes[e.a].deck < this.nodes[e.b].deck ? e.a : e.b;
+      const lower = upper === e.a ? e.b : e.a;
+      return { upper, lower, edge: e };
+    });
 
     this.unpowered = new Uint8Array(this.n);
     this.breachNode = -1;

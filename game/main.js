@@ -349,11 +349,19 @@ function shotCandidates() {
   const trunk = world.trunkAt(player.deck, player.x, player.z);
   const shaftNode = trunk && trunk.vertical
     ? (player.deck === trunk.lowerDeck ? trunk.upperNode : trunk.lowerNode) : -1;
+  // GRAND STAIRWELL (user: PoA stairs): standing in a stairwell room, the
+  // other level is fair game — the opening is a real hole, and player shots
+  // pass through floors anyway, so the wall raycast decides the rest.
+  let stairNode = -1;
+  for (const s of sim.graph.stairwells) {
+    if (player.agent.node === s.upper) stairNode = s.lower;
+    else if (player.agent.node === s.lower) stairNode = s.upper;
+  }
   for (const a of sim.agents) {
     if (a.dead) continue;
     if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
     if (a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft')) continue; // in the ducts — no line of fire
-    if (a.deck === player.deck || (shaftNode !== -1 && a.node === shaftNode)) out.push(a);
+    if (a.deck === player.deck || (shaftNode !== -1 && a.node === shaftNode) || a.node === stairNode) out.push(a);
   }
   return out;
 }

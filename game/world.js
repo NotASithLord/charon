@@ -26,14 +26,17 @@ function segDist2(px, py, ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
-// axis-aligned rect minus square holes -> list of rects (for hatched floors)
+// axis-aligned rect minus square holes -> list of rects (for hatched floors).
+// A hole may carry its own half-extents (hw, hd) — a grand stairwell cuts a
+// much bigger opening than a ladder hatch.
 function rectMinusHoles(x0, z0, x1, z1, holes) {
   let rects = [[x0, z0, x1, z1]];
   for (const h of holes) {
+    const hw = h.hw ?? HATCH / 2, hd = h.hd ?? HATCH / 2;
     const out = [];
     for (const [a0, b0, a1, b1] of rects) {
-      const hx0 = Math.max(a0, h.x - HATCH / 2), hx1 = Math.min(a1, h.x + HATCH / 2);
-      const hz0 = Math.max(b0, h.z - HATCH / 2), hz1 = Math.min(b1, h.z + HATCH / 2);
+      const hx0 = Math.max(a0, h.x - hw), hx1 = Math.min(a1, h.x + hw);
+      const hz0 = Math.max(b0, h.z - hd), hz1 = Math.min(b1, h.z + hd);
       if (hx0 >= hx1 || hz0 >= hz1) { out.push([a0, b0, a1, b1]); continue; }
       if (a0 < hx0) out.push([a0, b0, hx0, b1]);
       if (hx1 < a1) out.push([hx1, b0, a1, b1]);
@@ -126,8 +129,9 @@ export class World {
     const ceilHoles = new Map();  // nodeIdx -> holes in its CEILING
     for (const t of this.trunks) {
       if (!t.vertical) continue;
-      (floorHoles.get(t.upperNode) ?? floorHoles.set(t.upperNode, []).get(t.upperNode)).push({ x: t.x, z: t.z });
-      (ceilHoles.get(t.lowerNode) ?? ceilHoles.set(t.lowerNode, []).get(t.lowerNode)).push({ x: t.x, z: t.z });
+      const hole = t.stair ? { x: t.stair.holeX, z: t.stair.holeZ, hw: t.stair.hw, hd: t.stair.hd } : { x: t.x, z: t.z };
+      (floorHoles.get(t.upperNode) ?? floorHoles.set(t.upperNode, []).get(t.upperNode)).push(hole);
+      (ceilHoles.get(t.lowerNode) ?? ceilHoles.set(t.lowerNode, []).get(t.lowerNode)).push(hole);
     }
 
     for (const n of g.nodes) {
@@ -320,6 +324,10 @@ export class World {
       const oz1 = Math.min(uaz + upper.d / 2, lbz + lower.d / 2) - 1.1;
       const vertical = ox1 - ox0 >= 0.2 && oz1 - oz0 >= 0.2;
       const lift = e.type === 'lift';
+      if (e.type === 'stairwell' && vertical) {
+        this._buildStairwell(e, upper, lower, ox0, ox1, oz0, oz1);
+        continue;
+      }
       if (vertical) {
         const [x, z] = pickSpot(ox0, ox1, oz0, oz1,
           [...doorPts(lower.idx, lower.deck), ...doorPts(upper.idx, upper.deck)],
@@ -392,6 +400,84 @@ export class World {
         }
       }
     }
+  }
+
+  // GRAND STAIRWELL (user: Pillar-of-Autumn style) — a two-storey open volume
+  // between an upper catwalk and the room below. A straight run of steps
+  // descends fore-aft down the overlap column; the upper floor is cut open
+  // above it (big hole) with a railing, so you can stand on the catwalk and
+  // fire down onto the stairs. Traversal reuses a vertical trunk (L to climb).
+  _buildStairwell(e, upper, lower, ox0, ox1, oz0, oz1) {
+    const lowElev = elevOf(lower.deck), highElev = elevOf(upper.deck);
+    const rise = highElev - lowElev;              // one deck (~4.2 m)
+    const wZ = Math.min(3.0, oz1 - oz0);          // athwartships width (the narrow axis)
+    const cz = (oz0 + oz1) / 2;
+    const runLen = Math.min(9, ox1 - ox0 - 0.5);  // fore-aft length of the flight
+    // put the flight toward the fore end of the overlap, landing pad at top
+    const x1 = ox1 - 0.5;                          // bottom of the stairs (aft-most)
+    const x0 = x1 - runLen;                        // top of the stairs (fore)
+    const steps = Math.max(6, Math.round(rise / 0.28));
+    const stepRun = runLen / steps, stepRise = rise / steps;
+    const matStep = new THREE.MeshStandardMaterial({ color: 0x6c7789, roughness: 0.75, metalness: 0.4 });
+    const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.5, metalness: 0.7 });
+    // steps: from the bottom (lower floor, x1) climbing fore to the top
+    for (let i = 0; i < steps; i++) {
+      const sx = x1 - (i + 0.5) * stepRun;
+      const sy = lowElev + (i + 0.5) * stepRise;
+      const tread = new THREE.Mesh(new THREE.BoxGeometry(stepRun + 0.02, 0.14, wZ), matStep);
+      tread.position.set(sx, sy, cz);
+      this.scene.add(tread);
+      // riser face
+      const riser = new THREE.Mesh(new THREE.BoxGeometry(0.06, stepRise, wZ), matStep);
+      riser.position.set(sx + stepRun / 2, sy - stepRise / 2 + 0.07, cz);
+      this.scene.add(riser);
+    }
+    // side stringers (solid — also stops bodies falling off the sides)
+    for (const zz of [cz - wZ / 2 - 0.05, cz + wZ / 2 + 0.05]) {
+      const str = new THREE.Mesh(new THREE.BoxGeometry(runLen, 0.5, 0.1), matStep);
+      str.position.set((x0 + x1) / 2, lowElev + rise / 2, zz);
+      str.rotation.z = Math.atan2(rise, runLen);
+      this.scene.add(str);
+      this.wallMeshes.push(str);
+    }
+    // upper catwalk railing around the opening (fore edge + the two sides),
+    // aft edge left open so you walk off the catwalk onto the top step
+    const railH = 1.0;
+    const post = (px, pz) => {
+      const p = new THREE.Mesh(new THREE.BoxGeometry(0.08, railH, 0.08), matRail);
+      p.position.set(px, highElev + railH / 2, pz);
+      this.scene.add(p);
+    };
+    const rail = (px, pz, len, horiz) => {
+      const r = new THREE.Mesh(horiz
+        ? new THREE.BoxGeometry(len, 0.06, 0.06) : new THREE.BoxGeometry(0.06, 0.06, len), matRail);
+      r.position.set(px, highElev + railH, pz);
+      this.scene.add(r);
+      this.wallMeshes.push(r);
+    };
+    const oHw = runLen / 2 + 0.3, oHd = wZ / 2 + 0.3, ocx = (x0 + x1) / 2;
+    for (const pz of [cz - oHd, cz + oHd]) {           // the two long sides
+      rail(ocx, pz, runLen + 0.6, true);
+      post(x0 - 0.3, pz); post(x1 + 0.3, pz);
+    }
+    rail(x0 - 0.3, cz, wZ + 0.6, false);               // fore end rail
+    // trunk record: the climb PAD sits on solid floor at the top landing (a
+    // little fore of the opening), so the player can reach it to press L; the
+    // big floor hole is cut at its own centre (holeX/holeZ + hw/hd).
+    const landX = x0 - 0.9;
+    this.trunks.push({
+      vertical: true, kind: 'stairwell', edge: e, x: landX, z: cz,
+      lowerDeck: lower.deck, upperDeck: upper.deck,
+      lowerNode: lower.idx, upperNode: upper.idx,
+      lowElev, highElev, stair: { holeX: ocx, holeZ: cz, hw: oHw, hd: oHd },
+    });
+    // block the OPENING for walking on the upper deck (so you don't stroll
+    // out onto thin air) — cross it by the stairs/L at the landing. Sim
+    // coords: world z -> sim y adds the deck band centre.
+    this.props.push({
+      deck: upper.deck, x: ocx, y: cz + this.bandCenter(upper.deck),
+      hw: oHw - 0.2, hd: oHd - 0.2,
+    });
   }
 
   // ---- sliding doors (user note): panels that open for ANY movement near

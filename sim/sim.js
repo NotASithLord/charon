@@ -139,6 +139,11 @@ export class Sim {
       this.hear3.push(g.nodesWithin(i, this.P.sensor.gunfireHops, ['std'], () => true));
       this.near1.push(g.nodesWithin(i, 1, ['std'], (l) => !l.locked));
     }
+    // a grand stairwell is one open volume — the two levels see each other
+    for (const s of g.stairwells) {
+      if (!this.visCache[s.upper].includes(s.lower)) this.visCache[s.upper].push(s.lower);
+      if (!this.visCache[s.lower].includes(s.upper)) this.visCache[s.lower].push(s.upper);
+    }
   }
 
   visibleNodes(node) { return this.visCache[node]; }
