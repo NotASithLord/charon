@@ -248,6 +248,11 @@ function gameLogView(e) {
     case 'revive': case 'reanimate':
       if (!room || !throttle('r' + e.node)) return null;
       return { t: e.t, type: 'radio', msg: `something stirs in ${room}` };
+    case 'duct':
+      // thin the duct chatter (user): the crew only calls in about half of
+      // what they hear in the ductwork — a coin flip per event, rolled once
+      // (each event passes through here exactly once)
+      return Math.random() < 0.5 ? e : null;
     default:
       return e;
   }
