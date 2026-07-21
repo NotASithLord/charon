@@ -678,15 +678,22 @@ export class Sim {
         // personal lateral offset from the column line, so a squad on the
         // same route reads as a file of soldiers, not one dot
         if (a.move.layer === 'std' && from.deck === to.deck) {
+          // SINGLE-FILE THROUGH DOORWAYS (user report: marines wedge shoulder
+          // to shoulder in an opening). The lateral formation offset tapers to
+          // zero as a body nears the door point, so a column funnels onto the
+          // centreline to pass the ~1.7 m opening one at a time, then fans back
+          // out into the room beyond. Full offset only in the open.
+          const dr = a.move.link.door;
+          const laneScale = dr ? Math.min(1, Math.hypot(a.x - dr.x, a.y - dr.y) / 2.2) : 1;
           if (a.faction === FACTION.INFECTION) {
             // pods don't march in file — they SKITTER, weaving side to side
             // as they cross (user note: point-to-point pod movement read as
             // robotic, nothing like the games)
-            const w = Math.sin(this.t * 6 + a.id * 2.09) * 0.55;
+            const w = Math.sin(this.t * 6 + a.id * 2.09) * 0.55 * laneScale;
             a.x += Math.cos(a.heading + Math.PI / 2) * w;
             a.y += Math.sin(a.heading + Math.PI / 2) * w;
           } else {
-            const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5;
+            const lane = (((a.id * 7919) % 100) / 100 - 0.5) * 1.5 * laneScale;
             a.x += Math.cos(a.heading + Math.PI / 2) * lane;
             a.y += Math.sin(a.heading + Math.PI / 2) * lane;
           }

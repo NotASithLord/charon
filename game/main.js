@@ -360,7 +360,7 @@ function shotCandidates() {
   for (const a of sim.agents) {
     if (a.dead) continue;
     if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
-    if (a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft')) continue; // in the ducts — no line of fire
+    if (a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft') && a.move.hidden) continue; // hidden mid-crawl only; a form at the grate IS a target
     if (a.deck === player.deck || (shaftNode !== -1 && a.node === shaftNode) || a.node === stairNode) out.push(a);
   }
   return out;

@@ -19,8 +19,12 @@ export function resolveCombat(sim, dt) {
   for (const a of sim.agents) {
     if (a.dead) continue;
     let key;
-    if (a.move && a.move.layer === 'vent') key = `Lvent${a.move.link.i}`;
-    else if (a.move && a.move.layer === 'shaft'
+    // only a body HIDDEN mid-crawl fights in its own duct/shaft group; one
+    // walking to or climbing out of a grate is physically in the room and
+    // engages (and is engaged) there (user: a visible form at a vent must be
+    // hittable, not an un-killable ghost).
+    if (a.move && a.move.layer === 'vent' && a.move.hidden) key = `Lvent${a.move.link.i}`;
+    else if (a.move && a.move.layer === 'shaft' && a.move.hidden
       && sim.graph.node(a.move.link.a).deck !== sim.graph.node(a.move.link.b).deck) {
       key = `Lshaft${a.move.link.i}`;
     } else key = `N${a.pnode ?? a.node}`;

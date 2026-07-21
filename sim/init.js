@@ -156,15 +156,22 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // armed crew: armory + corridors + living spaces
+  // armed crew: armory + the flank gun batteries + corridors + living spaces
   {
     const armory = graph.byId.get('armory');
     const corridors = graph.nodes.filter((n) => n.type === 'corridor').map((n) => n.idx);
     const softRooms = graph.nodes.filter((n) => n.roles.includes('soft')).map((n) => n.idx);
+    // the flank weapon stations are manned (user: side areas shouldn't read
+    // empty) — the 50mm batteries and fire control hold a watch of armed crew
+    const battleStations = graph.nodes.filter((n) =>
+      n.roles.includes('battery') || (n.roles.includes('marines') && n.roles.includes('systems')))
+      .map((n) => n.idx);
     const armedCount = P.crew.armedCrew;
     for (let i = 0; i < armedCount; i++) {
-      const node = i < Math.ceil(armedCount * 0.4) ? armory
-        : i < Math.ceil(armedCount * 0.7) ? rng.pick(corridors) : rng.pick(softRooms);
+      const r = i / armedCount;
+      const node = r < 0.3 ? armory
+        : (r < 0.55 && battleStations.length) ? rng.pick(battleStations)
+        : r < 0.75 ? rng.pick(corridors) : rng.pick(softRooms);
       const a = makeAgent(FACTION.ARMED, node, graph);
       a.hp = a.maxHp = P.combat.armed.hp;
       a.hasRadio = rng.chance(P.crew.radio.armed);
@@ -188,9 +195,18 @@ export function initRun(seed, rng, P) {
       && !n.roles.includes('command') && !n.roles.includes('hazard')
       && !n.roles.includes('power') && !n.roles.includes('hangar')
       && !n.roles.includes('vehicles'));
-    // capacity-weighted pool: a room with capacity 14 appears 14× as often
+    // capacity-weighted pool, BIASED OUTBOARD (user: spread bodies into the
+    // side areas off the main corridors, not clumped on the spine). A room's
+    // weight is its capacity scaled by how far off the centreline it sits —
+    // the outboard flank halls (|row| >= 2) pull ~2x their share, the spine
+    // rooms about half — so the crew reads as manning the whole beam.
     const spreadPool = [];
-    for (const n of habitable) for (let k = 0; k < Math.max(1, n.capacity); k++) spreadPool.push(n.idx);
+    for (const n of habitable) {
+      const off = Math.abs(n.row ?? 0);
+      const bias = off >= 2 ? 2.2 : off === 1 ? 1.2 : 0.55;
+      const copies = Math.max(1, Math.round(n.capacity * bias));
+      for (let k = 0; k < copies; k++) spreadPool.push(n.idx);
+    }
     const soft = softIdx;
     const brig = graph.byId.get('brig');
     const medbay = graph.byId.get('medbay');
@@ -275,6 +291,10 @@ export function initRun(seed, rng, P) {
       let w = (n.capacity * 0.5 + 2) * rng.range(0.15, 1.85);
       if (n.roles.includes('corpse_cache')) w *= 2.5;
       if (n.type === 'corridor') w *= 0.5;
+      // the dead lie where the crew was — out in the side compartments, not
+      // piled in the corridors (user: spread bodies into the side areas)
+      if (Math.abs(n.row ?? 0) >= 2) w *= 1.8;
+      else if ((n.row ?? 0) === 0 && n.type !== 'corridor') w *= 0.7;
       return w;
     });
     const totalW = weights.reduce((a, b) => a + b, 0);
