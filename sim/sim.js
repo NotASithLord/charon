@@ -584,6 +584,9 @@ export class Sim {
           // parking slot at the room's center mid-fight is exactly the "it
           // all happens at the center" artifact this round removes
           if (a.state === STATE.COWER) this._parkDrift(a, dt);
+          // marines/armed in a firefight fan out onto a line facing the room's
+          // Flood instead of clumping at the doorway they came in through
+          else if (a.state === STATE.FIGHT && (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED)) this._firingDrift(a, dt);
           else a.animTime += dt;
           continue;
         }
@@ -911,7 +914,9 @@ export class Sim {
       target = best;
       stopAt = P.combat.meleeRangeM * 0.6;
       a.charging = bestD > P.combat.meleeRangeM; // the whole approach is a sprint (lore)
-      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1);
+      // a leap crosses ~20% faster than a flat charge (user tuning) — a.leaping
+      // persists from the prior tick's arc block
+      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1) * (a.leaping ? 1.2 : 1);
       a.state = STATE.FIGHT;
     } else if (a.faction === FACTION.INFECTION) {
       if (a.task?.kind !== TASK.GRAB || a.hp <= 0) return false;
@@ -929,33 +934,43 @@ export class Sim {
     if (a.path.length) a.path = [];
     const room = this.graph.node(pn);
     if (a.node !== pn) { a.node = pn; a.deck = room.deck; }
-    const dx = target.x - a.x, dy = target.y - a.y;
+
+    // LEAP decision — BEFORE the advance, so a leap COMMITS to a fixed landing
+    // point and flies a ballistic arc to it (user: you can side-step and dodge
+    // it) instead of curving through the air to track your live position. Only
+    // a charging combat form, in a tall hold, over a long enough gap.
+    const LEAP_MIN = 5, PEAK_FRAC = 0.25;
+    const clearH = clearHeightOf(room);
+    const canLeap = a.faction === FACTION.COMBAT && a.charging && clearH > CLEAR_H + 0.5;
+    const gap = Math.hypot(target.x - a.x, target.y - a.y);
+    if (canLeap && !a.leaping && gap > LEAP_MIN) {
+      a.leaping = true; a.leapDist0 = gap;
+      a.leapTX = target.x; a.leapTY = target.y; // committed landing spot at launch
+    } else if (a.leaping && !canLeap) {
+      a.leaping = false; a.leapDist0 = 0;
+    }
+
+    // aim at the committed landing spot while airborne, else the live target
+    const aimX = a.leaping ? a.leapTX : target.x;
+    const aimY = a.leaping ? a.leapTY : target.y;
+    const hold = a.leaping ? 0 : stopAt;
+    const dx = aimX - a.x, dy = aimY - a.y;
     const dist = Math.hypot(dx, dy);
     a.heading = Math.atan2(dy, dx);
-    if (dist > stopAt) {
-      const step = Math.min(dist - stopAt, mps * dt);
+    if (dist > hold) {
+      const step = Math.min(dist - hold, mps * dt);
       a.x += (dx / dist) * step;
       a.y += (dy / dist) * step;
       this._clampToRoom(a, room); // stay inside the room's real footprint
     }
-    // LEAP: a combat form charging across a TALL open room (a big hold whose
-    // ceiling was raised — see shared/geometry.js clearHeightOf) bounds through
-    // the air in a parabolic arc instead of running flat. Deterministic — the
-    // horizontal is the charge advance above; only the vertical hump is new,
-    // and the peak scales with the room's real headroom while staying below the
-    // ceiling and clearing the (stretched) body.
-    const LEAP_MIN = 5, PEAK_FRAC = 0.25;
-    const clearH = clearHeightOf(room);
-    const tall = a.faction === FACTION.COMBAT && a.charging && clearH > CLEAR_H + 0.5;
-    if (tall && dist > LEAP_MIN && (!a.leaping || dist > a.leapDist0)) {
-      a.leaping = true; a.leapDist0 = dist; // (re)launch from here
-    }
-    if (a.leaping && (!tall || dist <= stopAt)) { a.leaping = false; a.leapDist0 = 0; }
+
+    // arc height from progress along the committed leap (0 at launch and land);
+    // peak scales with the room's headroom, stays below the ceiling + body
     if (a.leaping) {
-      const span = Math.max(0.5, a.leapDist0 - stopAt);
-      const p = Math.max(0, Math.min(1, (a.leapDist0 - dist) / span));
-      const peak = Math.min(a.leapDist0 * PEAK_FRAC, clearH - 2.2); // under ceiling + body
-      a.hoverY = peak * 4 * p * (1 - p);
+      const rem = Math.hypot(a.leapTX - a.x, a.leapTY - a.y);
+      const p = Math.max(0, Math.min(1, 1 - rem / Math.max(0.5, a.leapDist0)));
+      a.hoverY = Math.min(a.leapDist0 * PEAK_FRAC, clearH - 2.2) * 4 * p * (1 - p);
+      if (rem <= 0.35) { a.leaping = false; a.leapDist0 = 0; } // landed — re-acquire next tick
     }
     a.animTime += dt;
     return true;
@@ -1159,6 +1174,45 @@ export class Sim {
     // shoved them apart (user report: marines "zipping to the middle of the
     // room then randomly deploying outward")
     return [nd.x + Math.cos(ang) * u * hw, nd.y + Math.sin(ang) * u * hd];
+  }
+
+  // FIRING LINE (user note: marines clump in the doorway when a room goes hot —
+  // spread out for wider lines of fire). A marine/armed in FIGHT fans onto a
+  // line facing the room's Flood: lateral offset is a STABLE per-id hash (never
+  // reshuffles as the squad takes casualties — the _parkSlot lesson), scaled by
+  // how many are shooting; _separate keeps hash collisions from overlapping.
+  // Returns [x, y, fx, fy] (slot + unit facing toward the threat) or null when
+  // there is no Flood in the room.
+  _firingSlot(a, room) {
+    const occ = this._occ[a.pnode ?? a.node];
+    if (!occ) return null;
+    let tx = 0, ty = 0, tn = 0, nShoot = 0;
+    for (const o of occ) {
+      const f = o.faction;
+      if (f === FACTION.COMBAT || f === FACTION.CARRIER || f === FACTION.INFECTION) { tx += o.x; ty += o.y; tn++; }
+      else if (f === FACTION.MARINE || f === FACTION.ARMED) nShoot++;
+    }
+    if (tn === 0) return null;
+    tx /= tn; ty /= tn;
+    const td = Math.hypot(tx - room.x, ty - room.y) || 1;
+    const fx = (tx - room.x) / td, fy = (ty - room.y) / td; // toward the threat
+    const px = -fy, py = fx;                                 // firing line runs across this
+    const h = ((a.id * 2654435761) >>> 0) / 4294967296;      // stable per-id lateral slot
+    const spread = Math.min(0.5 * Math.min(room.w, room.d) + 1.5, 1.7 * Math.max(1, nShoot));
+    const off = (h - 0.5) * spread;
+    const advance = Math.min(0.3 * td, 2.5);                 // step off the doorway into the room
+    return [room.x + fx * advance + px * off, room.y + fy * advance + py * off, fx, fy];
+  }
+
+  _firingDrift(a, dt) {
+    const room = this.graph.node(a.pnode ?? a.node);
+    const slot = this._firingSlot(a, room);
+    if (!slot) { a.animTime += dt; return; }
+    a.x += (slot[0] - a.x) * Math.min(1, dt * 2.2);
+    a.y += (slot[1] - a.y) * Math.min(1, dt * 2.2);
+    this._clampToRoom(a, room);
+    a.heading = Math.atan2(slot[3], slot[2]); // face the threat
+    a.animTime += dt;
   }
 
   // FIRE IS REAL (user rule): standing in a fire hurts — humans and flood
