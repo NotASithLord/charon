@@ -197,7 +197,7 @@ export function updateFloodTick(sim, dt) {
         // survivors through a doorway); if nothing is visible, stand down
         if (a.node === t.node && !a.move) {
           let preyNode = -1;
-          for (const n of sim.visibleNodes(a.node)) {
+          for (const n of sim.floodSenses(a.node)) {
             if (sim.occupants(n).some((h) => h.hp > 0 && !h.dead &&
               (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE))) {
               preyNode = n; break;
@@ -228,7 +228,7 @@ export function updateFloodTick(sim, dt) {
           break;
         }
         const believed = hive.beliefs.get(t.targetId);
-        const goal = sim.visibleNodes(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
+        const goal = sim.floodSenses(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
         const samePhys = (a.pnode ?? a.node) === (target.pnode ?? target.node) && a.deck === target.deck;
         if (samePhys && Math.hypot(target.x - a.x, target.y - a.y) <= sim.P.combat.grabRangeM) {
           // it has physically REACHED the body (user note: real space logic —

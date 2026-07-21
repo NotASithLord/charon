@@ -127,15 +127,28 @@ export class Sim {
   _precomputeSensing() {
     const g = this.graph;
     this.visCache = [];
+    this.senseCache = [];
     this.hear2 = [];
     this.hear3 = [];
     this.near1 = [];
     for (let i = 0; i < g.n; i++) {
       const vis = [i];
+      // FLOOD LIFE-SENSE (user rule): the flood FEELS living bodies in every
+      // adjacent compartment, through bulkheads and locked hatches alike —
+      // it doesn't need a line of sight the way the crew's eyes do. senseCache
+      // is self + EVERY std/vent neighbour regardless of lock/block; visCache
+      // is the crew's honest sightline (unlocked doorways only). Same static
+      // graph, so both are fixed for the whole run and fully deterministic.
+      const sense = [i];
       for (const { to, link } of g.neighbors(i, ['std'], () => true)) {
         if (!link.locked) vis.push(to); // an open/unlocked doorway you can see through
+        if (!sense.includes(to)) sense.push(to); // life-sense ignores the lock
+      }
+      for (const { to } of g.neighbors(i, ['vent'], () => true)) {
+        if (!sense.includes(to)) sense.push(to); // and feels through the ducting
       }
       this.visCache.push(vis);
+      this.senseCache.push(sense);
       this.hear2.push(g.nodesWithin(i, this.P.sensor.hearingHops, ['std'], () => true));
       this.hear3.push(g.nodesWithin(i, this.P.sensor.gunfireHops, ['std'], () => true));
       this.near1.push(g.nodesWithin(i, 1, ['std'], (l) => !l.locked));
@@ -144,10 +157,15 @@ export class Sim {
     for (const s of g.stairwells) {
       if (!this.visCache[s.upper].includes(s.lower)) this.visCache[s.upper].push(s.lower);
       if (!this.visCache[s.lower].includes(s.upper)) this.visCache[s.lower].push(s.upper);
+      if (!this.senseCache[s.upper].includes(s.lower)) this.senseCache[s.upper].push(s.lower);
+      if (!this.senseCache[s.lower].includes(s.upper)) this.senseCache[s.lower].push(s.upper);
     }
   }
 
   visibleNodes(node) { return this.visCache[node]; }
+  // the flood's life-sense reach (self + every adjacent room, lock or no lock).
+  // Targeting/belief code uses this; the crew keep visibleNodes.
+  floodSenses(node) { return this.senseCache[node]; }
   nodesNear(node, hops) { return hops <= 1 ? this.near1[node] : this.graph.nodesWithin(node, hops, ['std'], (l) => !l.locked); }
 
   occupants(node) { return this._occ[node]; }
@@ -732,12 +750,22 @@ export class Sim {
           a.path = [];
           continue;
         }
+        // COMMITTED INFECTION (user rule: once a form commits to infecting a
+        // body it must NEVER be interrupted). A form whose very next step
+        // enters the room holding its own infect target — a corpse to burrow
+        // (CONVERT), a downed form to raise (REANIMATE), or a live host to
+        // latch (GRAB) — pushes straight through both "don't walk into guns"
+        // reflexes below. Without this it balked → re-pathed → balked at the
+        // threshold forever whenever humans stood in the target room next door
+        // (user report: infection forms looping, never landing the infect).
+        const committedInto = a.faction === FACTION.INFECTION
+          && this._committedInfectNode(a) === step.to;
         // an infection form can SEE shooters through the next doorway; while
         // the pool is precious it will not skitter into standing fire — but
         // a rich hive spends forms like water (§13.3 RiskAversion). After a
         // few refusals it dashes anyway: balking forever at the only exit
         // pinned whole swarms at the breach (user-reported regression).
-        if (a.faction === FACTION.INFECTION && link.kind === 'std' &&
+        if (a.faction === FACTION.INFECTION && !committedInto && link.kind === 'std' &&
           (this.hive.lastScarcity ?? 3) > 0.8 &&
           (a.doorBalks = (a.doorBalks ?? 0) + 1) <= 12 &&
           this._occ[step.to].some((h) => h.hp > 0 && !h.dead &&
@@ -751,7 +779,7 @@ export class Sim {
         // threshold until the local pack outguns the defenders — then the
         // whole group pours in together and the overwhelm rule takes over.
         // A pod held too long gives the hunt up and goes back to breeding.
-        if (a.faction === FACTION.INFECTION && link.kind === 'std' && a.path.length === 1) {
+        if (a.faction === FACTION.INFECTION && !committedInto && link.kind === 'std' && a.path.length === 1) {
           let guns = 0;
           for (const h of this._occ[step.to]) {
             if (h.hp <= 0 || h.dead) continue;
@@ -909,15 +937,15 @@ export class Sim {
       }
       if (!best) {
         // LINE OF SIGHT (user): a form already hunting doesn't lose its prey at
-        // a doorway or ignore prey standing plainly in the next room. If it can
-        // see into an adjacent room (visibleNodes = self + rooms through an
-        // UNLOCKED door + the grand stairwell) and prey is there, PATH to it —
-        // the graph handles the doorway — and keep after it, instead of dropping
-        // to IDLE and drifting back into the room it was in.
+        // a doorway or ignore prey standing plainly in the next room. It SENSES
+        // life in every adjacent compartment (floodSenses = self + every room
+        // through a door OR vent, lock or no lock + the grand stairwell); if
+        // prey is there, PATH to it — the graph handles the doorway — and keep
+        // after it, instead of dropping to IDLE and drifting back into the room.
         const hunting = a.state === STATE.FIGHT || a.charging || a.task?.kind === TASK.ATTACK;
         if (hunting) {
           let pn2 = -1, pd = Infinity;
-          for (const n of this.visibleNodes(pn)) {
+          for (const n of this.floodSenses(pn)) {
             if (n === pn) continue;
             for (const h of this._occ[n]) {
               if (h.dead || h.hp <= 0) continue;
@@ -926,7 +954,10 @@ export class Sim {
               if (d < pd) { pd = d; pn2 = n; }
             }
           }
-          if (pn2 >= 0 && this.setPathTo(a, pn2, ['std'], (l) => !l.locked)) {
+          // reach it through an unlocked doorway, else squeeze through the
+          // ducting — a sensed body behind a locked hatch is still huntable
+          if (pn2 >= 0 && (this.setPathTo(a, pn2, ['std'], (l) => !l.locked)
+            || this.setPathTo(a, pn2, ['std', 'vent'], (l) => (l.kind === 'std' ? !l.locked : !l.blocked)))) {
             a.charging = true; a.state = STATE.MOVE;
             return false; // _advanceMovement walks the path through the doorway
           }
@@ -1201,11 +1232,34 @@ export class Sim {
     return [nd.x + Math.cos(ang) * u * hw, nd.y + Math.sin(ang) * u * hd];
   }
 
+  // COMMITTED INFECTION target (user rule): the physical node of the body a
+  // form has committed to infect — a corpse it will burrow (CONVERT/DRAG), a
+  // downed form it will raise (REANIMATE), or a live host it will latch
+  // (GRAB) — or -1 if the form isn't on such an errand. Used to wave a
+  // committed form through the doorway balk + pod muster so it can never be
+  // turned back at the threshold of the room its target stands in.
+  _committedInfectNode(a) {
+    const t = a.task;
+    if (!t) return -1;
+    let id;
+    if (t.kind === TASK.CONVERT || t.kind === TASK.DRAG) id = t.corpseId;
+    else if (t.kind === TASK.GRAB || t.kind === TASK.REANIMATE) id = t.targetId;
+    else return -1;
+    const b = this.byId.get(id);
+    if (!b || b.dead) return -1;
+    return b.pnode ?? b.node;
+  }
+
   // FIRING LINE (user note: marines clump in the doorway when a room goes hot —
-  // spread out for wider lines of fire). A marine/armed in FIGHT fans onto a
-  // line facing the room's Flood: lateral offset is a STABLE per-id hash (never
-  // reshuffles as the squad takes casualties — the _parkSlot lesson), scaled by
-  // how many are shooting; _separate keeps hash collisions from overlapping.
+  // spread out for wider lines of fire). A marine/armed in FIGHT holds a line
+  // facing the room's Flood. Two stable per-id hashes place each shooter: one
+  // LATERAL (across the line) and one in DEPTH (staggered ranks back from the
+  // front). why: in a long thin artery the line runs athwartships across only
+  // ~4 m, so lateral spread alone just re-made the clump at the junction (user
+  // report: every game they pile at Main Corridor Fore). Staggering the squad
+  // in depth down the corridor's long axis reads as a defensive LANE held back
+  // from the threat, not a knot at the doorway. Both offsets are clamped to the
+  // room's real reach along each axis; _separate resolves hash collisions.
   // Returns [x, y, fx, fy] (slot + unit facing toward the threat) or null when
   // there is no Flood in the room.
   _firingSlot(a, room) {
@@ -1222,11 +1276,24 @@ export class Sim {
     const td = Math.hypot(tx - room.x, ty - room.y) || 1;
     const fx = (tx - room.x) / td, fy = (ty - room.y) / td; // toward the threat
     const px = -fy, py = fx;                                 // firing line runs across this
-    const h = ((a.id * 2654435761) >>> 0) / 4294967296;      // stable per-id lateral slot
-    const spread = Math.min(0.5 * Math.min(room.w, room.d) + 1.5, 1.7 * Math.max(1, nShoot));
-    const off = (h - 0.5) * spread;
-    const advance = Math.min(0.3 * td, 2.5);                 // step off the doorway into the room
-    return [room.x + fx * advance + px * off, room.y + fy * advance + py * off, fx, fy];
+    const hw = Math.max(0.7, room.w / 2 - 1.0), hd = Math.max(0.7, room.d / 2 - 1.0);
+    // how far the room reaches along the lateral (across) and depth (toward)
+    // axes — small along a corridor's short axis, large down its length
+    const latCap = Math.abs(px) * hw + Math.abs(py) * hd;
+    const depCap = Math.abs(fx) * hw + Math.abs(fy) * hd;
+    const h1 = ((a.id * 2654435761) >>> 0) / 4294967296;         // stable lateral slot
+    const h2 = (((a.id + 7907) * 1597334677) >>> 0) / 4294967296; // stable depth rank
+    // fan across the line (~0.9 m/shooter), but never past the walls
+    const latSpread = Math.min(0.9 * Math.max(1, nShoot), Math.max(0, 2 * latCap - 0.4));
+    const off = (h1 - 0.5) * latSpread;
+    // stagger into ranks BEHIND the front, down whatever axis has the room to
+    // give — this is what fills a corridor as a lane instead of a single knot
+    const depth = h2 * Math.min(depCap * 0.85, 1.3 * Math.max(0, nShoot - 1));
+    // hold the front rank a few meters short of the threat centroid (never step
+    // onto it), then rank backward from there
+    const standoff = Math.min(td - 1.2, Math.max(2.0, 0.5 * td));
+    const ax = room.x + fx * standoff, ay = room.y + fy * standoff;
+    return [ax + px * off - fx * depth, ay + py * off - fy * depth, fx, fy];
   }
 
   _firingDrift(a, dt) {
