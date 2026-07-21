@@ -159,7 +159,7 @@ export function initRun(seed, rng, P) {
   // loop so the ship always has coverage somewhere.
   {
     // ship-wide circuit down the new deck stack (command -> hangar) and back
-    const route = ['d1corr', 'd2corrF', 'mess', 'd2corrA', 'corrM', 'corrF', 'corrA',
+    const route = ['d1corr', 'd2corrF', 'mess', 'd2corrA', 'corrM', 'corrA',
       'engCorrF', 'eng', 'engCorrA', 'hangarA', 'hangar', 'vehicle', 'cargo1',
       'hangarA', 'engCorrA', 'corrM'].map((id) => graph.byId.get(id));
     for (let p = 0; p < M.patrols; p++) {
