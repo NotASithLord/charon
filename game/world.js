@@ -18,6 +18,18 @@ const HATCH = 1.8;              // hatch hole side
 
 export function elevOf(deck) { return (5 - deck) * DECK_H; }
 
+// Per-room clear height (floor to ceiling). The big holds — hangars, cargo,
+// vehicle bay, the flank weapon batteries, wide berthing/mess, the grand
+// stairwell — read as TALL spaces; everything else is the standard CLEAR_H.
+// Capped just under the deck above (DECK_H) so a raised ceiling never pokes
+// through the next deck's floor. why: the Flood leaps across these rooms in an
+// arc, and a big room needs the air for it — a doorway/corridor does not.
+const TALL_ROLES = ['hangar', 'large', 'battery', 'magazine', 'stairwell', 'vehicles'];
+export function clearHeightOf(node) {
+  const tall = node.type === 'open' || (node.roles ?? []).some((r) => TALL_ROLES.includes(r));
+  return tall ? Math.min(DECK_H - 0.15, 4.05) : CLEAR_H;
+}
+
 function segDist2(px, py, ax, ay, bx, by) {
   const vx = bx - ax, vy = by - ay;
   const L2 = vx * vx + vy * vy;
@@ -177,6 +189,7 @@ export class World {
       const isBreach = n.idx === g.breachNode;
       const tint = isBreach ? 0xff8866 : g.unpowered[n.idx] ? 0x4a5261 : (n.type === 'corridor' ? 0xbccbe4 : 0x9daabf);
       const fmat = mkFloorMat(n.w, n.d, tint);
+      const roomH = clearHeightOf(n); // taller in the big holds — leap room
       // GRAND STAIRWELL room: normal deck-3 room, but the floor is built with a
       // central well + switchback by _buildStairRoom (skip the flat floor).
       const isStair = n.roles.includes('stairwell');
@@ -192,11 +205,11 @@ export class World {
       const ch = ceilHoles.get(n.idx) ?? [];
       for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
         const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.1, b1 - b0), matCeil);
-        slab.position.set((a0 + a1) / 2, elev + CLEAR_H, (b0 + b1) / 2);
+        slab.position.set((a0 + a1) / 2, elev + roomH, (b0 + b1) / 2);
         this.scene.add(slab);
       }
       const sign = this._label(n.name);
-      sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
+      sign.position.set(wx, elev + roomH - 0.45, wz);
       this.scene.add(sign);
       (this.roomSigns ??= [])[n.idx] = sign;
 
@@ -204,12 +217,12 @@ export class World {
       // says the flood has held the room long enough (updateDarkness)
       {
         const veil = new THREE.Mesh(
-          new THREE.BoxGeometry(n.w - 0.1, CLEAR_H - 0.08, n.d - 0.1),
+          new THREE.BoxGeometry(n.w - 0.1, roomH - 0.08, n.d - 0.1),
           new THREE.MeshBasicMaterial({
             color: 0x000000, transparent: true, opacity: 0,
             depthWrite: false, side: THREE.FrontSide,
           }));
-        veil.position.set(wx, elev + CLEAR_H / 2, wz);
+        veil.position.set(wx, elev + roomH / 2, wz);
         veil.visible = false;
         veil.renderOrder = 5;
         this.scene.add(veil);
@@ -228,7 +241,7 @@ export class World {
         });
         const strip = new THREE.Mesh(
           new THREE.BoxGeometry(Math.min(3.4, n.w * 0.55), 0.07, 0.55), lmat);
-        strip.position.set(wx, elev + CLEAR_H - 0.06, wz);
+        strip.position.set(wx, elev + roomH - 0.06, wz);
         this.scene.add(strip);
         this.roomLights[n.idx] = { mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1 };
       }
@@ -271,10 +284,10 @@ export class World {
         for (const [a, b] of spans) {
           const len = b - a;
           const wall = new THREE.Mesh(
-            run.horiz ? new THREE.BoxGeometry(len, CLEAR_H, WALL_T) : new THREE.BoxGeometry(WALL_T, CLEAR_H, len),
+            run.horiz ? new THREE.BoxGeometry(len, roomH, WALL_T) : new THREE.BoxGeometry(WALL_T, roomH, len),
             matWall);
-          if (run.horiz) wall.position.set((a + b) / 2, elev + CLEAR_H / 2, run.fixed);
-          else wall.position.set(run.fixed, elev + CLEAR_H / 2, (a + b) / 2);
+          if (run.horiz) wall.position.set((a + b) / 2, elev + roomH / 2, run.fixed);
+          else wall.position.set(run.fixed, elev + roomH / 2, (a + b) / 2);
           this.scene.add(wall);
           this.wallMeshes.push(wall);
         }
@@ -486,11 +499,9 @@ export class World {
 
   // headroom is generous over the well (the volume is two decks tall)
   ceilHeightAt(deck, wx, wz) {
-    for (const g of (this.stairRooms ?? [])) {
-      if (g.deck !== deck) continue;
-      if (wx >= g.cx - g.hx && wx <= g.cx + g.hx && wz >= g.cz - g.hz && wz <= g.cz + g.hz) return CLEAR_H;
-    }
-    return CLEAR_H;
+    const [sx, sy] = this.worldToSim(wx, wz, deck);
+    const idx = this.roomAt(deck, sx, sy, -1);
+    return idx >= 0 ? clearHeightOf(this.graph.node(idx)) : CLEAR_H;
   }
 
   // the stairwell room whose footprint contains this world point (any deck).
