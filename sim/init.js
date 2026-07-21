@@ -40,6 +40,8 @@ export function makeAgent(kind, node, graph) {
     animTime: 0,
     dragging: -1,    // corpse id being dragged
     hoverY: 0, leaping: false, leapDist0: 0, leapTX: 0, leapTY: 0, // Flood leap arc (sim.js _spatialSteer)
+    chargeTargetId: -1, // sticky spatial-charge target for LOS pursuit (sim.js)
+    followNode: -1,     // escort: last node re-pathed toward (humans.js)
   };
 }
 
