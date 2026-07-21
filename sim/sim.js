@@ -547,6 +547,7 @@ export class Sim {
   _advanceMovement(dt) {
     const g = this.graph;
     for (const a of this.agents) {
+      a.hoverY = 0; // reset the leap arc each tick; _spatialSteer re-sets it
       if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) continue;
       // the player's body is moved by the game, not the pathfinder
       if (a.isPlayer) { a.animTime += dt; continue; }
@@ -936,8 +937,35 @@ export class Sim {
       a.y += (dy / dist) * step;
       this._clampToRoom(a, room); // stay inside the room's real footprint
     }
+    // LEAP: a combat form charging across a TALL open room bounds through the
+    // air in a parabolic arc instead of running flat. Deterministic — the
+    // horizontal is the charge advance above; only the vertical hump is new,
+    // and its peak is capped so the airborne (stretched) body clears the
+    // raised ceiling (world clearHeightOf ~4.05 m).
+    const LEAP_MIN = 5, PEAK_FRAC = 0.15, PEAK_MAX = 1.8;
+    const tall = a.faction === FACTION.COMBAT && a.charging && this._isTallRoom(room);
+    if (tall && dist > LEAP_MIN && (!a.leaping || dist > a.leapDist0)) {
+      a.leaping = true; a.leapDist0 = dist; // (re)launch from here
+    }
+    if (a.leaping && (!tall || dist <= stopAt)) { a.leaping = false; a.leapDist0 = 0; }
+    if (a.leaping) {
+      const span = Math.max(0.5, a.leapDist0 - stopAt);
+      const p = Math.max(0, Math.min(1, (a.leapDist0 - dist) / span));
+      a.hoverY = Math.min(a.leapDist0 * PEAK_FRAC, PEAK_MAX) * 4 * p * (1 - p);
+    }
     a.animTime += dt;
     return true;
+  }
+
+  // A tall open volume (hangar/cargo/battery/magazine/stairwell/vehicle bay,
+  // wide berthing/mess) where the Flood bounds in an arc — mirrors world.js
+  // clearHeightOf's TALL_ROLES so a leap only fires where the ceiling was
+  // actually raised for it.
+  _isTallRoom(node) {
+    if (node.type === 'open') return true;
+    const r = node.roles;
+    return !!r && (r.includes('hangar') || r.includes('large') || r.includes('battery')
+      || r.includes('magazine') || r.includes('stairwell') || r.includes('vehicles'));
   }
 
   // PERSONAL SPACE (user rule): every body is SOLID — two agents can never
@@ -1241,6 +1269,7 @@ export class Sim {
       b.posX[i] = a.x;
       b.posY[i] = a.y;
       b.posZ[i] = a.deck;
+      b.hoverY[i] = a.hoverY || 0;
       b.headingR[i] = a.heading;
       b.animClip[i] = this._clipFor(a);
       b.animTime[i] = a.animTime;
@@ -1265,6 +1294,7 @@ export class Sim {
       // body down (and drop a rifle beside it)
       if (a.hostArmed || (a.faction === FACTION.CORPSE && a.wasArmed && a.damage < 100)) flags |= FLAG.ARMED_HOST;
       if (a.charging) flags |= FLAG.CHARGING;
+      if (a.hoverY > 0.05) flags |= FLAG.LEAPING;
       if (a.lastHurtTick !== undefined && this.tickCount - a.lastHurtTick < 4) flags |= FLAG.FLINCH;
       b.flags[i] = flags;
       i++;

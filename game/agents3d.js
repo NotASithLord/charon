@@ -243,8 +243,11 @@ export class Agents3D {
       seen.add(id);
       const deck = buf.posZ[i]; // sim writes deck into posZ
       let rp = this.rpos.get(id);
-      if (!rp || rp.deck !== deck) { rp = { x: buf.posX[i], y: buf.posY[i], deck }; this.rpos.set(id, rp); }
-      else { rp.x += (buf.posX[i] - rp.x) * k; rp.y += (buf.posY[i] - rp.y) * k; }
+      if (!rp || rp.deck !== deck) { rp = { x: buf.posX[i], y: buf.posY[i], deck, hoverY: buf.hoverY[i] || 0 }; this.rpos.set(id, rp); }
+      else {
+        rp.x += (buf.posX[i] - rp.x) * k; rp.y += (buf.posY[i] - rp.y) * k;
+        rp.hoverY = (rp.hoverY || 0) + ((buf.hoverY[i] || 0) - (rp.hoverY || 0)) * k;
+      }
     }
     if (this.rpos.size > buf.count * 2) {
       for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
@@ -371,11 +374,14 @@ export class Agents3D {
         }
         case FACTION.COMBAT: {
           const charging = flags & FLAG.CHARGING;
-          // charge: lean hard forward, stretched stride
-          this._e.set((charging ? 0.55 : 0.18) + flinch, heading, 0);
+          const leaping = flags & FLAG.LEAPING;
+          const hover = rp.hoverY || 0;
+          // charge: lean hard forward, stretched stride; a leap tucks and
+          // stretches further and rides the arc up off the floor
+          this._e.set((leaping ? 0.85 : charging ? 0.55 : 0.18) + flinch, heading, 0);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(wx, elev, wz), this._q,
-            this._s.set(1, charging ? 1.1 : 1, charging ? 1.35 : 1));
+          this._m.compose(this._p.set(wx, elev + hover, wz), this._q,
+            this._s.set(1, leaping ? 1.15 : charging ? 1.1 : 1, leaping ? 1.5 : charging ? 1.35 : 1));
           if (flags & FLAG.ARMED_HOST) {
             stamp(this.combatOdstSet, counts.combatOdst++);
             this._rifleAt(wx, elev + 1.1, wz, heading);

@@ -20,7 +20,8 @@ export const FLAG = {
   FLAMER: 1 << 8,    // carries the ship's one flamethrower
   IN_SHAFT: 1 << 9,
   ARMED_HOST: 1 << 10, // combat form whose host carried a weapon (render with gun)
-  CHARGING: 1 << 11,   // combat form in a lunge/charge burst (render sprint/leap)
+  CHARGING: 1 << 11,   // combat form in a lunge/charge burst (render sprint)
+  LEAPING: 1 << 13,    // combat form airborne mid-leap (render lifted off the floor)
 };
 
 // Anim clip table (§9). Index = animClip in the buffer.
@@ -38,6 +39,9 @@ export class AgentBuffer {
     this.posX = new Float32Array(capacity);
     this.posY = new Float32Array(capacity);
     this.posZ = new Float32Array(capacity);
+    // height above the deck floor for an airborne agent (the Flood leap arc);
+    // 0 for everyone on the ground. Not rolled into prev — the render smooths it.
+    this.hoverY = new Float32Array(capacity);
     // previous-tick positions so the renderer can interpolate between the
     // last two sim states (§2.3)
     this.prevX = new Float32Array(capacity);
