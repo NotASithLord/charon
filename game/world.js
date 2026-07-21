@@ -9,14 +9,16 @@
 import * as THREE from './vendor/three.module.js';
 import { DOORS } from './fps-data.js';
 import { RNG } from '../shared/rng.js';
+import { DECK_H, CLEAR_H, elevOf, clearHeightOf } from '../shared/geometry.js';
 
-export const DECK_H = 4.2;      // deck-to-deck (matches ship data)
-export const CLEAR_H = 3.0;     // floor-to-ceiling clear height
+// Deck stacking + per-room clear height live in shared/geometry.js so the
+// render and the deterministic sim (leap peak) read ONE source. Re-exported
+// here because player.js / main.js / agents3d.js import them from world.js.
+export { DECK_H, CLEAR_H, elevOf, clearHeightOf };
+
 export const DOOR_W = 1.7;      // doorway opening width
 const WALL_T = 0.16;
 const HATCH = 1.8;              // hatch hole side
-
-export function elevOf(deck) { return (5 - deck) * DECK_H; }
 
 function segDist2(px, py, ax, ay, bx, by) {
   const vx = bx - ax, vy = by - ay;
@@ -71,6 +73,31 @@ export class World {
   bandCenter(deck) { return this._bandC[deck - 1]; }
   simToWorld(sx, sy, deck) { return [sx, sy - this.bandCenter(deck)]; }
   worldToSim(wx, wz, deck) { return [wx, wz + this.bandCenter(deck)]; }
+
+  // Oriented collision boxes for the Rapier physics world (physics/physics-
+  // world.js). Every solid vertical surface the player must not cross — walls,
+  // doorway throats, cover props, and the grand-stair spine/rails, all of
+  // which the builder already collected in `wallMeshes` — plus LOCKED door
+  // panels (unlocked panels slide open as you approach, so they never need to
+  // collide). Boxes are axis-aligned cuboids rotated about Y only, which is
+  // exactly how every one of these was built (no pitch/roll anywhere).
+  // Floors/ceilings are deliberately NOT here: vertical motion stays analytic
+  // (groundHeightAt + gravity), and full-height wall boxes are all a
+  // horizontal swept-capsule needs. why: sourcing the colliders from the SAME
+  // meshes the player sees means physics can never drift from the render.
+  collisionBoxes() {
+    const box = (m) => {
+      const p = m.geometry.parameters;
+      return {
+        cx: m.position.x, cy: m.position.y, cz: m.position.z,
+        hx: p.width / 2, hy: p.height / 2, hz: p.depth / 2,
+        ry: m.rotation.y || 0,
+      };
+    };
+    const out = this.wallMeshes.map(box);
+    for (const d of this.doors) if (d.edge.locked) out.push(box(d.mesh));
+    return out;
+  }
 
   _panelTex(base, line, cell = 64) {
     const c = document.createElement('canvas');
@@ -152,6 +179,7 @@ export class World {
       const isBreach = n.idx === g.breachNode;
       const tint = isBreach ? 0xff8866 : g.unpowered[n.idx] ? 0x4a5261 : (n.type === 'corridor' ? 0xbccbe4 : 0x9daabf);
       const fmat = mkFloorMat(n.w, n.d, tint);
+      const roomH = clearHeightOf(n); // taller in the big holds — leap room
       // GRAND STAIRWELL room: normal deck-3 room, but the floor is built with a
       // central well + switchback by _buildStairRoom (skip the flat floor).
       const isStair = n.roles.includes('stairwell');
@@ -167,11 +195,11 @@ export class World {
       const ch = ceilHoles.get(n.idx) ?? [];
       for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, ch)) {
         const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.1, b1 - b0), matCeil);
-        slab.position.set((a0 + a1) / 2, elev + CLEAR_H, (b0 + b1) / 2);
+        slab.position.set((a0 + a1) / 2, elev + roomH, (b0 + b1) / 2);
         this.scene.add(slab);
       }
       const sign = this._label(n.name);
-      sign.position.set(wx, elev + CLEAR_H - 0.45, wz);
+      sign.position.set(wx, elev + roomH - 0.45, wz);
       this.scene.add(sign);
       (this.roomSigns ??= [])[n.idx] = sign;
 
@@ -179,12 +207,12 @@ export class World {
       // says the flood has held the room long enough (updateDarkness)
       {
         const veil = new THREE.Mesh(
-          new THREE.BoxGeometry(n.w - 0.1, CLEAR_H - 0.08, n.d - 0.1),
+          new THREE.BoxGeometry(n.w - 0.1, roomH - 0.08, n.d - 0.1),
           new THREE.MeshBasicMaterial({
             color: 0x000000, transparent: true, opacity: 0,
             depthWrite: false, side: THREE.FrontSide,
           }));
-        veil.position.set(wx, elev + CLEAR_H / 2, wz);
+        veil.position.set(wx, elev + roomH / 2, wz);
         veil.visible = false;
         veil.renderOrder = 5;
         this.scene.add(veil);
@@ -203,7 +231,7 @@ export class World {
         });
         const strip = new THREE.Mesh(
           new THREE.BoxGeometry(Math.min(3.4, n.w * 0.55), 0.07, 0.55), lmat);
-        strip.position.set(wx, elev + CLEAR_H - 0.06, wz);
+        strip.position.set(wx, elev + roomH - 0.06, wz);
         this.scene.add(strip);
         this.roomLights[n.idx] = { mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1 };
       }
@@ -246,10 +274,10 @@ export class World {
         for (const [a, b] of spans) {
           const len = b - a;
           const wall = new THREE.Mesh(
-            run.horiz ? new THREE.BoxGeometry(len, CLEAR_H, WALL_T) : new THREE.BoxGeometry(WALL_T, CLEAR_H, len),
+            run.horiz ? new THREE.BoxGeometry(len, roomH, WALL_T) : new THREE.BoxGeometry(WALL_T, roomH, len),
             matWall);
-          if (run.horiz) wall.position.set((a + b) / 2, elev + CLEAR_H / 2, run.fixed);
-          else wall.position.set(run.fixed, elev + CLEAR_H / 2, (a + b) / 2);
+          if (run.horiz) wall.position.set((a + b) / 2, elev + roomH / 2, run.fixed);
+          else wall.position.set(run.fixed, elev + roomH / 2, (a + b) / 2);
           this.scene.add(wall);
           this.wallMeshes.push(wall);
         }
@@ -461,11 +489,9 @@ export class World {
 
   // headroom is generous over the well (the volume is two decks tall)
   ceilHeightAt(deck, wx, wz) {
-    for (const g of (this.stairRooms ?? [])) {
-      if (g.deck !== deck) continue;
-      if (wx >= g.cx - g.hx && wx <= g.cx + g.hx && wz >= g.cz - g.hz && wz <= g.cz + g.hz) return CLEAR_H;
-    }
-    return CLEAR_H;
+    const [sx, sy] = this.worldToSim(wx, wz, deck);
+    const idx = this.roomAt(deck, sx, sy, -1);
+    return idx >= 0 ? clearHeightOf(this.graph.node(idx)) : CLEAR_H;
   }
 
   // the stairwell room whose footprint contains this world point (any deck).
