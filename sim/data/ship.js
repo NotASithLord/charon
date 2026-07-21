@@ -99,7 +99,8 @@ export const SHIP = {
     { id: 'workshopA', name: 'Aft Workshop', deck: 4, foreAft: 0.68, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['maintenance'] },
     { id: 'eng', name: 'Main Engineering', deck: 4, foreAft: 0.74, type: 'room', capacity: 12, w: 20, d: 14, row: -1, roles: ['engineering', 'power'] },
     { id: 'reactor', name: 'Reactor', deck: 4, foreAft: 0.82, type: 'room', capacity: 8, w: 16, d: 14, row: -2, roles: ['power', 'hazard'] },
-    { id: 'maintA', name: 'Maintenance Aft', deck: 4, foreAft: 0.92, type: 'corridor', capacity: 6, w: 18, d: 3, row: 0, roles: ['maintenance'] },
+    // (removed 'Maintenance Aft' — a dead-end corridor hanging off Engineering
+    //  that went nowhere; user: "just remove it, it's a hallway to nowhere")
     // MAC capacitor banks + coolant loops fill the engineering flanks
     { id: 'capPort', name: 'Port Capacitor Bank', deck: 4, foreAft: 0.42, type: 'open', capacity: 10, w: 30, d: 14, row: 2, roles: ['power', 'hazard', 'large', 'crash_candidate'] },
     { id: 'capStbd', name: 'Starboard Capacitor Bank', deck: 4, foreAft: 0.44, type: 'open', capacity: 10, w: 30, d: 14, row: -2, roles: ['power', 'hazard', 'large', 'crash_candidate'] },
@@ -175,7 +176,6 @@ export const SHIP = {
     { a: 'engCorrA', b: 'workshopA', type: 'hatch', lockable: true },
     { a: 'engCorrA', b: 'eng', type: 'hatch', lockable: true },
     { a: 'eng', b: 'reactor', type: 'blastdoor', lockable: true },
-    { a: 'eng', b: 'maintA', type: 'hatch', lockable: true },
     { a: 'lifesup', b: 'capPort', type: 'hatch', lockable: true },
     { a: 'pumps', b: 'capStbd', type: 'hatch', lockable: true },
     { a: 'workshopA', b: 'coolant', type: 'hatch', lockable: true },

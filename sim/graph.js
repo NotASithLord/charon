@@ -82,6 +82,18 @@ export class ShipGraph {
     // adjacency: adj[node] = [{to, link}] where link is an edge/shaft/vent record
     this.adj = { std: this._buildAdj(this.edges), shaft: this._buildAdj(this.shafts), vent: this._buildAdj(this.vents) };
 
+    // DOORS ARE DOORS (user: "vents are vents, doors are continuous 3D spaces").
+    // Tag every duct that merely PARALLELS a real doorway with that door edge.
+    // The duct stays in the graph — it's still the flee / pursuit-break route,
+    // and the way PAST a locked door — but linkCost() stops discounting it
+    // below the door, so ordinary room-to-room routing walks THROUGH the door
+    // (a continuous move) instead of crawling the duct behind it (the hidden
+    // vent delay the user was seeing at every doorway). Ducts with no door
+    // behind them keep the highway discount.
+    for (const v of this.vents) {
+      v.doorEdge = (this.adj.std[v.a] ?? []).find((e) => e.to === v.b)?.link ?? null;
+    }
+
     // GRAND STAIRWELLS: cross-deck edges that open into one two-storey volume.
     // The upper (catwalk) and lower rooms see and shoot across the opening —
     // stored as {upper, lower} node idx so the sim can wire the sightline.
@@ -308,7 +320,13 @@ export class ShipGraph {
     // and cross-deck shafts wherever they exist. Only flood pathing reads
     // vent/shaft costs (humans are std-only), so this never affects the crew.
     if (l.kind === 'shaft') return run * 1.35 / 2.1 * 0.92;
-    if (l.kind === 'vent') return run * 1.35 / 1.65 * 0.82;
+    if (l.kind === 'vent') {
+      // a duct behind an OPEN door is no shortcut — price it just above the
+      // door so plain routing takes the door (continuous space); only a duct
+      // with no open door behind it stays a fast, hidden highway
+      if (l.doorEdge && !l.doorEdge.locked) return this.linkCost(l.doorEdge) + 1.0;
+      return run * 1.35 / 1.65 * 0.82;
+    }
     if (l.type === 'lift') return l.horizM / 1.4 + 10;
     if (l.type === 'ladder') return 1.0 + l.vertM / 1.2; // mount + climb (matches travelSec)
     return run / 1.4 + (l.type === 'blastdoor' ? 2.5 : 0.8);

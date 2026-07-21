@@ -380,6 +380,14 @@ export class Hive {
   evade(forms, carriers) {
     const sim = this.sim;
     for (const f of forms) {
+      // COMBAT FORMS DON'T FLEE (user: if timidity doesn't help them, reverse
+      // it — they are the flood's TEETH, not its currency). A combat form
+      // presses the attack and trades bodies; the muster still gathers them
+      // before hitting a defended room, but once in a fight they stay in it.
+      // Only the fragile INFECTION pods (and the carriers below) evade to keep
+      // the pool and the wombs alive. This is the biggest lever on the design
+      // rule that the flood must dominate the NPC-only ship.
+      if (f.faction === FACTION.COMBAT) continue;
       // never interrupt a rooting carrier — losing the 4s transform to an
       // evade/rampage yank was why the hive stopped producing carriers
       if (f.task?.kind === TASK.AMBUSH || f.task?.kind === TASK.BAIT || f.task?.kind === TASK.ATTACK
@@ -404,11 +412,28 @@ export class Hive {
     }
     for (const c of carriers) {
       const threat = this.localThreat(c.node);
-      if (threat > 1.2 && !c.move && !c.path.length) {
-        const safe = this.quietNodeNear(c.node, 'big');
-        if (safe !== -1 && safe !== c.node) {
-          const path = this.stealthPath(c.node, safe, 'big');
-          if (path) { sim.setPath(c, path); sim.log('hive', `a carrier drags itself out of danger toward ${sim.graph.node(safe).name}`); }
+      // A carrier is the flood's WOMB — slow, precious, helpless in a fight. It
+      // runs from even a whiff of guns nearby (localThreat folds in the adjacent
+      // rooms, and the flood now SENSES life through the bulkheads) and it
+      // RE-ROUTES even mid-move, so it never trundles into a room a marine just
+      // walked into (user report: carriers walking in to be shot). Ducts
+      // preferred (stealthPath). Skip only if it is ALREADY slipping toward a
+      // still-quiet node, so it doesn't thrash its route every round.
+      if (threat > 0.7) {
+        const dest = c.path.length ? c.path[c.path.length - 1].to : c.node;
+        const headingSomewhereSafe = c.path.length && this.localThreat(dest) <= 0.6;
+        if (!headingSomewhereSafe) {
+          const safe = this.quietNodeNear(c.node, 'big');
+          if (safe !== -1 && safe !== c.node && this.localThreat(safe) < threat) {
+            const path = this.stealthPath(c.node, safe, 'big');
+            if (path) {
+              sim.setPath(c, path);
+              if (sim.t - (c._fleeLogAt ?? -99) > 25) {
+                c._fleeLogAt = sim.t;
+                sim.log('hive', `a carrier slips away from the guns toward ${sim.graph.node(safe).name}`);
+              }
+            }
+          }
         }
       }
     }
