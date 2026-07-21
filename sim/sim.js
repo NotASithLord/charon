@@ -829,9 +829,18 @@ export class Sim {
           mult *= this.P.speed.infectionLunge;
           a.charging = true;
         }
-        // tiny per-agent pace variation staggers a column longitudinally so
-        // simultaneous movers never sit on the exact same interpolation point
-        const pace = 1 + ((a.id % 7) - 3) * 0.012;
+        // per-agent pace variation staggers a column longitudinally so
+        // simultaneous movers never sit on the exact same interpolation point.
+        // FLOOD FORMS get a MUCH wider spread (±25%) so a travelling pack reads
+        // as a POURING STREAM down the corridor — leaders and stragglers — not a
+        // tight moving blob (user: the flood clumps up in the corridor). The
+        // swarm re-masses at the muster point before it assaults, so the
+        // overwhelm is untouched; only the transit silhouette changes. The crew
+        // keep their tight ±1% file.
+        const paceHash = ((a.id * 2654435761) >>> 0) / 4294967296;
+        const pace = (a.faction === FACTION.INFECTION || a.faction === FACTION.COMBAT)
+          ? 1 + (paceHash - 0.5) * 0.5
+          : 1 + ((a.id % 7) - 3) * 0.012;
         // sx/sy: the leg starts from where the body ACTUALLY stands (user
         // note: jerky movement) — interpolating from the room's center made
         // every parked/steered/separated agent snap onto the center line the

@@ -63,8 +63,13 @@ export const SHIP = {
     { id: 'hydro', name: 'Hydroponics', deck: 2, foreAft: 0.62, type: 'room', capacity: 8, w: 16, d: 12, row: -2, roles: ['soft', 'systems'] },
 
     // ================= DECK 3 · OPERATIONS / WEAPONS (widest) ===========
-    { id: 'corrF', name: 'Main Corridor Fore', deck: 3, foreAft: 0.24, type: 'corridor', capacity: 10, w: 44, d: 4, row: 0, roles: ['artery'] },
-    { id: 'corrM', name: 'Main Corridor Mid', deck: 3, foreAft: 0.50, type: 'corridor', capacity: 10, w: 44, d: 4, row: 0, roles: ['artery'] },
+    // The fore + mid main-corridor sections were MERGED into one spinal
+    // corridor (user: "remove the [Main Corridor Fore] corridor" — it clustered
+    // every game). It now runs the whole bow-to-mid length with the gym /
+    // security / armory hanging off it, and the two deck-2 descents land at
+    // OPPOSITE ends (fore ladder, aft lift) so arrivals spread down its length
+    // instead of knotting at one landing.
+    { id: 'corrM', name: 'Main Corridor', deck: 3, foreAft: 0.43, type: 'corridor', capacity: 16, w: 74, d: 4, row: 0, roles: ['artery'] },
     { id: 'corrA', name: 'Main Corridor Aft', deck: 3, foreAft: 0.74, type: 'corridor', capacity: 10, w: 44, d: 4, row: 0, roles: ['artery'] },
     { id: 'gym', name: 'Gymnasium', deck: 3, foreAft: 0.28, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['soft'] },
     { id: 'security', name: 'Security', deck: 3, foreAft: 0.36, type: 'room', capacity: 10, w: 12, d: 10, row: 1, roles: ['marines'] },
@@ -148,13 +153,12 @@ export const SHIP = {
     { a: 'd2corrA', b: 'brig', type: 'blastdoor', lockable: true },
     { a: 'rec', b: 'lounge', type: 'hatch', lockable: true },
     { a: 'cryo', b: 'hydro', type: 'hatch', lockable: true },
-    { a: 'd2corrF', b: 'corrF', type: 'ladder', lockable: false }, // deck2->3
-    { a: 'd2corrA', b: 'corrM', type: 'lift', lockable: false },   // deck2->3
+    { a: 'd2corrF', b: 'corrM', type: 'ladder', lockable: false }, // deck2->3 (fore landing)
+    { a: 'd2corrA', b: 'corrM', type: 'lift', lockable: false },   // deck2->3 (aft landing)
     // ---- deck 3 · operations / weapons ----
-    { a: 'corrF', b: 'gym', type: 'hatch', lockable: true },
-    { a: 'corrF', b: 'security', type: 'hatch', lockable: true },
-    { a: 'corrF', b: 'armory', type: 'blastdoor', lockable: true },
-    { a: 'corrF', b: 'corrM', type: 'hatch', lockable: true },
+    { a: 'corrM', b: 'gym', type: 'hatch', lockable: true },
+    { a: 'corrM', b: 'security', type: 'hatch', lockable: true },
+    { a: 'corrM', b: 'armory', type: 'blastdoor', lockable: true },
     { a: 'corrM', b: 'stores3', type: 'hatch', lockable: true },
     { a: 'corrM', b: 'fireCtl', type: 'hatch', lockable: true },
     { a: 'corrM', b: 'barracks', type: 'hatch', lockable: true },
@@ -215,7 +219,7 @@ export const SHIP = {
     { a: 'hangar', b: 'maintF', ambushCorners: 2 },
     { a: 'hangar', b: 'cargo1', ambushCorners: 2 },
     { a: 'batteryPort', b: 'podPort', ambushCorners: 2 },
-    { a: 'corrF', b: 'corrA', ambushCorners: 2 },
+    { a: 'corrM', b: 'corrA', ambushCorners: 2 },
     { a: 'lifesup', b: 'eng', ambushCorners: 2 },
   ],
   // Authored ducts supplement the auto-generated net (graph.js ducts every

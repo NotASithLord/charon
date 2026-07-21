@@ -239,6 +239,26 @@ export class ShipGraph {
           l.flipT = lenA / (lenA + lenB);
           l.horizM = Math.max(2, lenA + lenB);
           l.vertM = 0;
+          // VENTS ARE DISTINCT GRATES (user: a duct must read as its OWN vent,
+          // not "the flood using the doorway"). A shared-wall vent otherwise put
+          // its openings right on the door. Slide them along the wall, well
+          // clear of the door and still inside both rooms' footprint, so the
+          // crawler walks to a separate louvered grate. Deterministic by index.
+          if (l.kind === 'vent') {
+            const horizWall = xOv >= minOv && Math.abs(yGap) < eps;
+            const dir = (l.i % 2) ? 1 : -1;
+            if (horizWall) {
+              const lo = Math.max(a.x - a.w / 2, b.x - b.w / 2) + 0.7;
+              const hi = Math.min(a.x + a.w / 2, b.x + b.w / 2) - 0.7;
+              const gx = Math.max(lo, Math.min(hi, door.x + Math.max(1.9, (hi - lo) * 0.3) * dir));
+              l.doorA = { x: gx, y: door.y }; l.doorB = { x: gx, y: door.y };
+            } else {
+              const lo = Math.max(a.y - a.d / 2, b.y - b.d / 2) + 0.7;
+              const hi = Math.min(a.y + a.d / 2, b.y + b.d / 2) - 0.7;
+              const gy = Math.max(lo, Math.min(hi, door.y + Math.max(1.9, (hi - lo) * 0.3) * dir));
+              l.doorA = { x: door.x, y: gy }; l.doorB = { x: door.x, y: gy };
+            }
+          }
         } else {
           // no shared wall: a short throat spans the gap (as before)
           const dx = b.x - a.x, dy = b.y - a.y;
