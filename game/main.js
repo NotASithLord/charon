@@ -249,8 +249,10 @@ function gameLogView(e) {
     return true;
   };
   switch (e.type) {
-    case 'hive': case 'carrier': case 'bait': case 'ambush': case 'vent':
+    case 'hive': case 'carrier': case 'bait': case 'vent':
       return null; // the hive does not report to the bridge
+    case 'ambush':
+      return e; // a sprung ambush IS seen/heard by whoever's there — show it (user request)
     case 'convert':
       if (!room || !throttle('c' + e.node)) return null;
       return { t: e.t, type: 'radio', msg: e.msg.includes('taken')
