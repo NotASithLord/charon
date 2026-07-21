@@ -908,10 +908,35 @@ export class Sim {
         }
       }
       if (!best) {
+        // LINE OF SIGHT (user): a form already hunting doesn't lose its prey at
+        // a doorway or ignore prey standing plainly in the next room. If it can
+        // see into an adjacent room (visibleNodes = self + rooms through an
+        // UNLOCKED door + the grand stairwell) and prey is there, PATH to it —
+        // the graph handles the doorway — and keep after it, instead of dropping
+        // to IDLE and drifting back into the room it was in.
+        const hunting = a.state === STATE.FIGHT || a.charging || a.task?.kind === TASK.ATTACK;
+        if (hunting) {
+          let pn2 = -1, pd = Infinity;
+          for (const n of this.visibleNodes(pn)) {
+            if (n === pn) continue;
+            for (const h of this._occ[n]) {
+              if (h.dead || h.hp <= 0) continue;
+              if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
+              const d = Math.hypot(h.x - a.x, h.y - a.y) - (h.id === a.chargeTargetId ? 4 : 0);
+              if (d < pd) { pd = d; pn2 = n; }
+            }
+          }
+          if (pn2 >= 0 && this.setPathTo(a, pn2, ['std'], (l) => !l.locked)) {
+            a.charging = true; a.state = STATE.MOVE;
+            return false; // _advanceMovement walks the path through the doorway
+          }
+        }
+        a.chargeTargetId = -1;
         if (a.state === STATE.FIGHT) { a.state = STATE.IDLE; a.charging = false; }
         return false;
       }
       target = best;
+      a.chargeTargetId = best.id;
       stopAt = P.combat.meleeRangeM * 0.6;
       a.charging = bestD > P.combat.meleeRangeM; // the whole approach is a sprint (lore)
       // a leap crosses ~20% faster than a flat charge (user tuning) — a.leaping

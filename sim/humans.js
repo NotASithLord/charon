@@ -295,6 +295,20 @@ function updateMarineTick(sim, a, dt) {
     }
   }
 
+  // FOLLOW THE PLAYER LIVE (user: fireteam bad at following + deck nav). For an
+  // escort order, chase the player's CURRENT node and re-path the MOMENT they
+  // move to a new room — don't wait ~2.5 s for the strategic tick or for a
+  // stale path to drain. ['std'] already includes the lift/ladder/stairwell
+  // edges, so this follows across decks too.
+  if (squad.order?.kind === 'order:escort' && !a.move) {
+    const lead = sim.byId.get(squad.order.entityId);
+    if (lead && !lead.dead && lead.node !== a.node && lead.node !== a.followNode) {
+      a.followNode = lead.node;
+      a.path = [];
+      if (sim.setPathTo(a, lead.node, ['std'], humanPass)) a.state = STATE.MOVE;
+    }
+  }
+
   // follow the squad objective
   if (!a.move && !a.path.length && squad.objective) {
     const target = squad.objective.node;

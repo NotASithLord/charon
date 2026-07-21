@@ -339,6 +339,15 @@ export class Hive {
     this.allIn = this.beliefs.size > 0 && mass >= 50 && mass >= this.beliefs.size * 3;
     if (this.allIn && !wasAllIn) sim.log('hive', 'the hive rises as one — every form converges for the end');
 
+    // POSTURE (user: evasive hit-and-run early, aggressive once strong). Early —
+    // few carriers or a small pool — the hive RUNS: it slips off to hit soft
+    // targets and disperses, but does NOT gang up on the marines. Once carriers
+    // are seated and the pool has grown (scarcity crosses ~1.0) it flips
+    // AGGRESSIVE and the rampage/muster hunt comes online. Modeled on allIn.
+    const wasAggro = this.posture === 'AGGRESSIVE';
+    this.posture = ((K >= 2 && S <= 1.05) || this.allIn) ? 'AGGRESSIVE' : 'EVASIVE';
+    if (this.posture === 'AGGRESSIVE' && !wasAggro) sim.log('hive', 'the hive turns from hit-and-run to open aggression');
+
     // re-validate queued paths against current beliefs: a route planned two
     // rounds ago may now run through a manned corridor
     for (const f of forms) {
@@ -589,7 +598,10 @@ export class Hive {
     //    superiority over the humans there, enough local mass to matter, and
     //    no real marine presence to punish it (that's an evade zone instead).
     const rampaging = new Set();
-    for (const n of g.nodes) {
+    // EVASIVE hit-and-run (user): pockets stay quiet — no going loud, no muster —
+    // until the hive is strong (posture flips AGGRESSIVE). Early forms disperse
+    // and hit soft targets instead of ganging up on the marines.
+    if (this.posture === 'AGGRESSIVE') for (const n of g.nodes) {
       const region = g.nodesWithin(n.idx, 1, ['std'], () => true);
       let fs = 0, hs = 0, hard = 0;
       for (const r of region) {
@@ -685,7 +697,7 @@ export class Hive {
       const raider = this._raiderId !== undefined ? sim.byId.get(this._raiderId) : null;
       const raiderLive = raider && !raider.dead && !raider.downed && raider.hp > 0;
       if (!raiderLive) this._raiderId = undefined;
-      if (K + seeding >= 3 && !raiderLive && sim.t >= (this._raidCooldownUntil ?? 0)) {
+      if ((this.posture === 'EVASIVE' || K + seeding >= 3) && !raiderLive && sim.t >= (this._raidCooldownUntil ?? 0)) {
         let bestT = -1, bestS = 0.5;
         for (const n of g.nodes) {
           if (!n.roles.includes('soft') && !n.roles.includes('medbay')) continue;
