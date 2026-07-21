@@ -838,6 +838,7 @@ export class Sim {
         // moment a move began
         a.move = { from: a.node, to: step.to, link, layer: link.kind, t: 0,
           sx: a.x, sy: a.y, travelSec: this.travelSec(link, mult) * pace };
+        a.firePost = null; // a moving shooter re-takes its firing post on arrival
         // DUCT NOISES (user: vents don't show on the map — the crew only
         // HEARS them): a form slipping into the ducting drops an ominous
         // log line, throttled per duct so it stays sparse.
@@ -1273,32 +1274,29 @@ export class Sim {
     }
     if (tn === 0) return null;
     tx /= tn; ty /= tn;
-    const td = Math.hypot(tx - room.x, ty - room.y) || 1;
-    const fx = (tx - room.x) / td, fy = (ty - room.y) / td; // toward the threat
+    // HOLD YOUR GROUND (user: marines fly to the CENTRE of the room when they
+    // engage). The stance is anchored on the marine's OWN post — where it took
+    // up the fight (its arrival slot) — NOT a room- or swarm-relative point that
+    // dragged the whole squad into the middle. It FACES the swarm, fans a little
+    // laterally off its post, and only GIVES GROUND (steps the post back) if the
+    // swarm closes to knife range. A rifleman holds and shoots; it doesn't
+    // sprint at the flood, and it doesn't wander to the room centre.
+    if (!a.firePost) a.firePost = [a.x, a.y];
+    let hx = a.firePost[0], hy = a.firePost[1];
+    const dx = tx - hx, dy = ty - hy;
+    const td = Math.hypot(dx, dy) || 1;
+    const fx = dx / td, fy = dy / td;                        // post -> swarm (facing)
+    const MIN = this.P.combat.meleeRangeM + 1.5;             // ~3.7 m: give ground inside this
+    if (td < MIN) { hx -= fx * (MIN - td); hy -= fy * (MIN - td); a.firePost[0] = hx; a.firePost[1] = hy; }
     const px = -fy, py = fx;                                 // firing line runs across this
     const hw = Math.max(0.7, room.w / 2 - 1.0), hd = Math.max(0.7, room.d / 2 - 1.0);
-    // how far the room reaches along the lateral (across) and depth (toward)
-    // axes — small along a corridor's short axis, large down its length
-    const latCap = Math.abs(px) * hw + Math.abs(py) * hd;
-    const depCap = Math.abs(fx) * hw + Math.abs(fy) * hd;
-    const h1 = ((a.id * 2654435761) >>> 0) / 4294967296;         // stable lateral slot
-    const h2 = (((a.id + 7907) * 1597334677) >>> 0) / 4294967296; // stable depth rank
-    // fan across the line (~0.9 m/shooter), but never past the walls
-    const latSpread = Math.min(0.9 * Math.max(1, nShoot), Math.max(0, 2 * latCap - 0.4));
-    const off = (h1 - 0.5) * latSpread;
-    // stagger into ranks BEHIND the front, down whatever axis has the room to
-    // give — this is what fills a corridor as a lane instead of a single knot
-    const depth = h2 * Math.min(depCap * 0.85, 1.3 * Math.max(0, nShoot - 1));
-    // ANCHOR ON THE CONTACT, NOT THE ROOM CENTER (user report: marines were
-    // sliding to the middle of a big room and firing from ~14 m, which handed
-    // them free distance and turned every doorway into a turkey-shoot on the
-    // flood). The front rank now holds a SHORT fixed standoff off the swarm
-    // centroid — a wall of guns at knife range — and ranks back from there.
-    // Capped so it never oversteps room center (would face the wrong way) nor
-    // lands on top of the swarm.
-    const standoff = Math.max(1.5, Math.min(td - 0.5, 3.5));
-    const ax = tx - fx * standoff, ay = ty - fy * standoff;
-    return [ax + px * off - fx * depth, ay + py * off - fy * depth, fx, fy];
+    const latCap = Math.abs(px) * hw + Math.abs(py) * hd;    // room reach across the line
+    const h1 = ((a.id * 2654435761) >>> 0) / 4294967296;     // stable per-id lateral slot
+    // fan across (~0.9 m/shooter), never past the walls — longitudinal spread
+    // already comes from each marine's own arrival slot (_parkSlot), so a
+    // corridor line stays a lane without an explicit depth term
+    const off = (h1 - 0.5) * Math.min(0.9 * Math.max(1, nShoot), Math.max(0, 2 * latCap - 0.4));
+    return [hx + px * off, hy + py * off, fx, fy];
   }
 
   _firingDrift(a, dt) {

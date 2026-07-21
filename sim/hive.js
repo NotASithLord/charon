@@ -412,13 +412,21 @@ export class Hive {
     }
     for (const c of carriers) {
       const threat = this.localThreat(c.node);
-      // A carrier is the flood's WOMB — slow, precious, helpless in a fight. It
-      // runs from even a whiff of guns nearby (localThreat folds in the adjacent
-      // rooms, and the flood now SENSES life through the bulkheads) and it
-      // RE-ROUTES even mid-move, so it never trundles into a room a marine just
-      // walked into (user report: carriers walking in to be shot). Ducts
-      // preferred (stealthPath). Skip only if it is ALREADY slipping toward a
-      // still-quiet node, so it doesn't thrash its route every round.
+      // A carrier is the flood's WOMB — slow, precious, helpless in a fight, and
+      // it must HIDE, never wander toward guns. localThreat folds in the
+      // adjacent rooms, and the flood now senses life through the bulkheads.
+      // (1) NEVER WALK TOWARD THE GUNS (user: carriers trundle toward marines
+      //     next door even sitting idle, no one coming at them). Drop any route
+      //     whose NEXT step or FAR end is no safer than standing put — a womb
+      //     holds still and hides rather than march into a gun line.
+      if (c.path.length) {
+        const next = this.localThreat(c.path[0].to);
+        const dest = this.localThreat(c.path[c.path.length - 1].to);
+        if (next > threat || dest >= Math.max(0.35, threat)) c.path = [];
+      }
+      // (2) actively relocate away only when the guns get close, and only along
+      //     a route that never steps toward them (else HOLD — hiding beats
+      //     walking past a marine). Skip if already slipping somewhere quiet.
       if (threat > 0.7) {
         const dest = c.path.length ? c.path[c.path.length - 1].to : c.node;
         const headingSomewhereSafe = c.path.length && this.localThreat(dest) <= 0.6;
@@ -426,7 +434,7 @@ export class Hive {
           const safe = this.quietNodeNear(c.node, 'big');
           if (safe !== -1 && safe !== c.node && this.localThreat(safe) < threat) {
             const path = this.stealthPath(c.node, safe, 'big');
-            if (path) {
+            if (path && !path.some((s) => this.localThreat(s.to) > threat)) {
               sim.setPath(c, path);
               if (sim.t - (c._fleeLogAt ?? -99) > 25) {
                 c._fleeLogAt = sim.t;
