@@ -46,7 +46,9 @@ export const PARAMS = {
   flood: {
     initialInfectionForms: 14, // difficulty lever — LEAN by design (user rule): the flood's
     initialCombatForms: 3,     // strength is per-form durability + hive tactics, not headcount
-    initialCarriers: 0,        // difficulty lever — live input in the sim UI (seeded at the breach)
+    initialCarriers: 1,        // one guaranteed WOMB at the breach — so the flood can never be
+                               // bootstrap-wiped before it seats production (design rule: the
+                               // flood must dominate an NPC-only ship). Still a live UI lever.
   },
   // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling
   // carrier and only spill out when it RUPTURES — under fire, or at the top

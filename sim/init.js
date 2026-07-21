@@ -77,6 +77,16 @@ export function initRun(seed, rng, P) {
     if (rng.chance(P.power.unstableFraction)) graph.unpowered[n.idx] = 1;
   }
 
+  // pick the breach NOW, before the crew are placed (the forms + fresh dead
+  // still spill out at step 8). why: the crash site must open as flood + bodies
+  // with NO living crew standing on the portal — the deck-5 holds got that for
+  // free (excluded from crew spawns by role), but the new deck-3/4 flank crash
+  // sites (batteries, capacitor banks) are manned/habitable, so we now exclude
+  // whichever one is THE breach from every live-crew pool below.
+  const breach = rng.pick(graph.nodesWithRole('crash_candidate'));
+  graph.breachNode = breach;
+  graph.unpowered[breach] = 1;
+
   // --- 6. populate NPCs. EXPLICIT COUNTS (user note): squads, squad sizes,
   // civilians and bodies are exactly what the inputs say — the only thing
   // that rolls fresh each run is WHERE everyone starts. ---
@@ -152,7 +162,14 @@ export function initRun(seed, rng, P) {
       'engCorrF', 'eng', 'engCorrA', 'hangarA', 'hangar', 'vehicle', 'cargo1',
       'hangarA', 'engCorrA', 'corrM'].map((id) => graph.byId.get(id));
     for (let p = 0; p < M.patrols; p++) {
-      const leg = Math.floor((p * route.length) / Math.max(1, M.patrols));
+      let leg = Math.floor((p * route.length) / Math.max(1, M.patrols));
+      // never START a patrol standing on the crash site (its route runs through
+      // the hangar/holds, which can be the breach) — walk it to the next leg so
+      // no live crew opens the game on the breach (consistent with every other
+      // spawn pool). why: the crash site opens as flood + corpses only.
+      for (let guard = 0; guard < route.length && route[leg] === breach; guard++) {
+        leg = (leg + 1) % route.length;
+      }
       const node = route[leg];
       const squad = {
         id: squads.length, members: [], objective: null, morale: 1,
@@ -170,15 +187,18 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // armed crew: armory + the flank gun batteries + corridors + living spaces
+  // armed crew: armory + the flank gun batteries + corridors + living spaces.
+  // NEVER on the breach (a battery can be the crash site now) — that flank's
+  // watch died in the crash; they're among the breach corpses instead.
   {
     const armory = graph.byId.get('armory');
-    const corridors = graph.nodes.filter((n) => n.type === 'corridor').map((n) => n.idx);
-    const softRooms = graph.nodes.filter((n) => n.roles.includes('soft')).map((n) => n.idx);
+    const corridors = graph.nodes.filter((n) => n.type === 'corridor' && n.idx !== breach).map((n) => n.idx);
+    const softRooms = graph.nodes.filter((n) => n.roles.includes('soft') && n.idx !== breach).map((n) => n.idx);
     // the flank weapon stations are manned (user: side areas shouldn't read
     // empty) — the 50mm batteries and fire control hold a watch of armed crew
     const battleStations = graph.nodes.filter((n) =>
-      n.roles.includes('battery') || (n.roles.includes('marines') && n.roles.includes('systems')))
+      (n.roles.includes('battery') || (n.roles.includes('marines') && n.roles.includes('systems')))
+      && n.idx !== breach)
       .map((n) => n.idx);
     const armedCount = P.crew.armedCrew;
     for (let i = 0; i < armedCount; i++) {
@@ -279,10 +299,10 @@ export function initRun(seed, rng, P) {
     // running (engineering, reactor, life support, workshops), not scattered
     // through random compartments. worker=true keeps them making purposeful
     // trips between systems until the outbreak reaches them.
-    const repairRooms = graph.nodes.filter((n) => n.deck >= 4
+    const repairRooms = graph.nodes.filter((n) => n.deck >= 4 && n.idx !== breach
       && ['power', 'engineering', 'systems', 'maintenance'].some((r) => n.roles.includes(r)))
       .map((n) => n.idx);
-    const lowerNodes = graph.nodes.filter((n) => n.deck >= 4).map((n) => n.idx);
+    const lowerNodes = graph.nodes.filter((n) => n.deck >= 4 && n.idx !== breach).map((n) => n.idx);
     for (let i = 0; i < P.crew.lowerMaintenance; i++) {
       const node = repairRooms.length ? repairRooms[i % repairRooms.length] : rng.pick(lowerNodes);
       const a = makeAgent(FACTION.CIVILIAN, node, graph);
@@ -326,11 +346,7 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // --- 8. seed the outbreak at a crash candidate ---
-  const candidates = graph.nodesWithRole('crash_candidate');
-  const breach = rng.pick(candidates);
-  graph.breachNode = breach;
-  graph.unpowered[breach] = 1;
+  // --- 8. seed the outbreak at the breach chosen above ---
   // every form spills out of the crash at its OWN spot (user rule: solid
   // bodies, no stacking on the room's center point)
   const flood = [];

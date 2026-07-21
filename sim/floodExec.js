@@ -36,7 +36,8 @@ export function updateFloodTick(sim, dt) {
     if (a.faction === FACTION.INFECTION && !a.move && a.state !== STATE.GRABBING
       && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE
       && (sim.hive.lastScarcity ?? 3) > 0.8) {
-      const roomies = sim.occupants(a.pnode ?? a.node);
+      const pn = a.pnode ?? a.node;
+      const roomies = sim.occupants(pn);
       const hot = roomies.some((h) => h.hp > 0 && !h.dead &&
         (h.faction === FACTION.MARINE || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT)));
       // …but a form that has already gotten CLOSE to a human doesn't bolt —
@@ -44,6 +45,11 @@ export function updateFloodTick(sim, dt) {
       const inLunge = roomies.some((h) => h.hp > 0 && !h.dead &&
         (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE)
         && Math.hypot(h.x - a.x, h.y - a.y) <= sim.P.combat.lungeRiskM);
+      // NOTE: an earlier "flee marines SENSED in the next room via ducts" pass
+      // was cut — the balk + pod-muster already keep pods OUT of manned rooms
+      // (measured ~0.3% ever share a marine's node), and the extra proactive
+      // flee only sapped the flood's push (design rule: the flood must dominate
+      // an NPC-only ship). Pods still bolt from guns in their OWN room below.
       if (hot && !inLunge) {
         // danger where we STAND, for comparison — bolting only makes sense
         // into a strictly safer room. Without this, a form whose exits were

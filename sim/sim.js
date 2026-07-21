@@ -1289,10 +1289,15 @@ export class Sim {
     // stagger into ranks BEHIND the front, down whatever axis has the room to
     // give — this is what fills a corridor as a lane instead of a single knot
     const depth = h2 * Math.min(depCap * 0.85, 1.3 * Math.max(0, nShoot - 1));
-    // hold the front rank a few meters short of the threat centroid (never step
-    // onto it), then rank backward from there
-    const standoff = Math.min(td - 1.2, Math.max(2.0, 0.5 * td));
-    const ax = room.x + fx * standoff, ay = room.y + fy * standoff;
+    // ANCHOR ON THE CONTACT, NOT THE ROOM CENTER (user report: marines were
+    // sliding to the middle of a big room and firing from ~14 m, which handed
+    // them free distance and turned every doorway into a turkey-shoot on the
+    // flood). The front rank now holds a SHORT fixed standoff off the swarm
+    // centroid — a wall of guns at knife range — and ranks back from there.
+    // Capped so it never oversteps room center (would face the wrong way) nor
+    // lands on top of the swarm.
+    const standoff = Math.max(1.5, Math.min(td - 0.5, 3.5));
+    const ax = tx - fx * standoff, ay = ty - fy * standoff;
     return [ax + px * off - fx * depth, ay + py * off - fy * depth, fx, fy];
   }
 
