@@ -33,8 +33,8 @@ export const PARAMS = {
   // environmental damage inside the radius, and every NPC steers clear
   fire: { dps: 10, radiusM: 2.1 },
   bodies: {
-    eventCorpses: 60,         // portal-event dead scattered through the ship
-                              // (user note: "less bodies, it's not a graveyard")
+    eventCorpses: 69,         // portal-event dead scattered evenly through the ship
+                              // (user note: +15% more bodies, evenly spread)
     breachCorpses: 10,        // fresh dead at the breach (±50% roll on placement)
     // the vast majority of the dead were NOT carrying weapons (user rule):
     // a form raised from them fights with claws alone — sprint, leap, swipe

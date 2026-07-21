@@ -117,7 +117,11 @@ export class Hive {
     const observed = new Map(); // node -> shooter weight actually seen this round
     for (const f of sim.agents) {
       if (f.dead || !isActiveFloodForm(f)) continue;
-      for (const n of sim.visibleNodes(f.node)) {
+      // the flood SENSES living bodies in every adjacent compartment, not just
+      // down an open sightline (user rule) — this is what lets it read a gun
+      // line forming next door and evade it, or feel the defenceless crew
+      // through a bulkhead and come for them
+      for (const n of sim.floodSenses(f.node)) {
         let shooterW = 0;
         for (const h of sim.occupants(n)) {
           if (!isLivingHuman(h)) continue;

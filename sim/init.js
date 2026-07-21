@@ -83,30 +83,41 @@ export function initRun(seed, rng, P) {
   const agents = [];
   const M = P.marines;
 
-  // marine line squads: M.squads squads of M.squadSize each; the first one
-  // or two berth in the barracks, the rest wake up in random crew spaces
+  // marine line squads: M.squads squads of M.squadSize each. FIXED MUSTER
+  // POSTS (user rule: marines always start in the same sensible areas of each
+  // deck) — line squads berth at the ship's standing marine stations, never
+  // scattered into random compartments, so every run opens with the garrison
+  // holding the same recognizable ground. The order fills the deck-3 marine
+  // spaces first (barracks → security), then posts a squad on the decks above
+  // and below; squads past the list wrap back through it. Deck 1 is held by
+  // the garrison, deck 5 (the crash deck) by the roaming patrols.
   const squads = [];
   {
-    const barracks = graph.byId.get('barracks');
-    const eligible = graph.nodes
-      .filter((n) => !n.roles.includes('command') && n.type !== 'corridor'
-        && !n.roles.includes('crash_candidate')) // squads berth in crew spaces, not cargo holds
-      .map((n) => n.idx);
-    const barracksSquads = Math.min(M.squads, 1 + (rng.chance(0.5) ? 1 : 0));
+    const marinePostIds = [
+      'barracks',   // deck 3 — the barracks (squad 0 musters here; holds the flamethrower)
+      'security',   // deck 3 — the security office
+      'grandStair', // deck 4 — holding the engineering stairwell down to the hangar
+      'crewB',      // deck 2 — a squad berthed forward with the crew
+      'fireCtl',    // deck 3 — the fire-control watch
+      'armory',     // deck 3 — the armory
+      'launchStbd', // deck 5 — a posting on the flight deck
+    ];
+    const marinePosts = marinePostIds.map((id) => graph.byId.get(id));
     for (let si = 0; si < M.squads; si++) {
-      const node = si < barracksSquads ? barracks : rng.pick(eligible);
+      const node = marinePosts[si % marinePosts.length];
       const squad = { id: si, members: [], objective: null, morale: 1, respondingTo: null, phase1: false };
       for (let m = 0; m < M.squadSize; m++) {
         const a = makeAgent(FACTION.MARINE, node, graph);
         a.hp = a.maxHp = P.combat.marine.hp;
         a.hasRadio = rng.chance(P.crew.radio.marine);
         a.squad = si;
+        scatterInRoom(a, graph.node(node), rng); // spread within the post, not stacked on the center
         squad.members.push(a.id);
         agents.push(a);
       }
       squads.push(squad);
     }
-    // the ship's ONE flamethrower goes to a member of the first barracks squad
+    // the ship's ONE flamethrower goes to a member of the first squad (barracks)
     const flamerSquad = squads[0];
     if (flamerSquad) {
       const holder = agents.find((a) => a.id === flamerSquad.members[0]);
@@ -284,14 +295,16 @@ export function initRun(seed, rng, P) {
     }
   }
 
-  // --- 7. scatter corpses: EVERY room gets its own randomly-rolled share,
-  // every run (user note) — each node's weight is its size times a fresh
-  // per-run roll, so where the portal event's dead ended up is never the
-  // same twice. Corpse caches (medbay/cryo) still lean heavy.
+  // --- 7. scatter corpses: EVERY room gets its own share, weighted by size so
+  // the dead read as EVENLY spread across the whole ship (user note: more
+  // bodies, evenly spread) — a gentle per-run jitter still moves them around
+  // run to run, but the wide old lottery (some rooms 12x others) is gone, so
+  // no room reads empty and none becomes a graveyard. Corpse caches
+  // (medbay/cryo) still lean heavy.
   const corpses = [];
   {
     const weights = graph.nodes.map((n) => {
-      let w = (n.capacity * 0.5 + 2) * rng.range(0.15, 1.85);
+      let w = (n.capacity * 0.5 + 2) * rng.range(0.7, 1.3);
       if (n.roles.includes('corpse_cache')) w *= 2.5;
       if (n.type === 'corridor') w *= 0.5;
       // the dead lie where the crew was — out in the side compartments, not
