@@ -16,6 +16,7 @@ import { FireFX } from './fx.js';
 import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
+import { PhysicsWorld, initRapier, PHYS_DT } from '../physics/physics-world.js';
 
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -51,8 +52,20 @@ const sim = new Sim(seed, { flood: { initialInfectionForms: 20, initialCombatFor
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
 
-// spawn: CIC on the command deck (user tuning) — an ODST detail with a fireteam
+// spawn: CIC on the command deck (user tuning) — an ODST detail with a fireteam.
+// Created synchronously WITHOUT physics so the intro/UI never blocks on the
+// wasm load.
 const player = new Player(canvas, world, sim, sim.graph.byId.get('cic'));
+
+// Rapier physics: the player's authoritative horizontal collision, built from
+// the same wall meshes the world just extruded (world.collisionBoxes()). Loaded
+// OFF the boot path — a slow or failed wasm load must never wedge the game on
+// the loading screen — and attached to the player when it resolves.
+let physics = null;
+initRapier().then(() => {
+  physics = new PhysicsWorld({ staticBoxes: world.collisionBoxes() });
+  player.attachPhysics(physics);
+}).catch((e) => console.error('[charon] Rapier physics failed to initialise:', e));
 agents.playerId = player.agent.id;
 const fireteam = sim.attachPlayerSquad(player.agent, 3);
 // MARINE TACNET (user request): the sim view's plan, filtered to what the
@@ -523,7 +536,12 @@ function drawTracker() {
     if (buf.id[i] === player.agent.id) continue;
     const fbuf = buf.faction[i];
     if (fbuf === 6) continue;
-    if (buf.animClip[i] === 0 || buf.animClip[i] === 4) continue; // still or dead = invisible
+    // MOVING CONTACTS ONLY (user rule): hold still and you vanish, exactly like
+    // the real motion tracker. Keyed off actual position delta this sim tick,
+    // NOT the anim clip — an agent can be mid-attack or ambushing and dead
+    // still, and those should not paint.
+    const moved = Math.hypot(buf.posX[i] - buf.prevX[i], buf.posY[i] - buf.prevY[i]);
+    if (buf.animClip[i] === 4 || moved < 0.03) continue; // dead or not moving = invisible
     const deck = buf.posZ[i];
     if (Math.abs(deck - player.deck) > 1) continue;
     const [wx, wz] = world.simToWorld(buf.posX[i], buf.posY[i], deck);
@@ -584,8 +602,25 @@ function soundSweep(now) {
   world.doorEvents.length = 0;
 }
 
+// obstacle set for the player's capsule: live, standing bodies on the player's
+// deck (dead/downed/other-deck don't block). Radii mirror the old separation
+// pass. Handed to the physics world each fixed step.
+function playerObstacles() {
+  const out = [];
+  const R = { 3: 0.32, 4: 0.48, 5: 0.75 };
+  const cy = elevOf(player.deck) + 0.9;
+  for (const a of sim.agents) {
+    if (a.dead || a.isPlayer || a.deck !== player.deck) continue;
+    if (a.faction === 6 || a.downed || a.hp <= 0) continue;
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    out.push({ id: a.id, x: wx, y: cy, z: wz, radius: R[a.faction] ?? 0.4, half: 0.5 });
+  }
+  return out;
+}
+
 // --- main loop ---
 let acc = 0;
+let physAcc = 0;
 let shownLost = false;
 let spectateShown = false;
 let last = performance.now();
@@ -594,7 +629,23 @@ function frame(now) {
   const dtReal = Math.min(0.1, (now - last) / 1000);
   last = now;
 
-  player.update(dtReal);
+  // fixed-timestep player physics: step the Rapier world in whole PHYS_DT
+  // increments (deterministic — replay/lockstep depend on it), letting the
+  // camera interpolate the remainder. Bodies are re-synced each step so the
+  // capsule collides with live NPCs.
+  physAcc += dtReal;
+  let alpha = 0;
+  if (physics) {
+    let pSteps = 0;
+    while (physAcc >= PHYS_DT && pSteps++ < 6) {
+      physics.syncBodies(playerObstacles());
+      player.step(PHYS_DT);
+      physics.step();
+      physAcc -= PHYS_DT;
+    }
+    if (pSteps >= 6) physAcc = 0; // don't spiral if a frame stalls
+    alpha = physAcc / PHYS_DT;
+  }
 
   // MA5 loop (auto fire, bloom, reload, melee) — pure mechanics, events out
   const wevents = [];
@@ -717,7 +768,7 @@ function frame(now) {
     lamp.position.set(gx, gy + 0.2, gz);
     viewmodel.visible = false;
   } else {
-    const pose = player.cameraPose();
+    const pose = player.renderPose(alpha);
     camera.position.set(pose.x, pose.y, pose.z);
     camera.rotation.set(0, 0, 0);
     camera.rotateY(pose.yaw + (shake > 0 ? Math.sin(now * 0.09) * 0.02 * shake : 0));

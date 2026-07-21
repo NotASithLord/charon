@@ -1,20 +1,32 @@
 // The ODST — first-person controller with the first-strike movement feel
-// (exponential accel, gravity, jump), ballistic-armor-over-health, and real
-// vertical shafts (not teleport pads): stand at a ladder/stairwell and press
-// L to climb it (L, not W — W is forward; walking past a ladder shouldn't
-// yank you up it). Direction is never ambiguous (user note: no more guessing
-// whether looking up/down goes up or down) — a shaft only ever has ONE other
-// end from wherever you're standing, so L always takes you there, with a
-// brief climb animation instead of an instant cut. The player is a live sim
-// agent: the flood hunts them, grabs pin them, conversion takes them.
+// (exponential accel, gravity, jump) and ballistic-armor-over-health. The
+// player is a live sim agent: the flood hunts them, grabs pin them, conversion
+// takes them.
+//
+// Collision moved to Rapier (physics/physics-world.js): HORIZONTAL motion is a
+// swept capsule resolved by the character controller — sliding along walls and
+// cover, blocked by other bodies — replacing the old grid `isWalkable` slide
+// and the manual sphere-separation pass. VERTICAL stays analytic here (gravity,
+// resting on the floor, the stairwell ramp) because full-height wall boxes are
+// all the horizontal sweep needs, so the two layers stay cleanly split. The
+// capsule is the authoritative X/Z; walking asks the controller to move it and
+// climbs/stair-portals teleport it. why fixed-step: the controller is stepped
+// at a fixed PHYS_DT from main.js's accumulator, so player physics is
+// deterministic (replay + lockstep depend on it) and the camera interpolates
+// between the last two steps for smoothness.
+//
+// L (not W) climbs a ladder/stairwell you're standing at — walking past a
+// ladder shouldn't yank you up it, and a shaft only ever has ONE other end
+// from where you stand, so the direction is never a guess.
 
-import { elevOf, CLEAR_H } from './world.js';
+import { elevOf } from './world.js';
 import { ODST } from './fps-data.js';
 
 export class Player {
-  constructor(canvas, world, sim, startNode) {
+  constructor(canvas, world, sim, startNode, physics) {
     this.world = world;
     this.sim = sim;
+    this.physics = physics ?? null;
     this.canvas = canvas;
     const n = sim.graph.node(startNode);
     this.deck = n.deck;
@@ -40,6 +52,16 @@ export class Player {
 
     this.agent = sim.attachPlayer(startNode, { odst: true });
     this._lastHp = this.agent.hp;
+
+    // the Rapier capsule holds the authoritative X/Z. Physics may not be ready
+    // yet — attachPhysics() wires it when the wasm finishes loading; until then
+    // the player just holds still, so the intro/UI never block on the load.
+    if (this.physics) this.physics.spawnPlayer(this.x, elevOf(this.deck) + this.h, this.z);
+
+    // render interpolation between the last two fixed physics steps
+    this._prev = this._worldPose();
+    this._cur = this._worldPose();
+
     this._syncAgent();
 
     canvas.addEventListener('click', () => { if (!this.locked) canvas.requestPointerLock(); });
@@ -55,11 +77,38 @@ export class Player {
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
   }
 
+  // Wire the Rapier world once its wasm is ready (main.js calls this from the
+  // initRapier().then()). why deferred: a slow or failed physics load must
+  // never wedge the game on the loading screen, so the player boots without it.
+  attachPhysics(physics) {
+    this.physics = physics;
+    physics.spawnPlayer(this.x, elevOf(this.deck) + this.h, this.z);
+    this._prev = this._worldPose();
+    this._cur = this._worldPose();
+  }
+
   get dead() { return this.agent.dead || this.agent.hp <= 0; }
   get pinned() { return this.agent.held === this.sim.tickCount; }
 
-  update(dt) {
-    if (this.dead) return;
+  // feet world position (Y follows the climb transition or the deck floor)
+  _worldPose() {
+    const y = this.climb ? this.climb.worldY : elevOf(this.deck) + this.h;
+    return { x: this.x, y, z: this.z };
+  }
+
+  // ONE fixed-timestep step (dt === PHYS_DT), driven by main.js's accumulator.
+  step(dt) {
+    if (!this.physics) return; // physics not attached yet — hold still
+    this._prev = this._cur;
+
+    // adopt the X/Z the physics world committed last step (walking moves the
+    // capsule through the controller; teleports set it directly — both are
+    // already reflected in the capsule, so this re-syncs us to the truth)
+    if (!this.dead) {
+      const c = this.physics.playerCenter();
+      this.x = c.x; this.z = c.z;
+    }
+    if (this.dead) { this._cur = this._worldPose(); return; }
 
     // --- armor layer: intercept sim damage; armor soaks, then recovers ---
     const hpNow = this.agent.hp;
@@ -86,16 +135,13 @@ export class Player {
     const wantFwd = this.keys.has('KeyW');
     const wantClimb = this.keys.has('KeyL');
 
-    // --- climbing: press L at a shaft (not W — that's forward, and walking
-    // past a ladder shouldn't yank you up it), arrive at its only other end ---
+    // --- climbing: press L at a shaft, arrive at its only other end ---
     this.climbing = !!this.climb;
     if (this.climb) {
       this._stepClimb(dt);
     } else {
       const trunk = this.world.trunkAt(this.deck, this.x, this.z);
-      // QUEUED (user rule): a busy ladder puts you in line, it doesn't deny
-      // you. Hold the reservation while you stand at the pad and go the
-      // moment the rungs clear; stepping away lets your place go.
+      // QUEUED: a busy ladder puts you in line; go the moment the rungs clear.
       if (this.queuedTrunk) {
         if (trunk !== this.queuedTrunk || this.pinned || this.dead) this._cancelQueue();
         else if (!this.sim.vertBusy(this.queuedTrunk.edge, this.agent.id)) {
@@ -111,7 +157,7 @@ export class Player {
     }
     if (!wantClimb) this._wLatch = false;
 
-    // --- walking (first-strike accel model) ---
+    // --- walking (first-strike accel model, Rapier-resolved horizontal) ---
     if (!this.climbing && this.locked && !this.pinned) {
       let fx = 0, fz = 0;
       if (wantFwd) fz += 1;
@@ -139,11 +185,19 @@ export class Player {
       }
       this.vy -= ODST.gravity * dt;
 
-      // --- integrate horizontal with wall slide ---
-      this._move(this.vx * dt, this.vz * dt);
+      // horizontal: the character controller sweeps the capsule and slides it
+      // along whatever it hits (walls, cover, bodies)
+      const wantX = this.vx * dt, wantZ = this.vz * dt;
+      const moved = this.physics.movePlayer(wantX, wantZ, elevOf(this.deck) + this.h);
+      this.x += moved.dx;
+      this.z += moved.dz;
+      // bleed the velocity we couldn't spend into whatever we hit, so we don't
+      // keep ramming a wall at full tilt
+      if (Math.abs(moved.dx) < Math.abs(wantX) - 1e-4) this.vx *= 0.2;
+      if (Math.abs(moved.dz) < Math.abs(wantZ) - 1e-4) this.vz *= 0.2;
 
-      // --- vertical: feet rest on the ground surface, which in a stairwell
-      // room follows the mezzanine / ramp / hall (user: walk the stairs) ---
+      // vertical: feet rest on the ground surface, which in a stairwell room
+      // follows the switchback ramp (world.groundHeightAt)
       const base = elevOf(this.deck);
       const groundY = this.world.groundHeightAt(this.deck, this.x, this.z);
       let footY = base + this.h + this.vy * dt;
@@ -152,25 +206,25 @@ export class Player {
       this.h = footY - base;
       const ceilH = this.world.ceilHeightAt(this.deck, this.x, this.z);
       if (this.h > ceilH - 1.85) { this.h = ceilH - 1.85; this.vy = Math.min(0, this.vy); }
+    } else if (!this.climb) {
+      // pinned or unlocked: hold position, but keep the capsule's Y tracking
+      // the floor and its next-translation set every step (kinematic bodies
+      // want a fresh target each tick)
+      this.physics.movePlayer(0, 0, elevOf(this.deck) + this.h);
     }
 
     this._stairPortal();
     this._syncAgent();
+    this._cur = this._worldPose();
   }
 
   // Begin a climb: figure out the shaft's OTHER end from wherever we're
-  // standing (there is only ever one) and animate straight to it. Direction
-  // is never a guess (user note) — up if you're on the lower deck, down if
-  // you're on the upper one, full stop.
+  // standing (there is only ever one) and animate straight to it.
   _startClimb(trunk) {
-    // QUEUED CLIMBING (user rule): one body on the LADDER at a time — if an
-    // NPC is on the rungs, the press does nothing (the HUD shows the wait);
-    // while WE climb, the claim keeps NPCs at the pads. Lifts are cars —
-    // everyone rides together, no queue.
+    // one body on the LADDER at a time — if an NPC is on the rungs, reserve
+    // the next slot and auto-climb when clear. Lifts are cars — no queue.
     const link = trunk.edge?.type === 'ladder' ? trunk.edge : null;
     if (link && this.sim.vertBusy(link, this.agent.id)) {
-      // IN LINE (user rule): reserve the next slot — NPCs hold at the pads
-      // until you've gone (sim.vertReserved) — and auto-climb when clear
       link.reservedBy = this.agent.id;
       this.queuedTrunk = trunk;
       return;
@@ -198,12 +252,10 @@ export class Player {
     this.queuedTrunk = null;
   }
 
-  // GRAND STAIRWELL (user: walk in from the corridor, take the switchback
-  // down). Entering the room from the corridor is a NORMAL same-deck doorway —
-  // no portal. The only deck change is at the BOTTOM of the stairs, where the
-  // switchback lands on the hangar deck below: crossing the stair mouth flips
-  // the player between the stairwell room and the hangar with world height
-  // preserved. vz direction gives hysteresis so it doesn't oscillate.
+  // GRAND STAIRWELL: entering from the corridor is a normal same-deck doorway.
+  // The only deck change is at the BOTTOM of the stairs, where the switchback
+  // lands on the hangar deck below: crossing the stair mouth flips the player
+  // between the stairwell room and the hangar with world height preserved.
   _stairPortal() {
     if (this.climb) return;
     for (const g of (this.world.stairRooms ?? [])) {
@@ -212,20 +264,20 @@ export class Player {
       const inWellX = this.x >= g.wellCx - 0.3 && this.x <= g.wellCx + g.wellHx + 0.5;
       const worldY = elevOf(this.deck) + this.h;
       if (this.deck === g.deck) {
-        // reached the foot of the stairs — step out onto the hangar deck
         if (worldY <= g.loElev + 0.45 && inWellX && this.z <= baseZ + 0.4 && this.vz < 0.05) {
           this.deck = hangarDeck;
           this.z = baseZ - 0.8;
           this.h = worldY - elevOf(hangarDeck); // continuous world height (~0)
           this.vy = 0; this.onGround = true;
+          this.physics.teleportPlayer(this.x, worldY, this.z);
         }
       } else if (this.deck === hangarDeck) {
-        // at the foot in the hangar — step onto the bottom of the stairs
         if (inWellX && this.z >= baseZ - 0.6 && this.z <= baseZ + 0.15 && this.vz > 0.05) {
           this.deck = g.deck;
           this.z = baseZ + 0.6;
           this.h = worldY - elevOf(g.deck);     // negative (below the entry floor)
           this.vy = 0; this.onGround = true;
+          this.physics.teleportPlayer(this.x, worldY, this.z);
         }
       }
     }
@@ -239,6 +291,8 @@ export class Player {
     this.x = c.fromX + (c.tx - c.fromX) * ease;
     this.z = c.fromZ + (c.tz - c.fromZ) * ease;
     c.worldY = elevOf(c.fromDeck) + (elevOf(c.toDeck) - elevOf(c.fromDeck)) * ease;
+    // keep the capsule pinned to the climb path (no controller sweep mid-climb)
+    this.physics.teleportPlayer(this.x, c.worldY, this.z);
     if (p >= 1) {
       this.deck = c.toDeck;
       this.x = c.tx; this.z = c.tz;
@@ -246,39 +300,7 @@ export class Player {
       if (c.link && c.link.occupiedBy === this.agent.id) c.link.occupiedBy = undefined;
       this.agent.climbingLink = null;
       this.climb = null;
-    }
-  }
-
-  _move(mx, mz) {
-    const w = this.world;
-    const [, sy0] = w.worldToSim(this.x, this.z, this.deck);
-    const [sx1, sy1] = w.worldToSim(this.x + mx, this.z + mz, this.deck);
-    let nx = this.x, nz = this.z;
-    if (w.isWalkable(this.deck, sx1, sy0) && !w.propBlocked(this.deck, sx1, sy0)) nx = this.x + mx;
-    if (w.isWalkable(this.deck, nx, sy1) && !w.propBlocked(this.deck, nx, sy1)) nz = this.z + mz;
-    this.x = nx; this.z = nz;
-    this._collideBodies();
-  }
-
-  // SOLID BODIES apply to you too (review P0): you can't walk through a
-  // marine or a combat form — slide around them like the sim's separation
-  // pass does for everyone else. Corpses and downed forms are stepped over.
-  _collideBodies() {
-    const R = { 3: 0.32, 4: 0.48, 5: 0.75 }; // infection/combat/carrier; humans 0.4
-    for (const a of this.sim.agents) {
-      if (a.dead || a.isPlayer || a.deck !== this.deck) continue;
-      if (a.faction === 6 || a.downed || a.hp <= 0) continue; // the dead don't block
-      const [wx, wz] = this.world.simToWorld(a.x, a.y, a.deck);
-      const dx = this.x - wx, dz = this.z - wz;
-      const need = (R[a.faction] ?? 0.4) + 0.32;
-      const d2 = dx * dx + dz * dz;
-      if (d2 >= need * need || d2 < 1e-8) continue;
-      const d = Math.sqrt(d2);
-      const push = (need - d);
-      const px = this.x + (dx / d) * push, pz = this.z + (dz / d) * push;
-      // never get pushed through a wall — only accept the slide if walkable
-      const [sx, sy] = this.world.worldToSim(px, pz, this.deck);
-      if (this.world.isWalkable(this.deck, sx, sy)) { this.x = px; this.z = pz; }
+      this.physics.teleportPlayer(this.x, elevOf(this.deck) + this.h, this.z);
     }
   }
 
@@ -306,8 +328,24 @@ export class Player {
     return null;
   }
 
+  // CURRENT (non-interpolated) eye pose — for the flashlight, the thrown-frag
+  // spawn point, and anything that wants "where the player is right now".
   cameraPose() {
     const y = this.climb ? this.climb.worldY : elevOf(this.deck) + this.h;
     return { x: this.x, y: y + ODST.eyeHeight, z: this.z, yaw: this.yaw, pitch: this.pitch };
+  }
+
+  // Interpolated eye pose for rendering — blends the last two fixed physics
+  // steps by `alpha` (the accumulator remainder) so the camera stays smooth
+  // between 60 Hz physics ticks and whatever the display refresh is.
+  renderPose(alpha) {
+    const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
+    const p = this._prev, c = this._cur;
+    return {
+      x: p.x + (c.x - p.x) * a,
+      y: p.y + (c.y - p.y) * a + ODST.eyeHeight,
+      z: p.z + (c.z - p.z) * a,
+      yaw: this.yaw, pitch: this.pitch,
+    };
   }
 }

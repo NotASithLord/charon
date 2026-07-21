@@ -1,0 +1,30 @@
+rapier.js
+=========
+
+Source : @dimforge/rapier3d-compat
+Version: 0.19.3
+Origin : https://registry.npmjs.org/@dimforge/rapier3d-compat/-/rapier3d-compat-0.19.3.tgz
+License: Apache-2.0 (Dimforge SAS)
+File   : the package's `rapier.mjs` ESM entry, copied verbatim (unmodified).
+
+Why the -compat build, vendored, unmodified:
+  - It inlines the WebAssembly module as a base64 blob inside the JS, so it is
+    a single self-contained ES module: no separate .wasm fetch. That is what
+    lets it run inside a peerd dwapp's opaque-origin iframe (everything inlined
+    at compose time, no relative fetches) AND in Node for the headless
+    determinism harness — the same bytes in both places.
+  - It is single-threaded (no SharedArrayBuffer), so it needs no COOP/COEP
+    cross-origin-isolation headers — again a requirement of the dwapp sandbox.
+  - Rapier's wasm build is bit-level cross-platform deterministic (same version
+    + same wasm everywhere), which is the property charon's lockstep model and
+    replay/determinism harness depend on. See docs/DESIGN-RAPIER-STACK.md.
+
+Usage:
+  import RAPIER from '../vendor/rapier.js';
+  await RAPIER.init();            // resolves the embedded wasm once
+  const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+
+Update procedure:
+  npm pack @dimforge/rapier3d-compat@<version>, extract, copy rapier.mjs here,
+  bump the version above. Audit the diff before committing (no build step; this
+  file ships as-is to users).

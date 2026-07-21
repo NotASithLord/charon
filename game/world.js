@@ -72,6 +72,31 @@ export class World {
   simToWorld(sx, sy, deck) { return [sx, sy - this.bandCenter(deck)]; }
   worldToSim(wx, wz, deck) { return [wx, wz + this.bandCenter(deck)]; }
 
+  // Oriented collision boxes for the Rapier physics world (physics/physics-
+  // world.js). Every solid vertical surface the player must not cross — walls,
+  // doorway throats, cover props, and the grand-stair spine/rails, all of
+  // which the builder already collected in `wallMeshes` — plus LOCKED door
+  // panels (unlocked panels slide open as you approach, so they never need to
+  // collide). Boxes are axis-aligned cuboids rotated about Y only, which is
+  // exactly how every one of these was built (no pitch/roll anywhere).
+  // Floors/ceilings are deliberately NOT here: vertical motion stays analytic
+  // (groundHeightAt + gravity), and full-height wall boxes are all a
+  // horizontal swept-capsule needs. why: sourcing the colliders from the SAME
+  // meshes the player sees means physics can never drift from the render.
+  collisionBoxes() {
+    const box = (m) => {
+      const p = m.geometry.parameters;
+      return {
+        cx: m.position.x, cy: m.position.y, cz: m.position.z,
+        hx: p.width / 2, hy: p.height / 2, hz: p.depth / 2,
+        ry: m.rotation.y || 0,
+      };
+    };
+    const out = this.wallMeshes.map(box);
+    for (const d of this.doors) if (d.edge.locked) out.push(box(d.mesh));
+    return out;
+  }
+
   _panelTex(base, line, cell = 64) {
     const c = document.createElement('canvas');
     c.width = c.height = 256;
