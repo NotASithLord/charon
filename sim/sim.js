@@ -5,6 +5,7 @@
 import { RNG } from '../shared/rng.js';
 import { cloneParams } from '../shared/params.js';
 import { AgentBuffer, FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
+import { clearHeightOf, CLEAR_H } from '../shared/geometry.js';
 import { initRun, STATE, makeAgent } from './init.js';
 import { updateHumansTick, strategicSquads, assignFirstSweep } from './humans.js';
 import { Hive, TASK, W_FLOOD, W_HUMAN, isActiveFloodForm, isLivingHuman } from './hive.js';
@@ -937,13 +938,15 @@ export class Sim {
       a.y += (dy / dist) * step;
       this._clampToRoom(a, room); // stay inside the room's real footprint
     }
-    // LEAP: a combat form charging across a TALL open room bounds through the
-    // air in a parabolic arc instead of running flat. Deterministic — the
+    // LEAP: a combat form charging across a TALL open room (a big hold whose
+    // ceiling was raised — see shared/geometry.js clearHeightOf) bounds through
+    // the air in a parabolic arc instead of running flat. Deterministic — the
     // horizontal is the charge advance above; only the vertical hump is new,
-    // and its peak is capped so the airborne (stretched) body clears the
-    // raised ceiling (world clearHeightOf ~4.05 m).
-    const LEAP_MIN = 5, PEAK_FRAC = 0.15, PEAK_MAX = 1.8;
-    const tall = a.faction === FACTION.COMBAT && a.charging && this._isTallRoom(room);
+    // and the peak scales with the room's real headroom while staying below the
+    // ceiling and clearing the (stretched) body.
+    const LEAP_MIN = 5, PEAK_FRAC = 0.25;
+    const clearH = clearHeightOf(room);
+    const tall = a.faction === FACTION.COMBAT && a.charging && clearH > CLEAR_H + 0.5;
     if (tall && dist > LEAP_MIN && (!a.leaping || dist > a.leapDist0)) {
       a.leaping = true; a.leapDist0 = dist; // (re)launch from here
     }
@@ -951,21 +954,11 @@ export class Sim {
     if (a.leaping) {
       const span = Math.max(0.5, a.leapDist0 - stopAt);
       const p = Math.max(0, Math.min(1, (a.leapDist0 - dist) / span));
-      a.hoverY = Math.min(a.leapDist0 * PEAK_FRAC, PEAK_MAX) * 4 * p * (1 - p);
+      const peak = Math.min(a.leapDist0 * PEAK_FRAC, clearH - 2.2); // under ceiling + body
+      a.hoverY = peak * 4 * p * (1 - p);
     }
     a.animTime += dt;
     return true;
-  }
-
-  // A tall open volume (hangar/cargo/battery/magazine/stairwell/vehicle bay,
-  // wide berthing/mess) where the Flood bounds in an arc — mirrors world.js
-  // clearHeightOf's TALL_ROLES so a leap only fires where the ceiling was
-  // actually raised for it.
-  _isTallRoom(node) {
-    if (node.type === 'open') return true;
-    const r = node.roles;
-    return !!r && (r.includes('hangar') || r.includes('large') || r.includes('battery')
-      || r.includes('magazine') || r.includes('stairwell') || r.includes('vehicles'));
   }
 
   // PERSONAL SPACE (user rule): every body is SOLID — two agents can never

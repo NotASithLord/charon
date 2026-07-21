@@ -9,26 +9,16 @@
 import * as THREE from './vendor/three.module.js';
 import { DOORS } from './fps-data.js';
 import { RNG } from '../shared/rng.js';
+import { DECK_H, CLEAR_H, elevOf, clearHeightOf } from '../shared/geometry.js';
 
-export const DECK_H = 4.2;      // deck-to-deck (matches ship data)
-export const CLEAR_H = 3.0;     // floor-to-ceiling clear height
+// Deck stacking + per-room clear height live in shared/geometry.js so the
+// render and the deterministic sim (leap peak) read ONE source. Re-exported
+// here because player.js / main.js / agents3d.js import them from world.js.
+export { DECK_H, CLEAR_H, elevOf, clearHeightOf };
+
 export const DOOR_W = 1.7;      // doorway opening width
 const WALL_T = 0.16;
 const HATCH = 1.8;              // hatch hole side
-
-export function elevOf(deck) { return (5 - deck) * DECK_H; }
-
-// Per-room clear height (floor to ceiling). The big holds — hangars, cargo,
-// vehicle bay, the flank weapon batteries, wide berthing/mess, the grand
-// stairwell — read as TALL spaces; everything else is the standard CLEAR_H.
-// Capped just under the deck above (DECK_H) so a raised ceiling never pokes
-// through the next deck's floor. why: the Flood leaps across these rooms in an
-// arc, and a big room needs the air for it — a doorway/corridor does not.
-const TALL_ROLES = ['hangar', 'large', 'battery', 'magazine', 'stairwell', 'vehicles'];
-export function clearHeightOf(node) {
-  const tall = node.type === 'open' || (node.roles ?? []).some((r) => TALL_ROLES.includes(r));
-  return tall ? Math.min(DECK_H - 0.15, 4.05) : CLEAR_H;
-}
 
 function segDist2(px, py, ax, ay, bx, by) {
   const vx = bx - ax, vy = by - ay;
