@@ -20,10 +20,11 @@ import { PARAMS } from '../shared/params.js';
 // built-in fallback defaults — so a param that destabilises the flop is caught.
 const RP = PARAMS.ragdoll;
 
-// a violent death, straight off a shot: fast horizontal launch + spin + limb
-// flail — the worst case for a stability bug to show up in.
+// the most violent death in the game — a point-blank grenade — is the worst
+// case for a stability bug: max radial launch, big air, a violent tumble, and
+// limbs whipping. Set at/above the shipped blast params so the gate covers them.
 function violentImpulse() {
-  return { dirX: 1, dirZ: 0.2, speed: 8, up: 3.5, spin: 12, kick: 9 };
+  return { dirX: 1, dirZ: 0.2, speed: 15, up: 6.5, spin: 18, kick: 15 };
 }
 
 // Drive one ragdoll on a flat floor (y = 0) for `steps` fixed sub-steps and
@@ -196,6 +197,36 @@ let ok = true;
   sys.spawn(42, { x: 0, y: 1, z: 0, heading: 0, deck: 1 }, imp, () => 0);
   sys.spawn(42, { x: 0, y: 1, z: 0, heading: 0, deck: 1 }, imp, () => 0);
   ok &= assert('re-spawning the same id does not duplicate', sys.size === 1, `size=${sys.size}`);
+}
+
+// 9) re-fling (grenade on a body already down): reimpulse wakes a settled body,
+//    stays bounded, and re-settles without sinking or blowing up
+{
+  const sys = new RagdollSystem(RP);
+  const id = 5;
+  sys.spawn(id, { x: 0, y: 1, z: 0, heading: 0, deck: 1 },
+    { dirX: 1, dirZ: 0, speed: 5, up: 2.5, spin: 6, kick: 5 }, () => 0);
+  for (let s = 0; s < 900; s++) sys.step(1 / 60); // let it settle
+  const wasAsleep = sys.get(id).asleep;
+  const missing = sys.reimpulse(999, { dirX: 1, dirZ: 0, speed: 10, up: 5, spin: 12, kick: 10 });
+  sys.reimpulse(id, { dirX: -1, dirZ: 0.3, speed: 14, up: 6, spin: 17, kick: 14 });
+  const woke = !sys.get(id).asleep;
+  let finite = true, worstPen = 0;
+  const rr = sys.p.bodyRadius, bodyLen = sys.p.bodyLen;
+  for (let s = 0; s < 1500; s++) {
+    sys.step(1 / 60);
+    const r = sys.get(id);
+    for (const x of [...r.rootPos, ...r.rootQuat, ...r.vel, ...r.omega]) if (!Number.isFinite(x)) finite = false;
+    for (const ly of [rr, bodyLen - rr]) {
+      const pnt = rotY(r.rootQuat, [0, ly, 0]);
+      const pen = (0 + rr) - (r.rootPos[1] + pnt[1]);
+      if (pen > worstPen) worstPen = pen;
+    }
+  }
+  const reSettled = sys.get(id).asleep;
+  ok &= assert('grenade re-fling wakes a settled body, stays stable, re-settles',
+    wasAsleep && missing === false && woke && finite && worstPen < 0.08 && reSettled,
+    `wasAsleep=${wasAsleep} wokeUnknown=${missing} woke=${woke} finite=${finite} pen=${worstPen.toFixed(4)} reSettled=${reSettled}`);
 }
 
 console.log(ok ? '\nragdoll-check OK' : '\nragdoll-check FAILED');
