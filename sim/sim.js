@@ -654,6 +654,45 @@ export class Sim {
             a.heading = Math.atan2(ty - d.y, tx - d.x);
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
           }
+        } else if (a.move.layer === 'std' && from.deck !== to.deck && link.type === 'stairwell') {
+          // GRAND STAIRWELL — an OPEN switchback, not an enclosed lift trunk.
+          // The generic vertical branch below parks a body at the ROOM WALL for
+          // the whole ride (user: flood get stuck on the staircase walls). Walk
+          // it down (or up) the VISIBLE well instead: top flight → mid landing →
+          // foot flight, staged in the upper room's frame so the renderer drops
+          // the feet onto the treads (world X == sim X, so the path lines up).
+          const upper = from.deck < to.deck ? from : to;
+          const descending = from === upper;
+          const wp = this._stairWaypoints(upper);
+          const A = descending ? wp.top : wp.foot;   // mouth this traversal enters
+          const B = descending ? wp.foot : wp.top;   // mouth it steps off at the far deck
+          const flipT = 0.82;                        // stay ON the stairs most of the ride; hand over near the far mouth
+          const appT = a.move.appT ?? 0.15;
+          const handT = appT + (1 - appT) * flipT;
+          const px0 = a.x, py0 = a.y;                // last point, for heading
+          if (k < appT) {
+            // walk from where you stood to the stair mouth, in the ORIGIN room
+            const sx = a.move.sx ?? from.x, sy = a.move.sy ?? from.y;
+            const mouthX = descending ? A.x
+              : Math.max(from.x - from.w / 2 + 1, Math.min(from.x + from.w / 2 - 1, wp.foot.x));
+            const mouthY = descending ? A.y : from.y;
+            const kk = appT > 1e-6 ? k / appT : 1;
+            a.x = sx + (mouthX - sx) * kk; a.y = sy + (mouthY - sy) * kk;
+          } else if (k < handT) {
+            // ON THE SWITCHBACK: A → mid landing → B, in the UPPER room's frame.
+            // deck = upper for the ride (the well is one two-storey volume) so
+            // groundHeightAt walks the feet down the treads.
+            if (a.deck !== upper.deck) a.deck = upper.deck;
+            const kk = (k - appT) / Math.max(1e-6, handT - appT);
+            if (kk < 0.5) { const u = kk / 0.5; a.x = A.x + (wp.mid.x - A.x) * u; a.y = A.y + (wp.mid.y - A.y) * u; }
+            else { const u = (kk - 0.5) / 0.5; a.x = wp.mid.x + (B.x - wp.mid.x) * u; a.y = wp.mid.y + (B.y - wp.mid.y) * u; }
+          } else {
+            // step off the mouth into the destination room, onto your own slot
+            const [tx, ty] = this._parkSlot(a, to);
+            a.x = tx; a.y = ty;
+            if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
+          }
+          a.heading = Math.atan2(a.y - py0, a.x - px0) || a.heading;
         } else if (a.move.layer === 'std' && from.deck !== to.deck) {
           // VERTICAL TRANSIT (user note: no walking off the map): a body in
           // a lift or on a ladder is AT the trunk, not floating in the void
@@ -882,8 +921,21 @@ export class Sim {
         if (link.kind === 'std') {
           const fromN = this.graph.node(a.node), toN = this.graph.node(step.to);
           if (fromN.deck !== toN.deck) {
-            const px = Math.max(fromN.x - fromN.w / 2 + 1.2, Math.min(fromN.x + fromN.w / 2 - 1.2, toN.x));
-            const appSec = Math.hypot(px - a.x, fromN.y - a.y)
+            let px, py;
+            if (link.type === 'stairwell') {
+              // approach the stair MOUTH (well), not a wall pad — see the
+              // stairwell render branch and _stairWaypoints
+              const upper = fromN.deck < toN.deck ? fromN : toN;
+              const wp = this._stairWaypoints(upper);
+              const mouth = fromN === upper ? wp.top : wp.foot;
+              px = fromN === upper ? mouth.x
+                : Math.max(fromN.x - fromN.w / 2 + 1, Math.min(fromN.x + fromN.w / 2 - 1, mouth.x));
+              py = fromN === upper ? mouth.y : fromN.y;
+            } else {
+              px = Math.max(fromN.x - fromN.w / 2 + 1.2, Math.min(fromN.x + fromN.w / 2 - 1.2, toN.x));
+              py = fromN.y;
+            }
+            const appSec = Math.hypot(px - a.x, py - a.y)
               / Math.max(0.5, this.P.movement.baseMps * mult);
             a.move.appT = appSec / (appSec + a.move.travelSec);
             a.move.travelSec += appSec;
@@ -1264,6 +1316,23 @@ export class Sim {
     // shoved them apart (user report: marines "zipping to the middle of the
     // room then randomly deploying outward")
     return [nd.x + Math.cos(ang) * u * hw, nd.y + Math.sin(ang) * u * hd];
+  }
+
+  // GRAND STAIRWELL WELL (user: flood get stuck on the staircase walls). The
+  // switchback well the 3D renderer cuts into the stairwell room, expressed in
+  // this room's own sim coords — MUST mirror world.js _stairGeom so the walked
+  // path lands on the visible treads (world X == sim X; the renderer drops the
+  // feet with groundHeightAt as the body crosses the well). Returns the three
+  // waypoints of the dog-leg: top of the upper flight, the mid landing, and the
+  // foot of the lower flight.
+  _stairWaypoints(U) {
+    const wx = U.x + (U.w / 2) * 0.12, wy = U.y;
+    const hx = Math.min(6.5, (U.w / 2) * 0.42), hy = Math.min(6, (U.d / 2) * 0.34);
+    return {
+      top: { x: wx - hx * 0.45, y: wy - hy * 0.82 },   // upper flight, front-left
+      mid: { x: wx, y: wy + hy * 0.72 },               // landing, back-centre
+      foot: { x: wx + hx * 0.45, y: wy - hy * 0.82 },  // lower flight, front-right
+    };
   }
 
   // COMMITTED INFECTION target (user rule): the physical node of the body a
