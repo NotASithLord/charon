@@ -37,7 +37,7 @@ node sim/command-check.js            # companion §0: command queue works + stay
 shared/   agentBuffer.js   the ONE sim↔render boundary (§2.2), SoA typed arrays
           params.js        all tuning params (§10) + hive decision constants (§13.10)
           rng.js           mulberry32; no Math.random() anywhere in sim code
-sim/      data/ship.js     the Charon compartment graph (§3.3)
+sim/      data/ship.js     the Saturn Devouring's compartment graph — Charon-class hull (§3.3)
           commands.js      tick-stamped command queue (companion spec §0)
           commandApply.js  the one place a commander order mutates shared state
           graph.js         3 traversal layers, flow fields, layered pathing (§3.2, §6.3)

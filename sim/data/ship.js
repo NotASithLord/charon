@@ -1,4 +1,8 @@
-// Charon-class light frigate — interior deck plan.
+// UNSC Saturn Devouring (FFG-201) — Charon-class light frigate — interior deck plan.
+//
+// The vessel is a Charon-class hull; her NAME is the UNSC Saturn Devouring, after
+// Goya's "Saturn Devouring His Son" — the UNSC's habit of naming ships for famous
+// paintings (cf. the UNSC Mona Lisa, another derelict lost to a Flood outbreak).
 //
 // THOROUGH MAP PASS (user note, keyed off the Charon-class reference hull):
 // the ship is read top-to-bottom as five stacked decks, and the DECKS ARE

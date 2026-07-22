@@ -1496,7 +1496,7 @@ export class Sim {
       this.log('end', `OUTBREAK CONTAINED at ${fmtTime(this.t)} — the ship survives`);
     } else if (!anyHuman) {
       this.outcome = 'lost';
-      this.log('end', `SHIP LOST at ${fmtTime(this.t)} — the Flood owns the Charon`);
+      this.log('end', `SHIP LOST at ${fmtTime(this.t)} — the Flood owns the Saturn Devouring`);
     }
   }
 

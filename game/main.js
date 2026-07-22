@@ -148,7 +148,7 @@ const overlay = el('overlay');
 const INTRO_BODY = [
   'UNSC FLEETCOM — PRIORITY TRAFFIC // EYES ONLY',
   'FROM: CENTCOM SOL / MARS DEFENSE COORDINATION',
-  'TO:   FFG-201 UNSC CHARON — MARS HIGH ANCHOR',
+  'TO:   FFG-201 UNSC SATURN DEVOURING — MARS HIGH ANCHOR',
   'DATE: OCTOBER 2552 // LOCAL 0347',
   '',
   'SITUATION FOLLOWS.',
@@ -828,13 +828,13 @@ function frame(now) {
         ? 'What was left of you is finally still.'
         : 'The ship fights on without you. The last thing you hear is the hive, singing.');
   } else if (sim.outcome === 'contained') {
-    endScreen('OUTBREAK CONTAINED', 'The marines burned it out. The Charon survives.');
+    endScreen('OUTBREAK CONTAINED', 'The marines burned it out. The Saturn Devouring survives.');
   } else if (!ended && !shownLost && sim.tickCount % 30 === 0) {
     const othersAlive = sim.agents.some((a) => !a.dead && a.hp > 0 && !a.isPlayer
       && (a.faction === 0 || a.faction === 1 || a.faction === 2));
     if (!othersAlive) {
       shownLost = true;
-      endScreen('THE CHARON IS LOST', 'Every other soul aboard is gone. You are alone with it now.', false);
+      endScreen('THE SATURN DEVOURING IS LOST', 'Every other soul aboard is gone. You are alone with it now.', false);
     }
   }
 
