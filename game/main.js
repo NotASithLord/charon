@@ -504,6 +504,9 @@ function stepFrags(dt) {
     if (f.fuse <= 0) {
       const [sx, sy] = world.worldToSim(p.x, p.z, f.deck);
       sim.explodeAt(f.deck, sx, sy, FRAG.radiusM, FRAG.damage, player.agent.id);
+      // tell the renderer where the blast landed so bodies it kills get thrown
+      // and flail, and bodies already down get re-flung (cosmetic; render-only)
+      agents.noteExplosion(f.deck, p.x, p.z, FRAG.radiusM);
       boomLight.position.set(p.x, elevOf(f.deck) + 1.2, p.z);
       boomLight.intensity = 60;
       shake = Math.min(1, shake + 1.2 / (1 + Math.hypot(p.x - player.x, p.z - player.z) / 6));

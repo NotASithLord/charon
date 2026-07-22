@@ -179,6 +179,55 @@ export class Agents3D {
                                // handoff to the legacy render (burn, cap-evict, revive)
                                // anchors there instead of teleporting to the sim node
     this._ragPrimed = false;   // first frame: mark the pre-placed dead so they never flop
+    this._blasts = [];         // recent explosions (grenades): {deck, cx, cz, r, ttl} —
+                               // deaths inside one get a big radial flailing launch, and a
+                               // blast re-flings bodies already on the deck
+  }
+
+  // The game calls this when a grenade detonates (game/main.js stepFrags). It
+  // records the blast so deaths it causes launch dramatically, and immediately
+  // re-flings any body already ragdolling within reach. Pure render-side.
+  noteExplosion(deck, cx, cz, radius) {
+    const R = this.sim.P?.ragdoll;
+    if (!this.ragdolls || !R) return;
+    this._blasts.push({ deck, cx, cz, r: radius, ttl: R.blastTtl ?? 0.5 });
+    const reach = radius + (R.blastRadiusPad ?? 1.5);
+    for (const id of this.ragdolls.ids()) {
+      const rag = this.ragdolls.get(id);
+      if (rag.deck !== deck) continue;
+      const d = Math.hypot(rag.rootPos[0] - cx, rag.rootPos[2] - cz);
+      if (d > reach) continue;
+      this.ragdolls.reimpulse(id, this._blastImpulse(rag.rootPos[0], rag.rootPos[2], cx, cz, d, radius));
+    }
+  }
+
+  // the blast the point sits inside (strongest = nearest to a centre), or null
+  _blastAt(wx, wz, deck) {
+    const R = this.sim.P.ragdoll;
+    const pad = R.blastRadiusPad ?? 1.5;
+    let best = null, bestD = Infinity;
+    for (const b of this._blasts) {
+      if (b.deck !== deck) continue;
+      const d = Math.hypot(wx - b.cx, wz - b.cz);
+      if (d <= b.r + pad && d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+
+  // a radial launch off a blast centre, scaled down toward the edge
+  _blastImpulse(wx, wz, cx, cz, d, radius) {
+    const R = this.sim.P.ragdoll;
+    let dx = wx - cx, dz = wz - cz;
+    const dl = Math.hypot(dx, dz);
+    if (dl < 0.05) { dx = 1; dz = 0; } else { dx /= dl; dz /= dl; } // epicentre → any dir (solver scatters it)
+    const prox = 1 - Math.min(1, d / Math.max(0.001, radius)) * (R.blastFalloff ?? 0.55);
+    return {
+      dirX: dx, dirZ: dz,
+      speed: (R.blastSpeed ?? 13) * prox,
+      up: (R.blastUp ?? 6) * prox,
+      spin: R.blastSpin ?? 17,
+      kick: R.blastKick ?? 14,
+    };
   }
 
   // RUDIMENTARY SKELETAL ANIMATION (user note): each character is six rigid
@@ -260,6 +309,8 @@ export class Agents3D {
     }
     // advance the flops (fixed sub-step inside; asleep bodies are frozen)
     if (this.ragdolls) this.ragdolls.step(dt);
+    // age recent blasts (a death registers a frame or two after the boom)
+    if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
     const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
     let clip = 0, animT = 0, curId = 0;
@@ -661,7 +712,10 @@ export class Agents3D {
       if (burned) { this._ragRest.set(id, [rag.rootPos[0], rag.rootPos[1], rag.rootPos[2]]); sys.remove(id); return false; }
     } else {
       if (burned) return false;                // never START a flop for an already-incinerated body
-      if (this._ragSeen.has(id)) return false; // already flopped once (evicted/settled) — legacy, anchored via _ragRest
+      // a body only flops once — UNLESS a grenade goes off on it: a blast
+      // re-flings even a settled or pre-placed corpse (the classic "toss a nade
+      // into the pile and they scatter" moment).
+      if (this._ragSeen.has(id) && !this._blastAt(wx, wz, deck)) return false;
       const elev = this.world.groundHeightAt(deck, wx, wz);
       const hoverY = rp.hoverY || 0; // a form that died mid-leap starts in the air
       const impulse = this._deathImpulse(id, f, flags, wx, wz, deck, heading);
@@ -709,6 +763,12 @@ export class Agents3D {
   _deathImpulse(id, f, flags, wx, wz, deck, heading) {
     const R = this.sim.P.ragdoll;
     const world = this.world;
+
+    // killed by a grenade → thrown off the blast, flailing (overrides the
+    // hit-direction logic below)
+    const blast = this._blastAt(wx, wz, deck);
+    if (blast) return this._blastImpulse(wx, wz, blast.cx, blast.cz, Math.hypot(wx - blast.cx, wz - blast.cz), blast.r);
+
     let dirX = 0, dirZ = 0, known = false, speed = R.launchSpeed;
 
     const agent = this.sim.byId.get(id);

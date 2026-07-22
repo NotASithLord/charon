@@ -143,7 +143,7 @@ const DEFAULTS = {
   maxLinSpeed: 24, maxAngSpeed: 28,
   sleepLin: 0.16, sleepAng: 0.4, sleepSec: 0.5,
   inertia: 1.2,
-  limbGrav: 9, limbBind: 2.5, limbDamp: 3.0, limbLimit: 1.4, limbKick: 6.0,
+  limbGrav: 9, limbBind: 2.5, limbDamp: 3.0, limbLimit: 1.4, limbKick: 7.0,
   subDt: 1 / 120, maxSubSteps: 8, dtCap: 0.05,
 };
 
@@ -158,6 +158,7 @@ export class RagdollSystem {
   get size() { return this._byId.size; }
   has(id) { return this._byId.has(id); }
   get(id) { return this._byId.get(id); }
+  ids() { return this._byId.keys(); }
   remove(id) { this._byId.delete(id); }
   clear() { this._byId.clear(); }
 
@@ -175,44 +176,21 @@ export class RagdollSystem {
     if (!this._byId.has(id)) this._evictIfFull();
 
     // root orientation from the facing, so it starts exactly where the standing
-    // pose stood — then physics tips it over (no pop-in).
-    const rootQuat = qAxisAngle([0, 1, 0], pose.heading);
-    const spin = impulse.spin ?? p.limbKick;
-    // tumble about an axis perpendicular to the launch (a forward pitch),
-    // scattered per body so no two flops read the same.
-    const dl = Math.hypot(impulse.dirX, impulse.dirZ) || 1;
-    const dx = impulse.dirX / dl, dz = impulse.dirZ / dl;
-    const tumbleAxis = [-dz, hash11(id ^ 0x51) * 0.5, dx]; // mostly horizontal, ⟂ to travel
-    const ta = len3(tumbleAxis) || 1;
-    const omega = [
-      (tumbleAxis[0] / ta) * spin,
-      (tumbleAxis[1] / ta) * spin,
-      (tumbleAxis[2] / ta) * spin,
-    ];
-    const vel = [
-      dx * impulse.speed + hash11(id ^ 0x11) * 0.6,
-      (impulse.up ?? 2.5) + hash11(id ^ 0x22) * 0.5,
-      dz * impulse.speed + hash11(id ^ 0x33) * 0.6,
-    ];
-
-    // limbs: identity (bind) pose + a per-limb angular kick so they flail off
-    // the hit, biggest for a violent (charging/leaping) death.
-    const kick = impulse.kick ?? p.limbKick;
+    // pose stood — then physics tips it over (no pop-in). Limbs start at their
+    // bind (identity) pose; _launch below seeds the velocities.
     const limbs = {};
     const limbState = {};
     for (let k = 0; k < RAGDOLL_LIMBS.length; k++) {
       const { part } = RAGDOLL_LIMBS[k];
-      const salt = id * 7 + k * 131;
-      const lo = [hash11(salt) * kick, hash11(salt ^ 0x5a) * kick, hash11(salt ^ 0xa5) * kick];
       limbs[part] = [0, 0, 0, 1];
-      limbState[part] = { q: limbs[part], omega: lo };
+      limbState[part] = { q: limbs[part], omega: [0, 0, 0] };
     }
 
     const rag = {
       id,
       rootPos: [pose.x, pose.y, pose.z],
-      rootQuat,
-      vel, omega,
+      rootQuat: qAxisAngle([0, 1, 0], pose.heading),
+      vel: [0, 0, 0], omega: [0, 0, 0],
       limbs,               // part -> quat (the render reads this)
       limbState,           // part -> { q, omega }
       groundYAt,
@@ -224,8 +202,55 @@ export class RagdollSystem {
       // the caller drops the ragdoll and hands rendering back to the sim.
       originX: pose.x, originZ: pose.z, deck: pose.deck,
     };
+    this._launch(rag, impulse, false);
     this._byId.set(id, rag);
     return rag;
+  }
+
+  // Add a fresh impulse to a ragdoll that already exists — a grenade re-flinging
+  // a body that is already on the deck (settled or mid-flop). Wakes it and ADDS
+  // to its current motion. Returns false if there is no such ragdoll.
+  reimpulse(id, impulse) {
+    const r = this._byId.get(id);
+    if (!r) return false;
+    this._launch(r, impulse, true);
+    return true;
+  }
+
+  // Seed (additive=false) or add (additive=true) a launch onto a ragdoll: a root
+  // linear throw + a tumble about an axis ⟂ to travel + a per-limb angular kick
+  // so the limbs whip. All scatter is a hash of the id — no Math.random — so a
+  // given (id, impulse) always produces the same flop.
+  _launch(rag, impulse, additive) {
+    const p = this.p;
+    const id = rag.id;
+    const dl = Math.hypot(impulse.dirX, impulse.dirZ) || 1;
+    const dx = impulse.dirX / dl, dz = impulse.dirZ / dl;
+    const spin = impulse.spin ?? p.limbKick;
+    const tumbleAxis = [-dz, hash11(id ^ 0x51) * 0.5, dx]; // mostly horizontal, ⟂ to travel
+    const ta = len3(tumbleAxis) || 1;
+    const ov = [(tumbleAxis[0] / ta) * spin, (tumbleAxis[1] / ta) * spin, (tumbleAxis[2] / ta) * spin];
+    const vv = [
+      dx * impulse.speed + hash11(id ^ 0x11) * 0.6,
+      (impulse.up ?? 2.5) + hash11(id ^ 0x22) * 0.5,
+      dz * impulse.speed + hash11(id ^ 0x33) * 0.6,
+    ];
+    for (let a = 0; a < 3; a++) {
+      rag.vel[a] = (additive ? rag.vel[a] : 0) + vv[a];
+      rag.omega[a] = (additive ? rag.omega[a] : 0) + ov[a];
+    }
+    const kick = impulse.kick ?? p.limbKick;
+    for (let k = 0; k < RAGDOLL_LIMBS.length; k++) {
+      const { part } = RAGDOLL_LIMBS[k];
+      const salt = id * 7 + k * 131;
+      const lo = [hash11(salt) * kick, hash11(salt ^ 0x5a) * kick, hash11(salt ^ 0xa5) * kick];
+      const st = rag.limbState[part];
+      for (let a = 0; a < 3; a++) st.omega[a] = (additive ? st.omega[a] : 0) + lo[a];
+    }
+    rag.asleep = false;
+    rag.sleepT = 0;
+    clampVec(rag.vel, p.maxLinSpeed);
+    clampVec(rag.omega, p.maxAngSpeed);
   }
 
   _evictIfFull() {
