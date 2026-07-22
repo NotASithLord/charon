@@ -174,6 +174,9 @@ export class Agents3D {
     const rp = sim.P?.ragdoll;
     this.ragdolls = (rp?.enabled ?? false) ? new RagdollSystem(rp) : null;
     this._ragSeen = new Set(); // ids already handed to a ragdoll (never respawn one)
+    this._ragRest = new Map(); // id -> [x,y,z] where its ragdoll last rested, so a
+                               // handoff to the legacy render (burn, cap-evict, revive)
+                               // anchors there instead of teleporting to the sim node
     this._ragPrimed = false;   // first frame: mark the pre-placed dead so they never flop
   }
 
@@ -301,16 +304,22 @@ export class Agents3D {
       const heading = -buf.headingR[i];
 
       if (f === FACTION.CORPSE) {
-        // a fresh kill flops via physics; a burned husk (no body left) and any
-        // body past the ragdoll cap fall through to the legacy static render.
-        if (!(flags & FLAG.BURNED) &&
-          this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts)) continue;
+        // a fresh kill flops via physics (_ragdollBody handles the burned/capped
+        // cases internally and returns false to hand back here).
+        if (this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts)) continue;
+        // Legacy static render. Anchor at the ragdoll's settled spot if it
+        // flopped (burned/cap-evicted after settling), so it doesn't snap back
+        // to the sim node; otherwise the sim position (ragdoll off, or a
+        // dragged/relocated body the drift-guard handed back to follow the sim).
+        const rest = this._ragRest.get(id);
+        const bx = rest ? rest[0] : wx, bz = rest ? rest[2] : wz;
+        const bElev = rest ? world.groundHeightAt(deck, bx, bz) : elev;
         const lieAng = (id * 2.399963) % (Math.PI * 2);
         if (flags & FLAG.BURNED) {
           // charred husk — a blackened low mass, no body left to speak of
           this._e.set(0, lieAng, 0);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(wx, elev + 0.1, wz), this._q, this._s.set(1, 0.55, 1));
+          this._m.compose(this._p.set(bx, bElev + 0.1, bz), this._q, this._s.set(1, 0.55, 1));
           this.corpse.setMatrixAt(counts.corpse++, this._m);
         } else {
           // a REAL body lying where it fell (user note: render bodies
@@ -320,11 +329,11 @@ export class Agents3D {
           // something you can see.
           this._e.set(-Math.PI / 2, lieAng, 0);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(wx, elev + 0.25, wz), this._q, this._s.set(1, 1, 1));
+          this._m.compose(this._p.set(bx, bElev + 0.25, bz), this._q, this._s.set(1, 1, 1));
           if (flags & FLAG.ARMED_HOST) {
             stamp(this.armedSet, counts.armed++);
-            this._rifleAt(wx + Math.cos(lieAng + 1.2) * 0.55, elev + 0.12,
-              wz + Math.sin(lieAng + 1.2) * 0.55, lieAng * 1.7);
+            this._rifleAt(bx + Math.cos(lieAng + 1.2) * 0.55, bElev + 0.12,
+              bz + Math.sin(lieAng + 1.2) * 0.55, lieAng * 1.7);
             this.rifle.setMatrixAt(counts.rifle++, this._m);
           } else {
             stamp(this.civSet, counts.civ++);
@@ -334,17 +343,25 @@ export class Agents3D {
       }
       const downed = flags & FLAG.DOWNED;
       if (downed) { // downed combat forms FALL, then lie flat (death blend)
-        // a fresh down flops via physics; burned/capped ones use the legacy
-        // rotate-flat blend below.
-        if (!(flags & FLAG.BURNED) &&
-          this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts)) continue;
+        // a fresh down flops via physics (_ragdollBody handles burned/capped
+        // internally and returns false to hand back here).
+        if (this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts)) continue;
+        // Legacy rotate-flat blend. If the body already flopped (it carries a
+        // rest anchor or the _ragSeen mark), it is ALREADY lying flat — seed the
+        // fall as long-complete so it renders flat at the settled spot instead
+        // of snapping upright and re-falling. A genuinely fresh down (ragdoll
+        // disabled) still falls from upright, unchanged.
+        const rest = this._ragRest.get(id);
+        const flopped = rest || this._ragSeen.has(id);
         let fell = this._downAt.get(id);
-        if (fell === undefined) { fell = performance.now(); this._downAt.set(id, fell); }
+        if (fell === undefined) { fell = performance.now() - (flopped ? 380 : 0); this._downAt.set(id, fell); }
         const p = Math.min(1, (performance.now() - fell) / 380);
         const ease = 1 - (1 - p) * (1 - p);
+        const bx = rest ? rest[0] : wx, bz = rest ? rest[2] : wz;
+        const bElev = rest ? world.groundHeightAt(deck, bx, bz) : elev;
         this._e.set(-Math.PI / 2 * ease, heading, 0);
         this._q.setFromEuler(this._e);
-        this._m.compose(this._p.set(wx, elev + 0.25 * ease, wz), this._q, this._s.set(1, 1, 1));
+        this._m.compose(this._p.set(bx, bElev + 0.25 * ease, bz), this._q, this._s.set(1, 1, 1));
         if (flags & FLAG.ARMED_HOST) stamp(this.combatOdstSet, counts.combatOdst++);
         else stamp(this.combatCivSet, counts.combatCiv++);
         continue;
@@ -355,15 +372,25 @@ export class Agents3D {
       // clearly-readable "it's getting back up"
       if (this._downAt.has(id) || this.ragdolls?.has(id)) {
         this._downAt.delete(id);
-        // a form getting back up drops its ragdoll and plays the same reverse-
-        // fall telegraph; clearing _ragSeen lets it flop again if it re-dies.
-        if (this.ragdolls?.has(id)) { this.ragdolls.remove(id); this._ragSeen.delete(id); }
-        (this._riseAt ??= new Map()).set(id, performance.now());
+        // a form getting back up drops its ragdoll and plays the reverse-fall
+        // telegraph. Capture WHERE it was lying (the ragdoll's settled spot, or
+        // the last rest anchor) so the rise SLIDES back to the sim node over the
+        // 0.85 s instead of teleporting to it on frame one. Clearing _ragSeen
+        // lets it flop again if it re-dies.
+        const rag = this.ragdolls?.get(id);
+        const rest = rag ? [rag.rootPos[0], rag.rootPos[1], rag.rootPos[2]] : this._ragRest.get(id);
+        // also capture the settled ORIENTATION so the rise slerps out of the
+        // exact pose the body was lying in (no face-up→prone flip on frame one)
+        const fromQuat = rag ? [rag.rootQuat[0], rag.rootQuat[1], rag.rootQuat[2], rag.rootQuat[3]] : null;
+        if (rag) this.ragdolls.remove(id);
+        this._ragSeen.delete(id);
+        this._ragRest.delete(id);
+        (this._riseAt ??= new Map()).set(id, { t0: performance.now(), from: rest || null, fromQuat });
       }
       let rise = 0;
-      const riseT0 = this._riseAt?.get(id);
-      if (riseT0 !== undefined) {
-        const p = Math.min(1, (performance.now() - riseT0) / 850);
+      const riseEntry = this._riseAt?.get(id);
+      if (riseEntry !== undefined) {
+        const p = Math.min(1, (performance.now() - riseEntry.t0) / 850);
         if (p >= 1) this._riseAt.delete(id);
         else {
           const ease = p * p * (3 - 2 * p);
@@ -411,11 +438,32 @@ export class Agents3D {
           const charging = flags & FLAG.CHARGING;
           const leaping = flags & FLAG.LEAPING;
           const hover = rp.hoverY || 0;
+          // a reviving form slides from where its ragdoll settled back to the
+          // sim node over the rise telegraph, so it reads continuous instead of
+          // teleporting on frame one. (from is null for a normal combat form.)
+          let bx = wx, by = elev + hover, bz = wz;
+          if (riseEntry && riseEntry.from) {
+            const e2 = Math.min(1, (performance.now() - riseEntry.t0) / 850);
+            const es = e2 * e2 * (3 - 2 * e2);
+            bx = riseEntry.from[0] + (wx - riseEntry.from[0]) * es;
+            bz = riseEntry.from[2] + (wz - riseEntry.from[2]) * es;
+            by = riseEntry.from[1] + ((elev + hover) - riseEntry.from[1]) * es;
+          }
           // charge: lean hard forward, stretched stride; a leap tucks and
           // stretches further and rides the arc up off the floor
           this._e.set((leaping ? 0.85 : charging ? 0.55 : 0.18) + flinch, heading, 0);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(wx, elev + hover, wz), this._q,
+          // a reviving form slerps out of its settled ragdoll orientation into
+          // the rising pose, so there is no orientation snap to pair with the
+          // (already-continuous) position slide
+          if (riseEntry && riseEntry.fromQuat) {
+            const e2 = Math.min(1, (performance.now() - riseEntry.t0) / 850);
+            const es = e2 * e2 * (3 - 2 * e2);
+            this._q2.set(riseEntry.fromQuat[0], riseEntry.fromQuat[1], riseEntry.fromQuat[2], riseEntry.fromQuat[3]);
+            this._q2.slerp(this._q, es);
+            this._q.copy(this._q2);
+          }
+          this._m.compose(this._p.set(bx, by, bz), this._q,
             this._s.set(1, leaping ? 1.15 : charging ? 1.1 : 1, leaping ? 1.5 : charging ? 1.35 : 1));
           if (flags & FLAG.ARMED_HOST) {
             stamp(this.combatOdstSet, counts.combatOdst++);
@@ -443,7 +491,7 @@ export class Agents3D {
     // by the live roster.
     if (this.ragdolls) {
       for (const id of this._ragSeen) {
-        if (!seen.has(id)) { this.ragdolls.remove(id); this._ragSeen.delete(id); }
+        if (!seen.has(id)) { this.ragdolls.remove(id); this._ragSeen.delete(id); this._ragRest.delete(id); }
       }
     }
 
@@ -568,26 +616,35 @@ export class Agents3D {
 
   // Render a dead body — a fresh CORPSE or a just-DOWNED combat form — as a
   // physics ragdoll. Returns true if it drew it (the caller then `continue`s),
-  // false to fall back to the legacy static/rotate-flat render (ragdoll off,
-  // cap reached and dropped, or the sim has relocated the body). Never called
-  // for burned husks (there is no body left to flop).
+  // false to hand back to the legacy static/rotate-flat render. It returns
+  // false (handing off) when: ragdolls are disabled; the body is an
+  // already-incinerated husk (no flop to start); the sim has relocated the body
+  // (drift → follow the sim); or the body just burned/was cap-evicted after
+  // flopping — in which case _ragRest carries the settled spot so the legacy
+  // render anchors there instead of teleporting to the sim node.
   _ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts) {
     const sys = this.ragdolls;
     if (!sys) return false;
+    const burned = (flags & FLAG.BURNED) !== 0;
     let rag = sys.get(id);
     if (rag) {
       // drift guard: if the sim MOVED the body (a carrier dragging a corpse, a
-      // reanimation relocation, any teleport), abandon the flop and hand
-      // rendering back to the sim-following legacy path. The ragdoll's OWN
-      // motion never trips this — it compares the sim's position, not the
-      // flopped one.
+      // reanimation relocation, any teleport), abandon the flop and follow the
+      // sim. The ragdoll's OWN motion never trips this — it compares the sim's
+      // position, not the flopped one. KEEP the _ragSeen mark (a relocated body
+      // must never respawn a fresh flop) but DROP the rest anchor so the legacy
+      // render tracks the sim position (the drag), not the old spot.
       const drift = this.sim.P.ragdoll.driftLimitM ?? 1.5;
       if (rag.deck !== deck || Math.hypot(wx - rag.originX, wz - rag.originZ) > drift) {
-        sys.remove(id); this._ragSeen.delete(id);
+        sys.remove(id); this._ragRest.delete(id);
         return false;
       }
+      // incinerated after flopping: hand to the legacy husk/slab, anchored at
+      // the settled pose (recorded just below), and free the ragdoll slot.
+      if (burned) { this._ragRest.set(id, [rag.rootPos[0], rag.rootPos[1], rag.rootPos[2]]); sys.remove(id); return false; }
     } else {
-      if (this._ragSeen.has(id)) return false; // already flopped once (evicted/settled-then-dropped) — no respawn
+      if (burned) return false;                // never START a flop for an already-incinerated body
+      if (this._ragSeen.has(id)) return false; // already flopped once (evicted/settled) — legacy, anchored via _ragRest
       const elev = this.world.groundHeightAt(deck, wx, wz);
       const hoverY = rp.hoverY || 0; // a form that died mid-leap starts in the air
       const impulse = this._deathImpulse(id, f, flags, wx, wz, deck, heading);
@@ -598,6 +655,10 @@ export class Agents3D {
       if (!rag) return false; // disabled at the system level
       this._ragSeen.add(id);
     }
+
+    // record where the body currently rests, so any later handoff to the legacy
+    // render (burn, cap-eviction, revive) anchors there instead of the sim node
+    this._ragRest.set(id, [rag.rootPos[0], rag.rootPos[1], rag.rootPos[2]]);
 
     // stamp the right model set + counter from the ragdoll pose (same sets the
     // legacy paths use, so no extra draw calls)
