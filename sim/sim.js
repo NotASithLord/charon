@@ -609,6 +609,15 @@ export class Sim {
           continue;
         }
       }
+      // a form burrowing into a corpse (CONVERT) or raising a downed form
+      // (REANIMATE) is positioned by floodExec — it crawls ONTO the body and
+      // stays clamped there. Once it's at the body's node (no path, no move)
+      // parkDrift must NOT pull it back to a scatter slot: that pull vs the
+      // floodExec clamp was the infect-a-body stutter (user), and it's what
+      // split the form off the corpse it's rising from.
+      if ((a.task?.kind === TASK.CONVERT || a.task?.kind === TASK.REANIMATE) && !a.move && !a.path.length) {
+        a.animTime += dt; continue;
+      }
       if (a.move) {
         a.move.t += dt / a.move.travelSec;
         const from = g.node(a.move.from), to = g.node(a.move.to);
@@ -1059,6 +1068,14 @@ export class Sim {
     }
   }
 
+  // a form seated ON a body to burrow (CONVERT) or raise it (REANIMATE) is
+  // clamped to the body by floodExec — the separation pass must leave it there
+  // (else it drifts off the corpse it's rising from).
+  _rootingBody(a) {
+    return (a.task?.kind === TASK.CONVERT || a.task?.kind === TASK.REANIMATE)
+      && !a.move && a.path.length === 0;
+  }
+
   // clamp a body so its whole RADIUS stays inside the room's walls (user
   // report: NPCs clipping through hallway walls when crowded — the old fixed
   // 0.3 m margin was smaller than a body radius, so a shoved body poked
@@ -1083,10 +1100,10 @@ export class Sim {
       const narrow = Math.min(room.w, room.d) < 6;
       for (let i = 0; i < occ.length; i++) {
         const a = occ[i];
-        if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.move) continue;
+        if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.move || this._rootingBody(a)) continue;
         for (let j = i + 1; j < occ.length; j++) {
           const b = occ[j];
-          if (b.dead || b.faction === FACTION.CORPSE || b.downed || b.move) continue;
+          if (b.dead || b.faction === FACTION.CORPSE || b.downed || b.move || this._rootingBody(b)) continue;
           const need = this._bodyRadius(a) + this._bodyRadius(b);
           let dx = b.x - a.x, dy = b.y - a.y;
           const d2 = dx * dx + dy * dy;
