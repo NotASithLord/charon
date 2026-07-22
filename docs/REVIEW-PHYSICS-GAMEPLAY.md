@@ -17,9 +17,11 @@ constraint in `player._move`.
 **NPC motion is kinematic scripting, not physics.** Straight lerps along
 links, park-drift spirals, steering pulls. No acceleration or momentum, no
 turn rates (agents snap 180° in one tick), no knockback from swipes or the
-carrier rupture, no ragdolls (corpses are grey boxes; downed forms rotate
-flat with zero transition). Turn-rate smoothing and a fall/ragdoll pose
-blend are the cheapest wins here.
+carrier rupture. Turn-rate smoothing is the cheapest win still open here.
+(UPDATE: the ragdoll half of this is DONE — `physics/ragdoll.js` gives dead
+bodies a real physics flop thrown off the killing blow, replacing the
+rotate-flat downed forms and the flat corpses; it is cosmetic/render-side, so
+the sim stays byte-identical. Live NPC *locomotion* is still kinematic.)
 
 **Interiors are empty shells.** Rooms have real walls, doors, hatches,
 signage — and no contents. No crates, consoles, racks, bunks; nothing that

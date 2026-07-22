@@ -8,6 +8,8 @@
     "serve": "python3 -m http.server 8000",
     "headless": "node sim/headless.js",
     "determinism": "node sim/determinism-check.js",
+    "physics": "node physics/physics-check.mjs",
+    "ragdoll": "node physics/ragdoll-check.mjs",
     "commands": "node sim/command-check.js",
     "build:dwapp": "node scripts/build-dwapp.mjs"
   },

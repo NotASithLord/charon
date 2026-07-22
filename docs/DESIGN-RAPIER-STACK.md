@@ -44,6 +44,18 @@ debris, camera shake) live *outside* that set and are never read back. Break
 the invariant — let a non-deterministic result decide authoritative state — and
 replay and P2P lockstep break with it.
 
+The **cosmetic death ragdoll now exists** as exactly this kind of outside-the-set
+flourish: `physics/ragdoll.js` is a pure render-side articulated solver (no
+THREE/DOM, no `Math.random`, floor sampling injected) that `game/agents3d.js`
+drives from the AgentBuffer when a body dies. It writes NOTHING back — the sim
+stays byte-identical with it present or absent (`sim/determinism-check.js` is
+unchanged and still green), so it is fingerprinted by neither `hashState` nor
+`snapshotHash`. Its own gate is `physics/ragdoll-check.mjs` (`npm run ragdoll`).
+It is deterministic given identical inputs (which is what makes that gate
+possible), but being cosmetic it makes no cross-machine bit-equality claim. This
+is deliberately NOT the authoritative death-knockback of follow-up 3 below — it
+is the flourish this paragraph carves out.
+
 ## What owns what
 
 | Layer | Owner | Authoritative? |
@@ -106,6 +118,9 @@ Rough dependency order:
    rejoins graph locomotion on landing — the authoritative-dynamic pattern.
 3. **Authoritative dynamic bodies — explosion/death knockback.** Thrown corpses
    as deterministic Rapier bodies; resolve the resting node back into the sim.
+   (The *cosmetic* half of this — the render-side death ragdoll flop — shipped
+   in `physics/ragdoll.js`; what remains open here is the AUTHORITATIVE version
+   that feeds a body's resting node back into sim state.)
 4. **NPC locomotion into Rapier** (the "aggressive" option): continuous
    collision-driven crowding at doorways. Watch the headless-tuning cost.
 5. **Dynamic door colliders** for locked-state changes mid-run.

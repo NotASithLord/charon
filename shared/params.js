@@ -255,6 +255,34 @@ export const PARAMS = {
   // (~3-5) once lockstep transport slots underneath the queue.
   net: { inputDelayTicks: 1 },
   command: { linkReliability: 0.9 }, // per-deck order delivery (companion §2.4), tunable
+  // CLASSIC-HALO RAGDOLL (cosmetic; physics/ragdoll.js). Feel knobs for the
+  // death flop — the whole block is render-only and never touches sim state
+  // (docs/DESIGN-RAPIER-STACK.md's "ragdoll flourish lives outside the
+  // authoritative set"). Tune here, not in the solver. Distances in meters,
+  // speeds m/s, damping per-second, angles radians.
+  ragdoll: {
+    enabled: true,
+    maxActive: 48,          // concurrent physics ragdolls; deaths past this render as static corpses
+    gravity: 22,            // matches the game's frag-throw gravity, so a flop reads at the same weight
+    bodyLen: 1.7, bodyRadius: 0.3, comY: 0.9,   // torso capsule + centre of mass (feet at y=0);
+                                                // a flat body rests with its centreline ~radius off
+                                                // the deck, matching the legacy corpse's 0.25 lift
+
+    restitution: 0.18,      // bodies thud, maybe bounce once — not rubber
+    groundFriction: 6.0, groundAngFriction: 5.0, // slide/tumble bleed-off while touching the deck
+    linDamp: 0.1, angDamp: 1.0,                  // air damping (per second, exp)
+    maxLinSpeed: 24, maxAngSpeed: 28,            // hard clamps — the stability backstop
+    sleepLin: 0.16, sleepAng: 0.4, sleepSec: 0.5,// settle → freeze the resting pose
+    inertia: 1.2,           // scalar rotational inertia for contact response
+    driftLimitM: 1.5,       // if the sim moves the body this far (dragged/relocated), drop the ragdoll
+    // launch off the killing blow (PLAN-ANIM-POLISH "hit-direction deaths")
+    launchSpeed: 4.2, launchUp: 2.6, spin: 7.0,
+    chargeBonus: 3.5,       // a charging/leaping form that dies carries its momentum into the tumble
+    corpseKnockSpeed: 3.0, corpseHostileRangeM: 4.0, // a human corpse is thrown off the nearest hostile
+    // limbs (the floppy flail about the JMS joint pivots)
+    limbGrav: 9, limbBind: 2.5, limbDamp: 3.0, limbLimit: 1.4, limbKick: 6.0,
+    subDt: 0.008333333, maxSubSteps: 8, dtCap: 0.05, // internal fixed step (1/120) — stable + deterministic
+  },
 };
 
 // Deep-clone params so a run can mutate its own copy (live dials) without
