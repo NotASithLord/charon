@@ -1344,6 +1344,24 @@ export class Hive {
   }
 
   assign(form, task) {
+    // COMMITTED BURROWER (user rule: once a form starts burrowing a body it
+    // CANNOT be pulled off). A form seated and burrowing a corpse/downed form
+    // (or a combat form rooting into a carrier) ignores every new order until
+    // it finishes or the body is gone — floodExec clears the task itself when
+    // the body becomes invalid. Without this, the strategic tick and the
+    // attack/muster drafts kept re-tasking a mid-conversion form (CONVERT ->
+    // ATTACK / MOVE) and zeroing its timer — the "infect stutter when human
+    // NPCs are nearby" (the nearby life is exactly what triggers the draft).
+    if (form.task && form.taskProgress > 0
+      && (form.task.kind === TASK.CONVERT || form.task.kind === TASK.REANIMATE
+        || form.task.kind === TASK.TRANSFORM)) {
+      const ct = form.task;
+      const body = this.sim.byId.get(ct.corpseId ?? ct.targetId);
+      const alive = ct.kind === TASK.TRANSFORM
+        ? (!form.downed && form.hp > 0)
+        : (body && !body.dead && body.damage < 100);
+      if (alive) return; // committed — the order is ignored
+    }
     // re-issuing the SAME task must not wipe the path or restart progress —
     // the strategic round re-assigns standing orders every 2.5 s, and the
     // clear-repath cycle read as agents stuttering mid-corridor (user note:
