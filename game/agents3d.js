@@ -467,7 +467,10 @@ export class Agents3D {
             this._s.set(1, leaping ? 1.15 : charging ? 1.1 : 1, leaping ? 1.5 : charging ? 1.35 : 1));
           if (flags & FLAG.ARMED_HOST) {
             stamp(this.combatOdstSet, counts.combatOdst++);
-            this._rifleAt(wx, elev + 1.1, wz, heading);
+            // bx/bz (not wx/wz) so the rifle rides with the body while a
+            // reviving form slides in from its settled ragdoll spot; identical
+            // to wx/wz for every non-reviving form
+            this._rifleAt(bx, elev + 1.1, bz, heading);
             this.rifle.setMatrixAt(counts.rifle++, this._m);
           } else {
             stamp(this.combatCivSet, counts.combatCiv++);
