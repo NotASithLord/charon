@@ -356,6 +356,15 @@ export class World {
       color: lift ? 0x1e4b56 : 0x54401e,
       emissive: lift ? 0x2fd7f0 : 0xf0a52f, emissiveIntensity: 0.55,
     });
+    // NO TWO PADS ON TOP OF EACH OTHER (user report: a lift collar and a
+    // ladder collar landed practically overlapping in the same corridor,
+    // because each trunk picked "the clearest centre" independently). Track
+    // every placed pad per deck and feed the existing ones into pickSpot as
+    // points to stay clear of — so a second trunk piercing the same room
+    // slides off to its own spot.
+    const trunkSpots = []; // { deck, x, z }
+    const avoidPts = (deck) => trunkSpots.filter((s) => s.deck === deck).map((s) => [s.x, s.z]);
+    const claimSpot = (deck, x, z) => trunkSpots.push({ deck, x, z });
     for (const e of g.edges) {
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck === b.deck) continue;
@@ -375,8 +384,10 @@ export class World {
       if (e.type === 'stairwell') continue;
       if (vertical) {
         const [x, z] = pickSpot(ox0, ox1, oz0, oz1,
-          [...doorPts(lower.idx, lower.deck), ...doorPts(upper.idx, upper.deck)],
+          [...doorPts(lower.idx, lower.deck), ...doorPts(upper.idx, upper.deck),
+            ...avoidPts(lower.deck), ...avoidPts(upper.deck)],
           (ox0 + ox1) / 2, (oz0 + oz1) / 2);
+        claimSpot(lower.deck, x, z); claimSpot(upper.deck, x, z);
         const lowElev = elevOf(lower.deck), highElev = elevOf(upper.deck);
         this.trunks.push({
           vertical: true, kind: e.type, edge: e, x, z,
@@ -417,7 +428,8 @@ export class World {
           const [sx, sz] = pickSpot(
             nx - n.w / 2 + 1.2, nx + n.w / 2 - 1.2,
             nz - n.d / 2 + 1.2, nz + n.d / 2 - 1.2,
-            doorPts(n.idx, n.deck), px, nz, 0.08);
+            [...doorPts(n.idx, n.deck), ...avoidPts(n.deck)], px, nz, 0.08);
+          claimSpot(n.deck, sx, sz);
           return { x: sx, z: sz, deck: n.deck, node: n.idx };
         };
         const pu = mk(upper, lower), pl = mk(lower, upper);
