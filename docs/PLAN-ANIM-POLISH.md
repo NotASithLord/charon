@@ -32,9 +32,14 @@ payoff per unit of work. Items marked ✅ are implemented as of this commit.
   skinning), and sample per instance by CLIP + animTime. Replaces every
   procedural swing. Biggest single upgrade available; bounded scope: walk,
   run, melee, death, flood lurch.
-- **Hit-direction deaths.** Fall away from the killing shot (we know
-  lastHurtBy positions), with 2–3 corpse pose variants picked by id hash
-  (curled, prone, twisted) instead of one flat plank pose.
+- ✅ **Hit-direction deaths.** Superseded by a full physics ragdoll
+  (`physics/ragdoll.js`, driven from `game/agents3d.js`): a dead body goes
+  limp and is thrown OFF the killing blow (away from `lastHurtBy`, or the
+  nearest hostile for an attacker-less human corpse), tumbles, its limbs flail
+  about the JMS pivots, and it settles into a heap — continuous pose variety
+  rather than 2–3 canned poses. Cosmetic/render-side (the sim stays
+  byte-identical); gated by `npm run ragdoll`. A charging/leaping form that
+  dies carries its momentum into the tumble.
 - **Lunge arcs.** Infection-form leaps get a ballistic hop (y offset over
   the lunge segment) instead of a floor slide; combat-form charge gets a
   lowered, forward-leaning posture (small rx during CHARGING flag).
