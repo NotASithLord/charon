@@ -9,6 +9,7 @@ import { elevOf } from './world.js';
 import { carryGeometry } from './rifle-model.js';
 import { characterParts } from './characters.js';
 import { RagdollSystem } from '../physics/ragdoll.js';
+import { TASK } from '../sim/hive.js';
 
 const CAP = 512;
 
@@ -278,6 +279,19 @@ export class Agents3D {
     }
     if (this.rpos.size > buf.count * 2) {
       for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
+    }
+    // PIXEL-LOCK a seated burrower onto the body it's converting/raising (user:
+    // form, corpse and the combat form that rises must be ONE spot). The sim
+    // clamps them together; snap the render position past the ease-in lag so the
+    // form never slides across or floats off the body while it burrows.
+    for (const a of sim.agents) {
+      if (a.dead || !a.task || a.taskProgress <= 0) continue;
+      if (a.task.kind !== TASK.CONVERT && a.task.kind !== TASK.REANIMATE) continue;
+      const body = sim.byId.get(a.task.corpseId ?? a.task.targetId);
+      if (!body || body.dead) continue;
+      const rp = this.rpos.get(a.id), bp = this.rpos.get(body.id);
+      if (rp && rp.deck === body.deck) { rp.x = body.x; rp.y = body.y; }
+      if (bp && bp.deck === body.deck) { bp.x = body.x; bp.y = body.y; }
     }
 
     for (let i = 0; i < buf.count; i++) {

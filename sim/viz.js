@@ -402,6 +402,19 @@ export class Viz {
     if (this.rpos.size > buf.count * 2) { // occasional prune of dead ids
       for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
     }
+    // PIXEL-LOCK a seated burrower onto its body (user: the form, the corpse it
+    // infects, and the progress arc must all be ONE spot — not disjoint). The
+    // sim already clamps the form onto the body; here we kill the render ease-in
+    // lag so the glyph never slides or floats off the arc drawn at the body.
+    for (const a of sim.agents) {
+      if (a.dead || !a.task || a.taskProgress <= 0) continue;
+      if (a.task.kind !== TASK.CONVERT && a.task.kind !== TASK.REANIMATE) continue;
+      const body = sim.byId.get(a.task.corpseId ?? a.task.targetId);
+      if (!body || body.dead) continue;
+      const rp = this.rpos.get(a.id), bp = this.rpos.get(body.id);
+      if (rp) { rp.x = body.x; rp.y = body.y; }
+      if (bp) { bp.x = body.x; bp.y = body.y; }
+    }
     // glyphs stay readable at any zoom: real meters near, min screen px far
     const rr = (m, px) => Math.max(m, px / this.s);
     // corpses first (they lie under the living)
