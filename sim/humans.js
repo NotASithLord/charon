@@ -300,12 +300,35 @@ function updateMarineTick(sim, a, dt) {
   // move to a new room — don't wait ~2.5 s for the strategic tick or for a
   // stale path to drain. ['std'] already includes the lift/ladder/stairwell
   // edges, so this follows across decks too.
-  if (squad.order?.kind === 'order:escort' && !a.move) {
+  if (squad.order?.kind === 'order:escort') {
+    a.closeFollow = false;
     const lead = sim.byId.get(squad.order.entityId);
-    if (lead && !lead.dead && lead.node !== a.node && lead.node !== a.followNode) {
-      a.followNode = lead.node;
-      a.path = [];
-      if (sim.setPathTo(a, lead.node, ['std'], humanPass)) a.state = STATE.MOVE;
+    if (lead && !lead.dead) {
+      if (lead.node !== a.node && !a.move && lead.node !== a.followNode) {
+        a.followNode = lead.node;
+        a.path = [];
+        if (sim.setPathTo(a, lead.node, ['std'], humanPass)) a.state = STATE.MOVE;
+      } else if (lead.node === a.node && !a.move && sim.floodStrengthAt(a.node) === 0) {
+        // CLOSE FOLLOW (user: fireteam terrible at following closely). In the
+        // player's room and no flood to fight: hold a tight formation slot just
+        // behind them and close the gap in REAL SPACE — sprinting when you've
+        // fallen behind, easing in when near — instead of drifting to a room
+        // parking slot away from them.
+        const mi = Math.max(0, squad.members.indexOf(a.id));
+        const ang = lead.heading + Math.PI + ((mi % 3) - 1) * 0.6; // fan behind
+        const off = 1.5 + (mi >= 3 ? 1.0 : 0);
+        const tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
+        const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
+        if (d > 0.5) {
+          const mps = d > 7 ? 8 : d > 3 ? 6 : 2.6; // catch up hard, ease in close
+          const step = Math.min(d, mps * dt);
+          a.x += (dx / d) * step; a.y += (dy / d) * step;
+          sim._clampToRoom(a, sim.graph.node(a.node));
+        }
+        a.heading = d > 0.8 ? Math.atan2(dy, dx) : lead.heading;
+        a.animTime += dt;
+        a.closeFollow = true; // _advanceMovement won't park-drift it off station
+      }
     }
   }
 

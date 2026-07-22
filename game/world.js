@@ -686,10 +686,14 @@ export class World {
   // rim. The crawlers themselves are hidden while inside (agents3d).
   _buildShaftGrates() {
     const g = this.graph;
+    // SMALL, FLUSH, QUIET (user: the big glowing floor grates on the lower
+    // deck are asinine). A shaft mouth is a modest recessed hatch, not a
+    // glowing warning slab — shrunk to ~0.85 m and the amber rim dimmed to a
+    // faint hazard line.
     const plateMat = new THREE.MeshStandardMaterial({ color: 0x11161c, roughness: 0.9, metalness: 0.35 });
-    const slatMat = new THREE.MeshStandardMaterial({ color: 0x39424e, roughness: 0.7, metalness: 0.5 });
+    const slatMat = new THREE.MeshStandardMaterial({ color: 0x2f3742, roughness: 0.75, metalness: 0.5 });
     const rimMat = new THREE.MeshStandardMaterial({
-      color: 0x2a2416, emissive: 0xc09030, emissiveIntensity: 0.5, roughness: 0.6,
+      color: 0x242017, emissive: 0x8a6a24, emissiveIntensity: 0.15, roughness: 0.7,
     });
     for (const s of g.shafts) {
       for (const [na, nb] of [[s.a, s.b], [s.b, s.a]]) {
@@ -701,14 +705,14 @@ export class World {
         const py = Math.max(n.y - n.d / 2 + 1.1, Math.min(n.y + n.d / 2 - 1.1, n.y + (dy / L) * (n.d / 2 - 1.1)));
         const [wx, wz] = this.simToWorld(px, py, n.deck);
         const elev = elevOf(n.deck);
-        const rim = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.04, 1.5), rimMat);
-        rim.position.set(wx, elev + 0.02, wz);
-        const plate = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.07, 1.3), plateMat);
-        plate.position.set(wx, elev + 0.045, wz);
+        const rim = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.035, 0.98), rimMat);
+        rim.position.set(wx, elev + 0.015, wz);
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.06, 0.84), plateMat);
+        plate.position.set(wx, elev + 0.035, wz);
         this.scene.add(rim, plate);
-        for (let k = -2; k <= 2; k++) {
-          const slat = new THREE.Mesh(new THREE.BoxGeometry(1.22, 0.03, 0.12), slatMat);
-          slat.position.set(wx, elev + 0.09, wz + k * 0.24);
+        for (let k = -1; k <= 1; k++) {
+          const slat = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.025, 0.1), slatMat);
+          slat.position.set(wx, elev + 0.07, wz + k * 0.26);
           this.scene.add(slat);
         }
       }
@@ -727,16 +731,23 @@ export class World {
     });
     const slatMat = new THREE.MeshStandardMaterial({ color: 0x161c24, roughness: 0.85, metalness: 0.4 });
     const seen = new Set();
-    // door panel positions per deck, to avoid dropping a grate in a doorway
+    // NO GRATE IN A DOORWAY (user: there are still vents in doorways). A vent
+    // that parallels a real doorway shares the SAME two rooms as a std door —
+    // the doorway itself is the crawler's opening, so it gets no grate. This
+    // topological test is robust where the old distance check leaked. Door
+    // positions are also kept as a backstop for the odd off-wall throat vent.
+    const dooredPairs = new Set();
     const doorPts = [];
     for (const e of g.edges) {
       if (!e.door) continue;
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck !== b.deck) continue;
+      dooredPairs.add(`${Math.min(e.a, e.b)}:${Math.max(e.a, e.b)}`);
       const [dx, dz] = this.simToWorld(e.door.x, e.door.y, a.deck);
       doorPts.push({ deck: a.deck, x: dx, z: dz });
     }
     for (const v of g.vents) {
+      if (dooredPairs.has(`${Math.min(v.a, v.b)}:${Math.max(v.a, v.b)}`)) continue; // the door IS the opening
       const a = g.node(v.a), b = g.node(v.b);
       for (const [n, pt] of [[a, v.doorA], [b, v.doorB]]) {
         const d = pt ?? v.door;
@@ -745,8 +756,8 @@ export class World {
         const key = `${n.deck}:${Math.round(wx)}:${Math.round(wz)}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        // skip openings that sit on a real doorway (the crawler uses that gap)
-        if (doorPts.some((p) => p.deck === n.deck && Math.hypot(p.x - wx, p.z - wz) < 1.4)) continue;
+        // backstop: still skip any grate that lands on a real doorway
+        if (doorPts.some((p) => p.deck === n.deck && Math.hypot(p.x - wx, p.z - wz) < 2.0)) continue;
         const elev = elevOf(n.deck);
         const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.05, 0.92), frameMat);
         frame.position.set(wx, elev + 0.03, wz);

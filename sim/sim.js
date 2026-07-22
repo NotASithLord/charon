@@ -222,6 +222,7 @@ export class Sim {
       m.hp = m.maxHp = this.P.combat.marine.hp;
       m.hasRadio = true;
       m.squad = squad.id;
+      m.escort = true; // moves at your pace + close-follows (humans.js)
       squad.members.push(m.id);
       this.spawn(m);
     }
@@ -555,7 +556,10 @@ export class Sim {
     switch (a.faction) {
       case FACTION.CIVILIAN: return a.state === STATE.FLEE || a.panicked ? S.civilianFlee : S.civilian;
       case FACTION.ARMED: return a.state === STATE.FLEE ? S.civilianFlee : S.armed;
-      case FACTION.MARINE: return S.marine;
+      // your fireteam keeps YOUR pace (user: they were terrible at following) —
+      // sim marines walk at 1.4 m/s but you move 5.6-7.6, so an escort marine
+      // moves ~4x to stay on you; a posted/patrol marine walks normally.
+      case FACTION.MARINE: return a.escort ? 5.4 : S.marine;
       case FACTION.INFECTION: return S.infection;
       case FACTION.COMBAT: return a.dragging !== -1 ? S.drag : S.combatForm;
       case FACTION.CARRIER: return S.carrier;
@@ -570,6 +574,9 @@ export class Sim {
       if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) continue;
       // the player's body is moved by the game, not the pathfinder
       if (a.isPlayer) { a.animTime += dt; continue; }
+      // a fireteam member close-following the player was already positioned by
+      // the escort steer this tick — don't park-drift it back off station.
+      if (a.closeFollow) { a.animTime += dt; continue; }
       // a human with a form burrowing in (§ grabPins): the latch CANNOT be
       // broken — the host runs screaming in tight frantic circles until
       // someone physically shoots the thing off (user rule). The player's
