@@ -286,10 +286,22 @@ export function updateFloodTick(sim, dt) {
         const body = sim.byId.get(t.corpseId);
         if (!body || body.dead || body.damage >= 100) { a.task = null; break; }
         if (a.node === body.node && !a.move) {
+          // SIT ON THE BODY (user: the form, the corpse, and the combat form
+          // that rises must all be ONE spot). Close the last step ONTO the
+          // corpse; the burrow timer only runs once it's seated, and it stays
+          // clamped there so nothing (parkDrift/separate are excluded for it)
+          // pulls it off. The form rises as a combat form on that exact spot.
+          const dx = body.x - a.x, dy = body.y - a.y;
+          if (a.taskProgress === 0 && Math.hypot(dx, dy) > 0.35) {
+            a.x += dx * Math.min(1, dt * 5); a.y += dy * Math.min(1, dt * 5);
+            a.heading = Math.atan2(dy, dx); a.animTime += dt;
+            break; // still crawling onto the body — not burrowing yet
+          }
+          a.x = body.x; a.y = body.y; // seated on the corpse
           a.taskProgress += dt;
           if (a.taskProgress >= sim.P.combat.corpseConvertSec) {
             body.dead = true;
-            const cf = spawnCombatForm(sim, a.node, body);
+            const cf = spawnCombatForm(sim, a.node, body); // rises where the body lay
             cf.hostArmed = body.wasArmed === true; // the host's weapon comes up with it
             sim.stats.conversions++; sim.stats.conversionsRound++;
             sim.removeAgent(a); // the infection form is spent (§6.6)
@@ -326,6 +338,14 @@ export function updateFloodTick(sim, dt) {
         const target = sim.byId.get(t.targetId);
         if (!target || target.dead || !target.downed || target.damage >= 100) { a.task = null; break; }
         if (a.node === target.node && !a.move) {
+          // sit ON the downed form (same rule as CONVERT) before raising it
+          const dx = target.x - a.x, dy = target.y - a.y;
+          if (a.taskProgress === 0 && Math.hypot(dx, dy) > 0.35) {
+            a.x += dx * Math.min(1, dt * 5); a.y += dy * Math.min(1, dt * 5);
+            a.heading = Math.atan2(dy, dx); a.animTime += dt;
+            break;
+          }
+          a.x = target.x; a.y = target.y;
           a.taskProgress += dt;
           if (a.taskProgress >= sim.P.combatForm.reanimateTimeSec) {
             target.downed = false; target.reviveAt = -1;

@@ -353,8 +353,13 @@ export class Hive {
     if (this.posture === 'AGGRESSIVE' && !wasAggro) sim.log('hive', 'the hive turns from hit-and-run to open aggression');
 
     // re-validate queued paths against current beliefs: a route planned two
-    // rounds ago may now run through a manned corridor
+    // rounds ago may now run through a manned corridor. COMMITTED INFECTS are
+    // exempt (user: infect-a-body cycles stuttering) — a form already en route
+    // to burrow a specific corpse / raise a downed form kept having its path
+    // dropped here every 2.5 s when the body lay near believed humans, so it
+    // re-pathed forever and never arrived. Once committed to a body it goes.
     for (const f of forms) {
+      if (f.task?.kind === TASK.CONVERT || f.task?.kind === TASK.REANIMATE) continue;
       if (f.path.length && f.path.some((s) => this.believedHumanStr[s.to] > 0.5 || this.believedHardness[s.to] > 0.4)) {
         f.path = [];
       }
