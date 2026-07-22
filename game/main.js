@@ -48,7 +48,7 @@ torch.target = torchTarget;
 // infection forms, no combat forms/carriers yet) ---
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
-const sim = new Sim(seed, { flood: { initialInfectionForms: 20, initialCombatForms: 0, initialCarriers: 0 } });
+const sim = new Sim(seed);
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
 

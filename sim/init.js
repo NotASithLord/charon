@@ -87,6 +87,10 @@ export function initRun(seed, rng, P) {
   const breach = rng.pick(graph.nodesWithRole('crash_candidate'));
   graph.breachNode = breach;
   graph.unpowered[breach] = 1;
+  // no marine starts on the crash site OR in a room right next to it (user
+  // rule) — the danger set is the breach plus its immediate walkable neighbours
+  const breachDanger = new Set([breach]);
+  for (const { to } of graph.neighbors(breach, ['std'], null)) breachDanger.add(to);
 
   // --- 6. populate NPCs. EXPLICIT COUNTS (user note): squads, squad sizes,
   // civilians and bodies are exactly what the inputs say — the only thing
@@ -115,7 +119,12 @@ export function initRun(seed, rng, P) {
     ];
     const marinePosts = marinePostIds.map((id) => graph.byId.get(id));
     for (let si = 0; si < M.squads; si++) {
-      const node = marinePosts[si % marinePosts.length];
+      // if a standing post is the breach or a room next to it (e.g. the
+      // flight-deck posting when the hangar is the crash), slide to the next
+      // safe post so no squad opens the game in the flood's lap (user rule)
+      let pi = si % marinePosts.length;
+      for (let g = 0; g < marinePosts.length && breachDanger.has(marinePosts[pi]); g++) pi = (pi + 1) % marinePosts.length;
+      const node = marinePosts[pi];
       const squad = { id: si, members: [], objective: null, morale: 1, respondingTo: null, phase1: false };
       for (let m = 0; m < M.squadSize; m++) {
         const a = makeAgent(FACTION.MARINE, node, graph);
@@ -168,7 +177,7 @@ export function initRun(seed, rng, P) {
       // the hangar/holds, which can be the breach) — walk it to the next leg so
       // no live crew opens the game on the breach (consistent with every other
       // spawn pool). why: the crash site opens as flood + corpses only.
-      for (let guard = 0; guard < route.length && route[leg] === breach; guard++) {
+      for (let guard = 0; guard < route.length && breachDanger.has(route[leg]); guard++) {
         leg = (leg + 1) % route.length;
       }
       const node = route[leg];
@@ -229,17 +238,18 @@ export function initRun(seed, rng, P) {
       n.type !== 'corridor' && n.idx !== graph.breachNode
       && !n.roles.includes('command') && !n.roles.includes('hazard')
       && !n.roles.includes('power') && !n.roles.includes('hangar')
-      && !n.roles.includes('vehicles'));
-    // capacity-weighted pool, BIASED OUTBOARD (user: spread bodies into the
-    // side areas off the main corridors, not clumped on the spine). A room's
-    // weight is its capacity scaled by how far off the centreline it sits —
-    // the outboard flank halls (|row| >= 2) pull ~2x their share, the spine
-    // rooms about half — so the crew reads as manning the whole beam.
+      && !n.roles.includes('vehicles')
+      // crew shelter in living/work spaces, not the weapon rooms (those are
+      // manned by the armed watch, not huddling civilians)
+      && !n.roles.includes('armory') && !n.roles.includes('battery')
+      && !n.roles.includes('magazine'));
+    // SPREAD BY SPACE (user: bodies — alive or dead — should be roughly even
+    // across the ship BY AREA, so a big hall always holds more than a small
+    // compartment). A room's weight is its FLOOR AREA (w×d), so the crew reads
+    // as filling the whole deck plan proportionally rather than clumping.
     const spreadPool = [];
     for (const n of habitable) {
-      const off = Math.abs(n.row ?? 0);
-      const bias = off >= 2 ? 2.2 : off === 1 ? 1.2 : 0.55;
-      const copies = Math.max(1, Math.round(n.capacity * bias));
+      const copies = Math.max(1, Math.round((n.w * n.d) / 12)); // ~1 per 12 m²
       for (let k = 0; k < copies; k++) spreadPool.push(n.idx);
     }
     const soft = softIdx;
@@ -325,13 +335,13 @@ export function initRun(seed, rng, P) {
   const corpses = [];
   {
     const weights = graph.nodes.map((n) => {
-      let w = (n.capacity * 0.5 + 2) * rng.range(0.7, 1.3);
-      if (n.roles.includes('corpse_cache')) w *= 2.5;
-      if (n.type === 'corridor') w *= 0.5;
-      // the dead lie where the crew was — out in the side compartments, not
-      // piled in the corridors (user: spread bodies into the side areas)
-      if (Math.abs(n.row ?? 0) >= 2) w *= 1.8;
-      else if ((n.row ?? 0) === 0 && n.type !== 'corridor') w *= 0.7;
+      // the dead lie in proportion to FLOOR AREA (user: more bodies in the
+      // hangar than the armory, always). A gentle ±20% per-run jitter keeps
+      // each run's scatter unique without ever letting a small room outdraw a
+      // big one; corpse caches (medbay/cryo) still lean heavy, corridors light.
+      let w = (n.w * n.d) * rng.range(0.8, 1.2);
+      if (n.roles.includes('corpse_cache')) w *= 1.8;
+      if (n.type === 'corridor') w *= 0.45;
       return w;
     });
     const totalW = weights.reduce((a, b) => a + b, 0);

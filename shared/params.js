@@ -44,11 +44,9 @@ export const PARAMS = {
   // flood should win most runs — the marines alone can't hold the ship. Tune
   // difficulty with the initial swarm size and comms quality, not squad nerfs.
   flood: {
-    initialInfectionForms: 14, // difficulty lever — LEAN by design (user rule): the flood's
-    initialCombatForms: 3,     // strength is per-form durability + hive tactics, not headcount
-    initialCarriers: 1,        // one guaranteed WOMB at the breach — so the flood can never be
-                               // bootstrap-wiped before it seats production (design rule: the
-                               // flood must dominate an NPC-only ship). Still a live UI lever.
+    initialInfectionForms: 20, // difficulty lever (user: sim == game defaults)
+    initialCombatForms: 0,     // a pure infection swarm; combat forms + carriers
+    initialCarriers: 0,        // are EARNED through conversions, not handed out at t=0
   },
   // GAME-ACCURATE CARRIER (user note): forms accumulate INSIDE the swelling
   // carrier and only spill out when it RUPTURES — under fire, or at the top
