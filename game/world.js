@@ -375,13 +375,14 @@ export class World {
             const other = g.node(e.a === n.idx ? e.b : e.a);
             if (other.deck !== deck) continue;
             const [dx2, dz2] = this.simToWorld(e.door.x, e.door.y, deck);
-            // hang it just inside the room, over the opening
+            // ON THE CEILING over the door (user rule) — mounted flush to
+            // the overhead, just inside the room so it clears the doorframe
             const ox = wx - dx2, oz = wz - dz2, ol = Math.hypot(ox, oz) || 1;
-            const px = dx2 + (ox / ol) * 0.45, pz = dz2 + (oz / ol) * 0.45;
+            const px = dx2 + (ox / ol) * 0.35, pz = dz2 + (oz / ol) * 0.35;
             const lampM = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.09, 0.12), emMat);
-            lampM.position.set(px, elev + roomH - 0.5, pz);
+            lampM.position.set(px, elev + roomH - 0.06, pz);
             this.scene.add(lampM);
-            if (!anchor) anchor = { x: px, y: elev + roomH - 0.6, z: pz };
+            if (!anchor) anchor = { x: px, y: elev + roomH - 0.35, z: pz };
           }
           const L = this.roomLights[n.idx];
           L.emergency = mode === 'dead'; // pool throws red light only where the mains are out
