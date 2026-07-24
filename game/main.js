@@ -702,8 +702,12 @@ function trackerUnreliability(now) {
       });
     }
   }
+  // a phantom doesn't just vanish — it FLICKERS OUT (user rule): a real
+  // contact simply stops painting, but a ghost sputters and dissolves for
+  // ~half a second, so only after the fact do you know it was never there
+  const FLICKER_MS = 550;
   for (let i = trkState.phantoms.length - 1; i >= 0; i--) {
-    if (now >= trkState.phantoms[i].until) trkState.phantoms.splice(i, 1);
+    if (now >= trkState.phantoms[i].until + FLICKER_MS) trkState.phantoms.splice(i, 1);
   }
 }
 function drawTracker(now) {
@@ -763,12 +767,23 @@ function drawTracker(now) {
       trk.beginPath(); trk.arc(tx, ty, 3.2, 0, Math.PI * 2); trk.stroke();
     }
   }
-  // phantoms: drawn EXACTLY like real same-deck contacts — indistinguishable
+  // phantoms: drawn EXACTLY like real same-deck contacts while "alive" —
+  // then they FLICKER OUT: sputtering alpha, jittering position, shrinking,
+  // gone. The dissolve is the tell, and it only comes after the fact.
   for (const ph of trkState.phantoms) {
-    const tx = R + Math.cos(ph.ang) * ph.dist * 70;
-    const ty = R + Math.sin(ph.ang) * ph.dist * 70;
-    trk.fillStyle = ph.hostile ? 'rgba(255,72,56,0.95)' : 'rgba(255,214,64,0.95)';
-    trk.beginPath(); trk.arc(tx, ty, 3.4, 0, Math.PI * 2); trk.fill();
+    let tx = R + Math.cos(ph.ang) * ph.dist * 70;
+    let ty = R + Math.sin(ph.ang) * ph.dist * 70;
+    let alpha = 0.95, rad = 3.4;
+    if (now >= ph.until) {
+      const p = (now - ph.until) / 550; // 0..1 through the die-off
+      if (Math.sin(now * 0.09 + ph.ang * 7) < p * 1.6 - 0.4) continue; // sputter: skip frames, more as it dies
+      alpha = 0.95 * (1 - p * 0.7);
+      rad = 3.4 * (1 - p * 0.45);
+      tx += (Math.random() - 0.5) * 3 * p; // breaking up
+      ty += (Math.random() - 0.5) * 3 * p;
+    }
+    trk.fillStyle = ph.hostile ? `rgba(255,72,56,${alpha})` : `rgba(255,214,64,${alpha})`;
+    trk.beginPath(); trk.arc(tx, ty, rad, 0, Math.PI * 2); trk.fill();
   }
   // faint interference flecks even when "clear" — the unit is never healthy
   for (let i = 0; i < 12; i++) {
