@@ -613,6 +613,7 @@ export class Agents3D {
     }
 
     // tracers + muzzle flashes from live fights
+    this.flashPoints = []; // world positions of this frame's NPC muzzle flashes (pooled gunfire lights)
     const pos = this.tracers.geometry.attributes.position;
     let seg = 0;
     const g = sim.graph;
@@ -639,9 +640,11 @@ export class Agents3D {
         if (counts.flash < CAP) {
           const dx = tx - sx, dz = tz - sz, dl = Math.hypot(dx, dz) || 1;
           const fs = 0.8 + ((sh.id + sim.tickCount) % 2) * 0.6;
-          this._m.compose(this._p.set(sx + dx / dl * 0.6, ey, sz + dz / dl * 0.6),
+          const fx2 = sx + dx / dl * 0.6, fz2 = sz + dz / dl * 0.6;
+          this._m.compose(this._p.set(fx2, ey, fz2),
             this._q.identity(), this._s.set(fs, fs, fs));
           this.flash.setMatrixAt(counts.flash++, this._m);
+          if (this.flashPoints.length < 3) this.flashPoints.push({ x: fx2, y: ey, z: fz2 });
         }
       }
     }

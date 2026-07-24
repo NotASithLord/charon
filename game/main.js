@@ -165,22 +165,52 @@ function updateRoomLightPool() {
   const cands = [];
   for (let n = 0; n < sim.graph.n; n++) {
     const L = world.roomLights[n];
-    if (!L || L.mode === 'steady' || L.mode === 'dead') continue;
-    if (L.x === undefined) continue;
-    if (sim.darkAt(n)) continue; // flood-held rooms are DARK, not flickering
+    if (!L || L.x === undefined) continue;
+    if (sim.darkAt(n)) continue; // flood-held rooms are DARK — nothing burns there
     const nd = sim.graph.node(n);
     if (nd.deck !== player.deck) continue;
+    const isEm = L.mode === 'dead' && L.emergency;
+    const isFlicker = L.mode === 'soft' || L.mode === 'harsh';
+    if (!isEm && !isFlicker) continue;
     const d2 = (L.x - player.x) * (L.x - player.x) + (L.z - player.z) * (L.z - player.z);
     if (d2 > 40 * 40) continue;
-    cands.push({ L, d2 });
+    cands.push({ L, d2, isEm });
   }
   cands.sort((a, b) => a.d2 - b.d2);
   for (let i = 0; i < roomLightPool.length; i++) {
     const P = roomLightPool[i];
     const c = cands[i];
     if (!c) { P.intensity = 0; continue; }
-    P.position.set(c.L.x, c.L.y - 0.25, c.L.z);
-    P.intensity = 7 * c.L.lvl;
+    if (c.isEm) {
+      // red battery lamp over the hatch — dim, warm, with a slow breathe
+      P.color.setHex(0xff4030);
+      P.position.set(c.L.em.x, c.L.em.y, c.L.em.z);
+      P.intensity = 2.6 + Math.sin(performance.now() * 0.0011 + c.L.phase) * 0.5;
+      P.distance = 11;
+    } else {
+      P.color.setHex(0xbfd4f2);
+      P.position.set(c.L.x, c.L.y - 0.25, c.L.z);
+      P.intensity = 7 * c.L.lvl;
+      P.distance = 16;
+    }
+  }
+}
+
+// GUNFIRE IS A LIGHT SOURCE (user rule): pooled muzzle lights ride the
+// nearest NPC flashes each frame — a dark room in a firefight strobes.
+const muzzleLightPool = Array.from({ length: 3 }, () => {
+  const L = new THREE.PointLight(0xffd9a0, 0, 9, 2.0);
+  scene.add(L);
+  return L;
+});
+function updateMuzzleLights() {
+  const pts = agents.flashPoints ?? [];
+  for (let i = 0; i < muzzleLightPool.length; i++) {
+    const P = muzzleLightPool[i];
+    const p = pts[i];
+    if (!p) { P.intensity = 0; continue; }
+    P.position.set(p.x, p.y, p.z);
+    P.intensity = 22;
   }
 }
 
@@ -889,17 +919,21 @@ function frame(now) {
   // faulty compartment strobes around you and a dead one goes near-black
   world.updateLights(now * 0.001);
   world.updateDarkness(sim, player.agent.node, dtReal);
-  const inDark = sim.darkAt(player.agent.node);
+  // TOTAL DARKNESS (user rule): an unlit room — flood-darkened OR just a dead
+  // fixture — has NO ambient wash at all. The only light is what actually
+  // emits: your flashlight, the red emergency lamps over the hatches, fire,
+  // and gunfire.
+  const inDark = sim.darkAt(player.agent.node) || world.lightLevel(player.agent.node) <= 0.1;
   const inFog = sim.fogAt(player.agent.node);
   // FLOOD DARKNESS (user rule): inside a held room the world's light dies —
   // your flashlight is all that works. Spore fog closes the flashlight's
   // throw down to a few meters and stains the air green-brown.
   const dimT = Math.min(1, dtReal * 3);
-  const ambTarget = inDark ? 0.03 : 1.1;
-  const hemiTarget = inDark ? 0.025 : 1.4;
+  const ambTarget = inDark ? 0.0 : 1.1;
+  const hemiTarget = inDark ? 0.0 : 1.4;
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
-  lamp.intensity = inDark ? 0.4 : 15 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  lamp.intensity = inDark ? 0.0 : 15 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
   torch.intensity += ((inDark ? 65 : 22) - torch.intensity) * dimT;
   torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
   {
@@ -919,6 +953,7 @@ function frame(now) {
   fire.update(dtReal, player.x, player.z);
   sparks.update(dtReal, now / 1000, player.x, player.z);
   updateRoomLightPool();
+  updateMuzzleLights();
   // EXPOSURE GRADE (user: the fog dimming should be very good): the camera
   // itself stops down in murk — fog crushes the frame, plain darkness dims
   // it, clean compartments read bright. Slow lerp so it feels like eyes
