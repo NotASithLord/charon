@@ -12,7 +12,7 @@ import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
 import { MA5, FRAG } from './fps-data.js';
 import { GameAudio } from './audio.js';
-import { FireFX } from './fx.js';
+import { FireFX, SparkFX } from './fx.js';
 import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
@@ -23,6 +23,11 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.35;
+// REAL SHADOWS (user: lighting needs a vast improvement) — soft-filtered
+// shadow maps; the flashlight is the shadow caster, so cover and bodies
+// throw moving shadows down the corridors as your beam sweeps.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070a);
@@ -38,10 +43,17 @@ const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
 scene.add(lamp);
 // FLASHLIGHT (user rule): in flood-held darkness this is all you have. In
 // spore fog its throw clamps to a few meters instead of the whole room.
-const torch = new THREE.SpotLight(0xeaf2ff, 0, 30, 0.46, 0.45, 1.2);
+// It casts REAL shadows now — a soft-penumbra spot, not a dumb hard cone.
+const torch = new THREE.SpotLight(0xeaf2ff, 0, 30, 0.46, 0.62, 1.5);
 const torchTarget = new THREE.Object3D();
 scene.add(torch, torchTarget);
 torch.target = torchTarget;
+torch.castShadow = true;
+torch.shadow.mapSize.set(1024, 1024);
+torch.shadow.camera.near = 0.3;
+torch.shadow.camera.far = 32;
+torch.shadow.bias = -0.002;
+torch.shadow.radius = 4; // soft edges on everything the beam throws
 
 // --- boot: random ship every run unless a seed is pinned in the URL
 // (?seed=... for a reproducible one), starting flood kept light (20
@@ -99,6 +111,79 @@ for (const d of world.doors) {
     d.mesh.material.emissiveIntensity = 0.9;
   }
 }
+// DAMAGE THROUGH THE SHIP (user: small high-fidelity fires + glow where it's
+// dark, sparking junctions): render-only sites seeded per run — the portal
+// event rattled the whole hull, so every deck carries a few small smolders
+// and shorted panels. Never on the player's spawn room.
+const sparks = new SparkFX(scene);
+{
+  const dmgRng = new RNG(seed + ':damage');
+  const byDeck = new Map();
+  for (const n of sim.graph.nodes) {
+    if (n.idx === sim.graph.breachNode || n.idx === player.agent.node) continue;
+    if (!['corridor'].includes(n.type) && !n.roles.some((r) => ['maintenance', 'cargo', 'engineering', 'power', 'hangar'].includes(r))) continue;
+    (byDeck.get(n.deck) ?? byDeck.set(n.deck, []).get(n.deck)).push(n);
+  }
+  for (const [deck, rooms] of byDeck) {
+    for (let i = 0; i < 2 && rooms.length; i++) {
+      const n = rooms[Math.floor(dmgRng.next() * rooms.length)];
+      const [wx, wz] = world.simToWorld(
+        n.x + dmgRng.range(-(n.w / 2 - 1.4), n.w / 2 - 1.4),
+        n.y + (dmgRng.chance(0.5) ? -(n.d / 2 - 0.9) : n.d / 2 - 0.9), deck);
+      if (dmgRng.chance(0.5)) fire.add(`dmg${deck}:${i}`, wx, wz, elevOf(deck), 0.45);
+      else sparks.add(wx, elevOf(deck) + 1.7, wz);
+    }
+  }
+}
+
+// shadow plumbing: the world is built — floors/ceilings receive, cover and
+// bodies cast. Additive/transparent FX never cast.
+scene.traverse((o) => {
+  if (!o.isMesh && !o.isInstancedMesh) return;
+  if (o.material?.transparent || o.material?.blending === THREE.AdditiveBlending) return;
+  o.receiveShadow = true;
+});
+for (const m of world.wallMeshes) { m.castShadow = true; }
+for (const set of [agents.civSet, agents.armedSet, agents.marineSet, agents.odstSet,
+  agents.infectionSet, agents.combatCivSet, agents.combatOdstSet]) {
+  for (const mesh of set) mesh.castShadow = true;
+}
+agents.carrier.castShadow = true;
+agents.rifle.castShadow = true;
+
+// REAL FLICKER SPILL (user: flickering lighting for real in each room): the
+// ceiling strips' flicker used to be emissive-only — visible on the fixture,
+// invisible on the room. A small pool of pooled point lights now rides the
+// nearest unsteady fixtures on your deck, so a guttering room actually
+// throws guttering light on its walls, floor and occupants.
+const roomLightPool = Array.from({ length: 6 }, () => {
+  const L = new THREE.PointLight(0xbfd4f2, 0, 16, 1.9);
+  scene.add(L);
+  return L;
+});
+function updateRoomLightPool() {
+  const cands = [];
+  for (let n = 0; n < sim.graph.n; n++) {
+    const L = world.roomLights[n];
+    if (!L || L.mode === 'steady' || L.mode === 'dead') continue;
+    if (L.x === undefined) continue;
+    if (sim.darkAt(n)) continue; // flood-held rooms are DARK, not flickering
+    const nd = sim.graph.node(n);
+    if (nd.deck !== player.deck) continue;
+    const d2 = (L.x - player.x) * (L.x - player.x) + (L.z - player.z) * (L.z - player.z);
+    if (d2 > 40 * 40) continue;
+    cands.push({ L, d2 });
+  }
+  cands.sort((a, b) => a.d2 - b.d2);
+  for (let i = 0; i < roomLightPool.length; i++) {
+    const P = roomLightPool[i];
+    const c = cands[i];
+    if (!c) { P.intensity = 0; continue; }
+    P.position.set(c.L.x, c.L.y - 0.25, c.L.z);
+    P.intensity = 7 * c.L.lvl;
+  }
+}
+
 // live flamethrower burns from the sim
 function syncBurnFires() {
   for (let n = 0; n < sim.graph.n; n++) {
@@ -832,6 +917,16 @@ function frame(now) {
   scene.background.setHex(inFog ? 0x151b0a : 0x05070a);
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
+  sparks.update(dtReal, now / 1000, player.x, player.z);
+  updateRoomLightPool();
+  // EXPOSURE GRADE (user: the fog dimming should be very good): the camera
+  // itself stops down in murk — fog crushes the frame, plain darkness dims
+  // it, clean compartments read bright. Slow lerp so it feels like eyes
+  // adjusting, not a switch.
+  {
+    const expTarget = inFog ? 0.9 : inDark ? 1.12 : 1.35;
+    renderer.toneMappingExposure += (expTarget - renderer.toneMappingExposure) * Math.min(1, dtReal * 1.6);
+  }
 
   // hit feedback fades
   if (hitFlash > 0) { hitFlash = Math.max(0, hitFlash - dtReal * 5); el('hitmarker').style.opacity = hitFlash.toFixed(2); }

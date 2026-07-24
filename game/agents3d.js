@@ -146,11 +146,30 @@ export class Agents3D {
     // cone, +X-forward like the carry rifle, one instance per light-bearer
     // standing in a dark room.
     {
-      const beamGeo = new THREE.ConeGeometry(0.55, 7, 10, 1, true);
+      const beamGeo = new THREE.ConeGeometry(0.55, 7, 12, 6, true);
       beamGeo.rotateZ(Math.PI / 2);      // point the cone along +X
       beamGeo.translate(3.5, 0, 0);      // apex at the carrier's hands
+      // NOT a dumb hard cone (user): a gradient sleeve — hot near the torch,
+      // dissolving with distance and toward the rim, with streaky dust so the
+      // volume reads as light in air rather than solid glowing plastic.
+      const bc = document.createElement('canvas');
+      bc.width = 128; bc.height = 128;
+      const bx = bc.getContext('2d');
+      const grad = bx.createLinearGradient(0, 128, 0, 0); // v=1 (apex) -> v=0 (mouth)
+      grad.addColorStop(0, 'rgba(255,255,255,0)');
+      grad.addColorStop(0.45, 'rgba(255,255,255,0.35)');
+      grad.addColorStop(1, 'rgba(255,255,255,0.9)');
+      bx.fillStyle = grad;
+      bx.fillRect(0, 0, 128, 128);
+      for (let i = 0; i < 26; i++) { // faint dust streaks along the throw
+        bx.fillStyle = `rgba(255,255,255,${0.04 + Math.random() * 0.08})`;
+        bx.fillRect(Math.random() * 128, 0, 1 + Math.random() * 2, 128);
+      }
+      const beamTex = new THREE.CanvasTexture(bc);
+      beamTex.wrapS = THREE.RepeatWrapping;
       const beamMat = new THREE.MeshBasicMaterial({
-        color: 0xd8e8ff, transparent: true, opacity: 0.10,
+        color: 0xd8e8ff, transparent: true, opacity: 0.16, map: beamTex,
+        alphaMap: beamTex,
         blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
       });
       this.beams = new THREE.InstancedMesh(beamGeo, beamMat, CAP);

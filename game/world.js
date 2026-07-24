@@ -356,7 +356,10 @@ export class World {
           new THREE.BoxGeometry(Math.min(3.4, n.w * 0.55), 0.07, 0.55), lmat);
         strip.position.set(wx, elev + roomH - 0.06, wz);
         this.scene.add(strip);
-        this.roomLights[n.idx] = { mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1 };
+        this.roomLights[n.idx] = {
+          mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1,
+          x: wx, y: elev + roomH - 0.06, z: wz, // fixture world position (light pool)
+        };
       }
 
       // walls with door openings, inset half a thickness (no z-fighting)
