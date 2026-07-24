@@ -461,21 +461,37 @@ var PARAMS = {
     // scalar rotational inertia for contact response
     driftLimitM: 1.5,
     // if the sim moves the body this far (dragged/relocated), drop the ragdoll
-    // launch off the killing blow (PLAN-ANIM-POLISH "hit-direction deaths")
-    launchSpeed: 4.2,
-    launchUp: 2.6,
-    spin: 7,
-    chargeBonus: 3.5,
+    // launch off the killing blow (PLAN-ANIM-POLISH "hit-direction deaths").
+    // Punchier than the first pass (user: "more drama, more punch to the bullet
+    // force") — a shot body jolts back and tumbles harder.
+    launchSpeed: 6.5,
+    launchUp: 3.2,
+    spin: 9,
+    chargeBonus: 4.5,
     // a charging/leaping form that dies carries its momentum into the tumble
-    corpseKnockSpeed: 3,
+    corpseKnockSpeed: 4,
     corpseHostileRangeM: 4,
     // a human corpse is thrown off the nearest hostile
+    // GRENADE / EXPLOSION deaths (user: "grenades should launch folks in a
+    // flailing manner"). Radial off the blast centre, scaled by proximity: big
+    // air, a violent tumble, and limbs whipping (blastKick >> limbKick). A blast
+    // also re-flings bodies already on the deck. blastRadiusPad extends the
+    // "caught in it" reach past the sim blast (cosmetic only); blastTtl keeps the
+    // blast live long enough for the deaths it causes to register; blastFalloff
+    // is the edge-vs-centre drop.
+    blastSpeed: 13,
+    blastUp: 6,
+    blastSpin: 17,
+    blastKick: 14,
+    blastFalloff: 0.55,
+    blastRadiusPad: 1.5,
+    blastTtl: 0.5,
     // limbs (the floppy flail about the JMS joint pivots)
     limbGrav: 9,
     limbBind: 2.5,
     limbDamp: 3,
     limbLimit: 1.4,
-    limbKick: 6,
+    limbKick: 7,
     subDt: 8333333e-9,
     maxSubSteps: 8,
     dtCap: 0.05
@@ -4346,7 +4362,11 @@ var Sim = class {
     return true;
   }
   setPathTo(a, target, layers, passFn) {
-    const path = this.graph.path(a.node, target, layers, passFn);
+    let pf = passFn;
+    if (a.faction === FACTION.MARINE && !a.odst && !a.escort) {
+      pf = (l, from, to) => (!passFn || passFn(l, from, to)) && !this.fogAt(to);
+    }
+    const path = this.graph.path(a.node, target, layers, pf);
     if (!path) return false;
     a.path = path;
     return true;
