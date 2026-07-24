@@ -87,6 +87,17 @@ export function initRun(seed, rng, P) {
   const breach = rng.pick(graph.nodesWithRole('crash_candidate'));
   graph.breachNode = breach;
   graph.unpowered[breach] = 1;
+
+  // fixture states, per room (moved from the renderer into the SIM — user
+  // rule: shooting in the dark is a MECHANIC now, not just a look). An
+  // unpowered room runs dead or on a harsh strobe; a powered one is usually
+  // steady with a tail of soft flicker / harsh strobe / dead fixtures.
+  for (const n of graph.nodes) {
+    const roll = rng.next();
+    graph.lightMode[n.idx] = graph.unpowered[n.idx]
+      ? (roll < 0.45 ? 3 : 2)
+      : roll < 0.6 ? 0 : roll < 0.78 ? 1 : roll < 0.9 ? 2 : 3;
+  }
   // no marine starts on the crash site OR in a room right next to it (user
   // rule) — the danger set is the breach plus its immediate walkable neighbours
   const breachDanger = new Set([breach]);

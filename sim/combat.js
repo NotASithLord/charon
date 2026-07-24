@@ -165,6 +165,15 @@ export function resolveCombat(sim, dt) {
         // The flood needs no light.
         if (sim.darkAt(node)) acc *= P.darkness.darkAccMult;
         if (sim.fogAt(node)) acc *= P.darkness.fogAccMult;
+        // FIXTURE STATE (user rule): a room whose mains are DEAD is
+        // flashlight-only shooting even before the flood touches it; a
+        // flickering fixture throws the lead off a little. Flood darkness
+        // above already prices in the worst case — don't stack both.
+        if (!sim.darkAt(node)) {
+          const lm = sim.graph.lightMode[node];
+          if (lm === 3) acc *= P.darkness.unlitAccMult;
+          else if (lm === 1 || lm === 2) acc *= P.darkness.flickerAccMult;
+        }
         if (sim.rng.chance(acc)) {
           if (best.faction === FACTION.INFECTION) { sim.removeAgent(best); sim.stats.infectionFormsKilled++; }
           else hurtFloodForm(sim, best, gun.dmg, false, s.id);

@@ -213,8 +213,12 @@ export const PARAMS = {
     // AND the player or an ODST holds the room for this long — and any flood
     // re-entry before that mark restarts the clock in full.
     fogLingerSec: 120,
-    darkAccMult: 0.75,   // flashlight fighting
+    darkAccMult: 0.75,   // flashlight fighting (flood-darkened room)
     fogAccMult: 0.8,     // stacked on top in spore fog (net ~0.6)
+    // fixture-state penalties (user rule): shooters in a DEAD-lit room fight
+    // by flashlight; in a flickering one their lead is thrown off a little
+    unlitAccMult: 0.7,
+    flickerAccMult: 0.9,
     fogViewM: 8,         // how far the player's flashlight cuts into the fog
   },
   marineDoctrine: {

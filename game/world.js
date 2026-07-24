@@ -342,12 +342,11 @@ export class World {
         this.darkVeils[n.idx] = veil;
       }
 
-      // ceiling light strip with a per-run seeded state
+      // ceiling light strip — fixture state comes from the SIM now (graph
+      // lightMode, rolled in init): what dims your view is exactly what
+      // costs the marines their aim (combat.js fixture-state penalties)
       {
-        const roll = this._fxRng.next();
-        const mode = g.unpowered[n.idx]
-          ? (roll < 0.45 ? 'dead' : 'harsh')
-          : roll < 0.6 ? 'steady' : roll < 0.78 ? 'soft' : roll < 0.9 ? 'harsh' : 'dead';
+        const mode = ['steady', 'soft', 'harsh', 'dead'][g.lightMode[n.idx]];
         const lmat = new THREE.MeshStandardMaterial({
           color: 0x8fa4c8, emissive: 0xbfd8ff,
           emissiveIntensity: mode === 'dead' ? 0.04 : 1.25, roughness: 0.4, metalness: 0.3,

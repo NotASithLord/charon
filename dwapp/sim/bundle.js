@@ -353,9 +353,13 @@ var PARAMS = {
     // re-entry before that mark restarts the clock in full.
     fogLingerSec: 120,
     darkAccMult: 0.75,
-    // flashlight fighting
+    // flashlight fighting (flood-darkened room)
     fogAccMult: 0.8,
     // stacked on top in spore fog (net ~0.6)
+    // fixture-state penalties (user rule): shooters in a DEAD-lit room fight
+    // by flashlight; in a flickering one their lead is thrown off a little
+    unlitAccMult: 0.7,
+    flickerAccMult: 0.9,
     fogViewM: 8
     // how far the player's flashlight cuts into the fog
   },
@@ -681,6 +685,7 @@ var ShipGraph = class {
       return { upper, lower, edge: e };
     });
     this.unpowered = new Uint8Array(this.n);
+    this.lightMode = new Uint8Array(this.n);
     this.breachNode = -1;
     this.burningUntil = new Float64Array(this.n);
     this.trailNode = new Float32Array(this.n);
@@ -1295,6 +1300,10 @@ function initRun(seed, rng, P) {
   const breach = rng.pick(graph.nodesWithRole("crash_candidate"));
   graph.breachNode = breach;
   graph.unpowered[breach] = 1;
+  for (const n of graph.nodes) {
+    const roll = rng.next();
+    graph.lightMode[n.idx] = graph.unpowered[n.idx] ? roll < 0.45 ? 3 : 2 : roll < 0.6 ? 0 : roll < 0.78 ? 1 : roll < 0.9 ? 2 : 3;
+  }
   const breachDanger = /* @__PURE__ */ new Set([breach]);
   for (const { to } of graph.neighbors(breach, ["std"], null)) breachDanger.add(to);
   const agents = [];
@@ -3790,6 +3799,11 @@ function resolveCombat(sim2, dt) {
         if (best.faction === FACTION.INFECTION) acc2 *= P.combat.podAccMult;
         if (sim2.darkAt(node)) acc2 *= P.darkness.darkAccMult;
         if (sim2.fogAt(node)) acc2 *= P.darkness.fogAccMult;
+        if (!sim2.darkAt(node)) {
+          const lm = sim2.graph.lightMode[node];
+          if (lm === 3) acc2 *= P.darkness.unlitAccMult;
+          else if (lm === 1 || lm === 2) acc2 *= P.darkness.flickerAccMult;
+        }
         if (sim2.rng.chance(acc2)) {
           if (best.faction === FACTION.INFECTION) {
             sim2.removeAgent(best);

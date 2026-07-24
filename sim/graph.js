@@ -104,6 +104,10 @@ export class ShipGraph {
     });
 
     this.unpowered = new Uint8Array(this.n);
+    // per-room fixture state, rolled in init (0 steady / 1 soft flicker /
+    // 2 harsh strobe / 3 dead). SIM state, not render dressing: marine
+    // accuracy reads it (combat.js) and the 3D game lights rooms from it.
+    this.lightMode = new Uint8Array(this.n);
     this.breachNode = -1;
     this.burningUntil = new Float64Array(this.n); // sim-time until which node burns
     // Reserved for post-POC body-gathering blood trails (companion spec §5.4):
