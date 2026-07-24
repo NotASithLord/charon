@@ -359,12 +359,13 @@ export class World {
           mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1,
           x: wx, y: elev + roomH - 0.06, z: wz, // fixture world position (light pool)
         };
-        // EMERGENCY LUMINAIRES (user rule: total darkness except real
-        // sources). Where the mains are dead, small red battery lamps hang
-        // ABOVE EACH HATCH — the one place a warship actually mounts them,
-        // so a dead room reads as black space with red-marked exits. They
-        // die with the room if the flood takes it (updateDarkness).
-        if (mode === 'dead') {
+        // EMERGENCY LUMINAIRES (user rule: it's a DEAD SHIP on secondary
+        // power — every room carries discrete emergency fixtures, not an
+        // atmospheric wash). Small red battery lamps hang ABOVE EACH HATCH
+        // in EVERY room — in a lit room they're the accents of a ship on
+        // emergency power; in a dead room they're the only thing burning.
+        // They die with the room if the flood takes it (updateDarkness).
+        {
           const emMat = new THREE.MeshStandardMaterial({
             color: 0x2a0e0a, emissive: 0xff3018, emissiveIntensity: 1.6, roughness: 0.6,
           });
@@ -383,7 +384,7 @@ export class World {
             if (!anchor) anchor = { x: px, y: elev + roomH - 0.6, z: pz };
           }
           const L = this.roomLights[n.idx];
-          L.emergency = true;
+          L.emergency = mode === 'dead'; // pool throws red light only where the mains are out
           L.emMat = emMat;
           L.em = anchor ?? { x: wx, y: elev + roomH - 0.5, z: wz };
         }
@@ -1025,13 +1026,14 @@ export class World {
       const veil = this.darkVeils[n];
       if (!veil) continue;
       const fog = sim.fogAt(n);
-      // unlit rooms are veiled from OUTSIDE too (user: darkness is total in
-      // an unlit room) — a dead-fixture room reads as black through its
-      // doorway, its red hatch lamps the only thing bleeding through
+      // unlit rooms are veiled from OUTSIDE too — but NOT flat black (user:
+      // light transfers between rooms). A dead-fixture room's veil is thin
+      // enough that the doorway spill light pooling inside it reads through;
+      // flood-held murk stays near-opaque (the growth eats the light).
       const fixtureDead = (this.roomLights[n]?.lvl ?? 1) <= 0.1;
       const target = n === playerNode ? 0
         : sim.darkAt(n) ? (fog ? 0.96 : 0.88)
-        : fixtureDead ? 0.8 : 0;
+        : fixtureDead ? 0.5 : 0;
       const m = veil.material;
       m.opacity += (target - m.opacity) * Math.min(1, dt * 2.5);
       veil.visible = m.opacity > 0.03;

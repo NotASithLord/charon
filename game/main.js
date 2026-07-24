@@ -156,7 +156,7 @@ agents.rifle.castShadow = true;
 // invisible on the room. A small pool of pooled point lights now rides the
 // nearest unsteady fixtures on your deck, so a guttering room actually
 // throws guttering light on its walls, floor and occupants.
-const roomLightPool = Array.from({ length: 6 }, () => {
+const roomLightPool = Array.from({ length: 8 }, () => {
   const L = new THREE.PointLight(0xbfd4f2, 0, 16, 1.9);
   scene.add(L);
   return L;
@@ -170,10 +170,10 @@ function updateRoomLightPool() {
     const nd = sim.graph.node(n);
     if (nd.deck !== player.deck) continue;
     const isEm = L.mode === 'dead' && L.emergency;
-    const isFlicker = L.mode === 'soft' || L.mode === 'harsh';
-    if (!isEm && !isFlicker) continue;
     const d2 = (L.x - player.x) * (L.x - player.x) + (L.z - player.z) * (L.z - player.z);
     if (d2 > 40 * 40) continue;
+    // every powered fixture is a real light now (dead ship, secondary power —
+    // discrete sources instead of an ambient wash); dead rooms get their red
     cands.push({ L, d2, isEm });
   }
   cands.sort((a, b) => a.d2 - b.d2);
@@ -190,9 +190,50 @@ function updateRoomLightPool() {
     } else {
       P.color.setHex(0xbfd4f2);
       P.position.set(c.L.x, c.L.y - 0.25, c.L.z);
-      P.intensity = 7 * c.L.lvl;
+      P.intensity = (c.L.mode === 'steady' ? 6.5 : 7 * c.L.lvl);
       P.distance = 16;
     }
+  }
+}
+
+// LIGHT TRANSFERS BETWEEN ROOMS (user rule): a lit room next to a dark one
+// doesn't end at a flat black doorway — its fixtures push a pool of light a
+// little way into the dark side. A small pool of spill lights sits just
+// inside the dark room at each lit->dark doorway near the player.
+const doorSpillPool = Array.from({ length: 3 }, () => {
+  const L = new THREE.PointLight(0xaec6e8, 0, 7, 2.0);
+  scene.add(L);
+  return L;
+});
+function updateDoorSpill() {
+  const cands = [];
+  for (const d of world.doors) {
+    if (d.deck !== player.deck) continue;
+    const dx = d.x - player.x, dz = d.z - player.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 > 30 * 30) continue;
+    const a = d.edge.a, b = d.edge.b;
+    const litA = world.lightLevel(a) > 0.1 && !sim.darkAt(a);
+    const litB = world.lightLevel(b) > 0.1 && !sim.darkAt(b);
+    if (litA === litB) continue; // both lit or both dark — no gradient
+    const darkN = litA ? b : a;
+    if (sim.darkAt(darkN)) continue; // the growth eats the spill
+    const nd = sim.graph.node(darkN);
+    const [cx2, cz2] = world.simToWorld(nd.x, nd.y, nd.deck);
+    const ox = cx2 - d.x, oz = cz2 - d.z, ol = Math.hypot(ox, oz) || 1;
+    cands.push({
+      x: d.x + (ox / ol) * 1.4, z: d.z + (oz / ol) * 1.4,
+      y: elevOf(d.deck) + 1.7, d2,
+      open: d.open01, // a shut door spills nothing
+    });
+  }
+  cands.sort((a, b) => a.d2 - b.d2);
+  for (let i = 0; i < doorSpillPool.length; i++) {
+    const P = doorSpillPool[i];
+    const c = cands[i];
+    if (!c || c.open < 0.05) { P.intensity = 0; continue; }
+    P.position.set(c.x, c.y, c.z);
+    P.intensity = 2.2 * c.open; // swells as the door slides up
   }
 }
 
@@ -929,11 +970,15 @@ function frame(now) {
   // your flashlight is all that works. Spore fog closes the flashlight's
   // throw down to a few meters and stains the air green-brown.
   const dimT = Math.min(1, dtReal * 3);
-  const ambTarget = inDark ? 0.0 : 1.1;
-  const hemiTarget = inDark ? 0.0 : 1.4;
+  // DEAD SHIP (user rule): even "lit" compartments run on secondary power —
+  // the old full ambient wash is gone. A dim structural floor keeps geometry
+  // readable; the actual LIGHT comes from discrete sources: the fixture
+  // pool, the red hatch lamps, doorway spill, fires, muzzles, your torch.
+  const ambTarget = inDark ? 0.0 : 0.3;
+  const hemiTarget = inDark ? 0.0 : 0.38;
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
-  lamp.intensity = inDark ? 0.0 : 15 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  lamp.intensity = inDark ? 0.0 : 7 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
   torch.intensity += ((inDark ? 65 : 22) - torch.intensity) * dimT;
   torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
   {
@@ -953,6 +998,7 @@ function frame(now) {
   fire.update(dtReal, player.x, player.z);
   sparks.update(dtReal, now / 1000, player.x, player.z);
   updateRoomLightPool();
+  updateDoorSpill();
   updateMuzzleLights();
   // EXPOSURE GRADE (user: the fog dimming should be very good): the camera
   // itself stops down in murk — fog crushes the frame, plain darkness dims
