@@ -111,7 +111,15 @@ export const PARAMS = {
   },
   armory: {
     selfArmChance: 0.25,   // chance an unarmed civilian runs for the armory once panic breaks out
-    stock: 10,             // rifles left on the rack — first come, first served
+    stock: 16,             // rifles racked — first come, first served (once unsealed)
+    // THE SEALED RESERVE (user rule): the armory starts LOCKED. Inside: the
+    // racked rifles + grenade crates, one flamethrower, and an ODST squad
+    // standing by with more armor than a line marine. The seal releases only
+    // when the ship is genuinely losing — a strong hive AND a thin line.
+    odstSquadSize: 5,
+    odstHp: 85,                // vs line marine 45 — hardened ODST plate
+    unlockCombatForms: 20,     // flood must field at least this many combat forms
+    unlockMarinesLeft: 10,     // and the line squads must be down to this few
   },
   belief: {
     decayRatePerSec: 0.1,   // MASTER DIAL (lambda) — smart vs unfair

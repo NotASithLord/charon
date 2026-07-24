@@ -110,6 +110,11 @@ export class Agents3D {
     this.civSet = mkSet('civilian');
     this.armedSet = mkSet('crew_armed');
     this.marineSet = mkSet('marine');
+    // ODST reserve: the marine mesh in blackout plate — the material tint
+    // multiplies the texture, so green BDU armor reads as matte-black ODST
+    // hardsuit with a darkened visor (user: armory ODSTs need their own skin)
+    this.odstSet = mkSet('marine');
+    for (const mesh of this.odstSet) mesh.material.color.setHex(0x3f434c);
     this.infectionSet = mkSet('infection');
     this.combatCivSet = mkSet('combat_civ');
     this.combatOdstSet = mkSet('combat_odst');
@@ -235,10 +240,22 @@ export class Agents3D {
   // joint pivots (shoulder/hip from the JMS skeleton) with a procedural
   // cycle picked by the sim's animation clip. Pure render-side — the sim's
   // deterministic state is untouched.
-  _swingFor(part, clip, t, id) {
+  _swingFor(part, clip, t, id, hold) {
     const ph = t * (clip === CLIP.RUN ? 11 : clip === CLIP.ATTACK ? 9 : clip === CLIP.WRITHE ? 13 : 7.2)
       + (id % 7) * 0.9; // strangers walk out of step
     const s = Math.sin(ph);
+    // TWO HANDS ON THE WEAPON (user: marines should actually hold their guns).
+    // A rifle carrier's arms never hang or swing free: right arm to the grip,
+    // left arm crossed further to the fore-stock — matching _rifleAt's held
+    // pose — raised toward level when fighting, with a soft bob when walking.
+    if (hold && (part === 'armL' || part === 'armR')) {
+      const base = part === 'armR' ? -0.6 : -0.86;
+      const aim = clip === CLIP.ATTACK ? -0.3 : clip === CLIP.RUN ? -0.12 : 0;
+      const bob = clip === CLIP.WALK || clip === CLIP.RUN
+        ? Math.sin(ph * 2) * 0.05
+        : Math.sin(ph * 0.35 + (part === 'armR' ? 0.6 : 0)) * 0.03; // breathing
+      return base + aim + bob;
+    }
     switch (clip) {
       case CLIP.WALK:
         if (part === 'legL') return s * 0.5;
@@ -268,17 +285,28 @@ export class Agents3D {
         if (part === 'legR') return -s * 0.35;
         if (part === 'head') return Math.sin(ph * 1.3) * 0.25;
         return 0;
-      default: // IDLE — breathe
-        if (part === 'armL' || part === 'armR') return Math.sin(ph * 0.35 + (part === 'armR' ? 1 : 0)) * 0.04;
+      default: {
+        // IDLE — a body at rest is never rigid (user: standing all weird and
+        // stiff): slow breath in the arms, an occasional unhurried look around,
+        // and a static per-body stance offset so no two read as clones.
+        const set2 = ((id * 1597334677) >>> 0) / 4294967296 - 0.5;
+        if (part === 'armL' || part === 'armR') {
+          return Math.sin(ph * 0.35 + (part === 'armR' ? 1 : 0)) * 0.05
+            + set2 * (part === 'armR' ? 0.06 : -0.05); // asymmetric rest
+        }
+        if (part === 'head') return Math.sin(ph * 0.13 + id) * 0.1 + set2 * 0.08; // scanning
+        if (part === 'legL') return set2 * 0.05;  // weight on one foot
+        if (part === 'legR') return -set2 * 0.05;
         return 0;
+      }
     }
   }
 
   // write base × (pivot-anchored swing) into every part mesh of a set
-  _stampAnimated(set, i, clip, animT, id) {
+  _stampAnimated(set, i, clip, animT, id, hold = false) {
     for (const mesh of set) {
       const pivot = mesh.userData.pivot;
-      const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(mesh.userData.part, clip, animT, id) : 0;
+      const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(mesh.userData.part, clip, animT, id, hold) : 0;
       if (!ang) { mesh.setMatrixAt(i, this._m); continue; }
       this._mRot.makeRotationZ(ang);
       this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
@@ -312,9 +340,10 @@ export class Agents3D {
     // age recent blasts (a death registers a frame or two after the boom)
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
-    const counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
+    const counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
     let clip = 0, animT = 0, curId = 0;
     const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId);
+    const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId, true); // rifle carriers
 
     const seen = new Set();
     for (let i = 0; i < buf.count; i++) {
@@ -473,7 +502,7 @@ export class Agents3D {
         }
         case FACTION.ARMED: {
           this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
-          stamp(this.armedSet, counts.armed++);
+          stampHold(this.armedSet, counts.armed++);
           this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (sim.darkAt(buf.nodeId[i])) {
@@ -484,7 +513,8 @@ export class Agents3D {
         }
         case FACTION.MARINE: {
           this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
-          stamp(this.marineSet, counts.marine++);
+          if (flags & FLAG.ODST) stampHold(this.odstSet, counts.odst++);
+          else stampHold(this.marineSet, counts.marine++);
           this._rifleAt(wx, elev + 1.25, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (sim.darkAt(buf.nodeId[i])) {
@@ -649,7 +679,7 @@ export class Agents3D {
     this.floodFlash.instanceMatrix.needsUpdate = true;
 
     for (const [set, c] of [[this.civSet, counts.civ], [this.armedSet, counts.armed],
-    [this.marineSet, counts.marine], [this.infectionSet, counts.infection],
+    [this.marineSet, counts.marine], [this.odstSet, counts.odst], [this.infectionSet, counts.infection],
     [this.combatCivSet, counts.combatCiv], [this.combatOdstSet, counts.combatOdst]]) {
       for (const mesh of set) { mesh.count = c; mesh.instanceMatrix.needsUpdate = true; }
     }

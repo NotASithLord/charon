@@ -22,6 +22,7 @@ export const FLAG = {
   ARMED_HOST: 1 << 10, // combat form whose host carried a weapon (render with gun)
   CHARGING: 1 << 11,   // combat form in a lunge/charge burst (render sprint)
   LEAPING: 1 << 13,    // combat form airborne mid-leap (render lifted off the floor)
+  ODST: 1 << 14,       // armory-reserve ODST (render in black plate)
 };
 
 // Anim clip table (§9). Index = animClip in the buffer.

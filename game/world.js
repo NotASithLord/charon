@@ -99,6 +99,129 @@ export class World {
     return out;
   }
 
+  // DECK PLATING (texture pass): worn steel plates — per-plate value drift,
+  // corner rivets, scuff scratches, grime pools, and the odd hazard-striped
+  // plate edge. Seeded PRNG so every boot bakes the same ship.
+  _deckTex(base, line, seed = 7) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 512;
+    const x = c.getContext('2d');
+    let s = seed >>> 0;
+    const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    x.fillStyle = base; x.fillRect(0, 0, 512, 512);
+    const cell = 128;
+    for (let px = 0; px < 512; px += cell) for (let py = 0; py < 512; py += cell) {
+      // plate value drift
+      const v = (rnd() - 0.5) * 26;
+      x.fillStyle = `rgba(${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${Math.abs(v) / 255})`;
+      x.fillRect(px + 2, py + 2, cell - 4, cell - 4);
+      // rivets at the corners
+      x.fillStyle = 'rgba(8,10,14,0.8)';
+      for (const [ox, oy] of [[10, 10], [cell - 10, 10], [10, cell - 10], [cell - 10, cell - 10]]) {
+        x.beginPath(); x.arc(px + ox, py + oy, 3, 0, Math.PI * 2); x.fill();
+      }
+      // occasional hazard edge stripe (a lift plate, a stow lane)
+      if (rnd() < 0.12) {
+        x.save();
+        x.strokeStyle = 'rgba(180,150,40,0.28)'; x.lineWidth = 6;
+        x.setLineDash([14, 12]);
+        x.beginPath(); x.moveTo(px + 4, py + cell - 8); x.lineTo(px + cell - 4, py + cell - 8); x.stroke();
+        x.restore();
+      }
+    }
+    // plate seams
+    x.strokeStyle = line; x.lineWidth = 3;
+    for (let i = 0; i <= 512; i += cell) {
+      x.beginPath(); x.moveTo(i, 0); x.lineTo(i, 512); x.stroke();
+      x.beginPath(); x.moveTo(0, i); x.lineTo(512, i); x.stroke();
+    }
+    // scuffs: long faint scratches with traffic
+    for (let i = 0; i < 46; i++) {
+      const sx0 = rnd() * 512, sy0 = rnd() * 512, ang = rnd() * Math.PI, len = 30 + rnd() * 120;
+      x.strokeStyle = `rgba(${rnd() < 0.5 ? '210,220,235' : '10,12,16'},${0.05 + rnd() * 0.1})`;
+      x.lineWidth = 1 + rnd() * 1.5;
+      x.beginPath(); x.moveTo(sx0, sy0);
+      x.lineTo(sx0 + Math.cos(ang) * len, sy0 + Math.sin(ang) * len); x.stroke();
+    }
+    // grime pools
+    for (let i = 0; i < 22; i++) {
+      const gx = rnd() * 512, gy = rnd() * 512, r = 12 + rnd() * 42;
+      const grad = x.createRadialGradient(gx, gy, 2, gx, gy, r);
+      grad.addColorStop(0, `rgba(6,8,10,${0.1 + rnd() * 0.14})`);
+      grad.addColorStop(1, 'rgba(6,8,10,0)');
+      x.fillStyle = grad;
+      x.beginPath(); x.arc(gx, gy, r, 0, Math.PI * 2); x.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  // WALL PANELING (texture pass): staggered panel bands with seam shadows,
+  // conduit runs, vent grilles, warning placards and rust weeps — the
+  // corridor walls stop reading as flat grid wallpaper.
+  _wallTex(base, line, seed = 13) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 512;
+    const x = c.getContext('2d');
+    let s = seed >>> 0;
+    const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    x.fillStyle = base; x.fillRect(0, 0, 512, 512);
+    // horizontal bands of staggered panels
+    const bandH = 128;
+    for (let by = 0, row = 0; by < 512; by += bandH, row++) {
+      const off = (row % 2) * 96;
+      for (let bx = -off; bx < 512; bx += 192) {
+        const v = (rnd() - 0.5) * 20;
+        x.fillStyle = `rgba(${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${v > 0 ? 255 : 0},${Math.abs(v) / 255})`;
+        x.fillRect(bx + 2, by + 2, 188, bandH - 4);
+        // panel bolts
+        x.fillStyle = 'rgba(10,12,18,0.7)';
+        for (const [ox, oy] of [[10, 12], [182, 12], [10, bandH - 12], [182, bandH - 12]]) {
+          x.beginPath(); x.arc(bx + ox, by + oy, 2.4, 0, Math.PI * 2); x.fill();
+        }
+        const roll = rnd();
+        if (roll < 0.16) { // vent grille
+          x.fillStyle = 'rgba(8,10,14,0.55)';
+          for (let k = 0; k < 5; k++) x.fillRect(bx + 60, by + 34 + k * 12, 70, 5);
+        } else if (roll < 0.26) { // warning placard
+          x.fillStyle = 'rgba(160,130,30,0.35)';
+          x.fillRect(bx + 76, by + 44, 40, 26);
+          x.strokeStyle = 'rgba(20,20,20,0.5)'; x.lineWidth = 2;
+          x.strokeRect(bx + 76, by + 44, 40, 26);
+        }
+      }
+      // band seam shadow
+      x.fillStyle = 'rgba(5,7,10,0.5)';
+      x.fillRect(0, by, 512, 3);
+    }
+    // conduit runs: two thin pipes across the sheet
+    for (const cy of [88, 344]) {
+      x.fillStyle = 'rgba(20,26,36,0.85)';
+      x.fillRect(0, cy, 512, 7);
+      x.fillStyle = 'rgba(120,135,160,0.35)';
+      x.fillRect(0, cy, 512, 2);
+      for (let bx2 = 24; bx2 < 512; bx2 += 96) { // pipe clamps
+        x.fillStyle = 'rgba(50,58,72,0.9)';
+        x.fillRect(bx2, cy - 2, 8, 11);
+      }
+    }
+    // rust weeps from random bolt lines
+    for (let i = 0; i < 12; i++) {
+      const wx2 = rnd() * 512, wy2 = rnd() * 400, len = 24 + rnd() * 80;
+      const grad = x.createLinearGradient(wx2, wy2, wx2, wy2 + len);
+      grad.addColorStop(0, `rgba(96,58,30,${0.18 + rnd() * 0.15})`);
+      grad.addColorStop(1, 'rgba(96,58,30,0)');
+      x.fillStyle = grad;
+      x.fillRect(wx2 - 1.5, wy2, 3 + rnd() * 2, len);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
   _panelTex(base, line, cell = 64) {
     const c = document.createElement('canvas');
     c.width = c.height = 256;
@@ -136,8 +259,8 @@ export class World {
 
   _build() {
     const g = this.graph;
-    const floorTexBase = this._panelTex('#242c3a', '#181f2b');
-    const wallTexBase = this._panelTex('#3a465c', '#2a3446', 128);
+    const floorTexBase = this._deckTex('#242c3a', '#161d28');
+    const wallTexBase = this._wallTex('#3a465c', '#2a3446');
     const mkFloorMat = (w, d, tint) => {
       const tex = floorTexBase.clone();
       tex.needsUpdate = true;
@@ -315,6 +438,7 @@ export class World {
     this._buildShaftGrates();
     this._buildVentGrates();
     this._buildProps();
+    this._buildArmoryInterior();
   }
 
   // ---- REAL SHAFTS (user note: the portal mechanisms end here) ----
@@ -592,7 +716,7 @@ export class World {
     const KITS = {
       cargo: { n: 5, w: 1.5, h: 1.15 }, maintenance: { n: 3, w: 1.1, h: 1.0 },
       engineering: { n: 3, w: 1.2, h: 1.3 }, power: { n: 3, w: 1.2, h: 1.3 },
-      systems: { n: 2, w: 1.1, h: 1.2 }, armory: { n: 2, w: 1.3, h: 1.0 },
+      systems: { n: 2, w: 1.1, h: 1.2 }, // (armory has its own neat interior — _buildArmoryInterior)
       mess: { n: 3, w: 1.4, h: 0.85 }, quarters: { n: 3, w: 1.0, h: 0.6 },
       hangar: { n: 4, w: 1.7, h: 1.3 }, medbay: { n: 2, w: 1.1, h: 0.85 },
       vehicles: { n: 3, w: 1.6, h: 1.2 },
@@ -639,6 +763,75 @@ export class World {
     }
   }
 
+  // THE ARMORY (user rule: sealed reserve). Not hashed clutter — a proper
+  // arms room: rifle racks in a neat rank along the walls, grenade crates
+  // stacked square, ammo cans in rows, and ONE flamethrower on its stand.
+  // All deterministic, all collidable.
+  _buildArmoryInterior() {
+    const g = this.graph;
+    const idx = g.byId.get('armory');
+    if (idx === undefined) return;
+    const n = g.node(idx);
+    const [cx, cz] = this.simToWorld(n.x, n.y, n.deck);
+    const elev = elevOf(n.deck);
+    const rackMat = new THREE.MeshStandardMaterial({ color: 0x3a4149, roughness: 0.6, metalness: 0.7 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: 0x181c20, roughness: 0.5, metalness: 0.6 });
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x4a5240, roughness: 0.85, metalness: 0.15 });
+    const ammoMat = new THREE.MeshStandardMaterial({ color: 0x5c5636, roughness: 0.7, metalness: 0.3 });
+    const tankMat = new THREE.MeshStandardMaterial({ color: 0x7a2a20, roughness: 0.45, metalness: 0.6 });
+    const add = (mesh, sx, sy, hw, hd, solid = true) => {
+      this.scene.add(mesh);
+      if (solid) {
+        this.wallMeshes.push(mesh);
+        this.props.push({ deck: n.deck, x: sx, y: sy, hw, hd });
+      }
+    };
+    // rifle racks: a rank of three along the aft (-Z) wall, rifles standing up
+    for (let r = 0; r < 3; r++) {
+      const rx = cx - n.w / 2 + 2.2 + r * 3.4;
+      const rz = cz - n.d / 2 + 0.65;
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.85, 0.4), rackMat);
+      frame.position.set(rx, elev + 0.925, rz);
+      const [sx, sy] = this.worldToSim(rx, rz, n.deck);
+      add(frame, sx, sy, 1.4, 0.45);
+      for (let k = 0; k < 6; k++) { // the racked rifles, muzzle-up in a row
+        const gun = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.16), gunMat);
+        gun.position.set(rx - 1.05 + k * 0.42, elev + 1.05, rz + 0.28);
+        this.scene.add(gun);
+      }
+    }
+    // grenade crates: a tight 2x2 block, one stacked — square and dressed
+    for (let c = 0; c < 5; c++) {
+      const bx = cx + n.w / 2 - 1.3 - (c % 2) * 0.95;
+      const bz = cz - n.d / 2 + 0.85 + Math.floor((c % 4) / 2) * 0.75;
+      const by = c === 4 ? elev + 0.78 : elev + 0.26;
+      const crate = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.52, 0.6), crateMat);
+      crate.position.set(bx, by, bz);
+      const [sx, sy] = this.worldToSim(bx, bz, n.deck);
+      add(crate, sx, sy, 0.55, 0.45, c < 4);
+    }
+    // ammo cans: two neat rows on a low shelf along the fore (+Z) wall
+    const shelfZ = cz + n.d / 2 - 0.6;
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.5, 0.7), rackMat);
+    shelf.position.set(cx - 1.0, elev + 0.25, shelfZ);
+    { const [sx, sy] = this.worldToSim(cx - 1.0, shelfZ, n.deck); add(shelf, sx, sy, 2.9, 0.55); }
+    for (let k = 0; k < 8; k++) {
+      const can = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.3, 0.3), ammoMat);
+      can.position.set(cx - 3.4 + k * 0.68, elev + 0.65, shelfZ);
+      this.scene.add(can);
+    }
+    // the flamethrower: red twin tanks on a stand, alone — you notice it
+    const fx = cx + n.w / 2 - 1.1, fz = cz + n.d / 2 - 1.1;
+    const stand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.85, 0.55), rackMat);
+    stand.position.set(fx, elev + 0.425, fz);
+    { const [sx, sy] = this.worldToSim(fx, fz, n.deck); add(stand, sx, sy, 0.5, 0.42); }
+    for (const off of [-0.15, 0.15]) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.75, 10), tankMat);
+      tank.position.set(fx + off, elev + 1.25, fz);
+      this.scene.add(tank);
+    }
+  }
+
   _buildDoors() {
     const g = this.graph;
     for (const e of g.edges) {
@@ -666,6 +859,7 @@ export class World {
         emissiveIntensity: e.locked ? 0.7 : 0.4,
         roughness: 0.5, metalness: 0.6,
       });
+      mat.userData.lockedLook = !!e.locked; // updateDoors clears the red look on unlock
       const panel = new THREE.Mesh(
         new THREE.BoxGeometry(DOOR_W + 0.1, CLEAR_H - 0.15, 0.14), mat);
       panel.rotation.y = -phi; // sim direction (cos phi, sin phi) -> world x/z
@@ -819,6 +1013,14 @@ export class World {
   updateDoors(dt, movers) {
     const r2 = DOORS.openRadius * DOORS.openRadius;
     for (const d of this.doors) {
+      // a door whose lock RELEASED mid-game (the armory seal) sheds its red
+      // glow — the panel material was baked from e.locked at build time
+      if (!d.edge.locked && d.mesh.material.userData.lockedLook) {
+        d.mesh.material.userData.lockedLook = false;
+        d.mesh.material.color.setHex(0x55637d);
+        d.mesh.material.emissive.setHex(0x101820);
+        d.mesh.material.emissiveIntensity = 0.4;
+      }
       let want = 0;
       if (!d.edge.locked) {
         for (const m of movers) {

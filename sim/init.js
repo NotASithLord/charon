@@ -114,8 +114,9 @@ export function initRun(seed, rng, P) {
       'grandStair', // deck 4 — holding the engineering stairwell down to the hangar
       'crewB',      // deck 2 — a squad berthed forward with the crew
       'fireCtl',    // deck 3 — the fire-control watch
-      'armory',     // deck 3 — the armory
       'launchStbd', // deck 5 — a posting on the flight deck
+      // (the armory is NOT a line post — it starts SEALED with the ODST
+      // reserve inside; see the sealed-reserve block below)
     ];
     const marinePosts = marinePostIds.map((id) => graph.byId.get(id));
     for (let si = 0; si < M.squads; si++) {
@@ -137,13 +138,43 @@ export function initRun(seed, rng, P) {
       }
       squads.push(squad);
     }
-    // the ship's ONE flamethrower goes to a member of the first squad (barracks)
+    // the line's flamethrower goes to a member of the first squad (barracks)
     const flamerSquad = squads[0];
     if (flamerSquad) {
       const holder = agents.find((a) => a.id === flamerSquad.members[0]);
       holder.flamer = true;
       holder.fuel = P.flamethrower.fuelUnits;
     }
+  }
+
+  // THE SEALED RESERVE (user rule): the armory's blastdoor is LOCKED from
+  // tick zero. Racked rifles, grenade crates, one flamethrower — and an ODST
+  // squad standing by inside, harder than any line marine. The seal releases
+  // only when the ship is genuinely losing (sim.js _armoryWatch): the hive
+  // fielding 20+ combat forms with 10 or fewer line marines still standing.
+  {
+    const armoryIdx = graph.byId.get('armory');
+    const door = graph.edges.find((e) => (e.a === armoryIdx || e.b === armoryIdx) && e.lockable);
+    if (door) door.locked = true;
+    const squad = {
+      id: squads.length, members: [], objective: null, morale: 1,
+      respondingTo: null, phase1: true, odst: true, // phase1 done — no opening sweep
+    };
+    for (let m = 0; m < P.armory.odstSquadSize; m++) {
+      const a = makeAgent(FACTION.MARINE, armoryIdx, graph);
+      a.hp = a.maxHp = P.armory.odstHp;
+      a.hasRadio = true;
+      a.squad = squad.id;
+      a.odst = true;
+      scatterInRoom(a, graph.node(armoryIdx), rng);
+      squad.members.push(a.id);
+      agents.push(a);
+    }
+    // the reserve's flamethrower waits in the racks with its operator
+    const lead = agents.find((x) => x.id === squad.members[0]);
+    lead.flamer = true;
+    lead.fuel = P.flamethrower.fuelUnits;
+    squads.push(squad);
   }
 
   // permanent top-deck garrison (user note): marines standing guard on the
@@ -201,11 +232,11 @@ export function initRun(seed, rng, P) {
   // NEVER on the breach (a battery can be the crash site now) — that flank's
   // watch died in the crash; they're among the breach corpses instead.
   {
-    const armory = graph.byId.get('armory');
     const corridors = graph.nodes.filter((n) => n.type === 'corridor' && n.idx !== breach).map((n) => n.idx);
     const softRooms = graph.nodes.filter((n) => n.roles.includes('soft') && n.idx !== breach).map((n) => n.idx);
     // the flank weapon stations are manned (user: side areas shouldn't read
-    // empty) — the 50mm batteries and fire control hold a watch of armed crew
+    // empty) — the 50mm batteries and fire control hold a watch of armed crew.
+    // NOBODY spawns in the armory: it's sealed with the ODST reserve inside.
     const battleStations = graph.nodes.filter((n) =>
       (n.roles.includes('battery') || (n.roles.includes('marines') && n.roles.includes('systems')))
       && n.idx !== breach)
@@ -213,8 +244,7 @@ export function initRun(seed, rng, P) {
     const armedCount = P.crew.armedCrew;
     for (let i = 0; i < armedCount; i++) {
       const r = i / armedCount;
-      const node = r < 0.3 ? armory
-        : (r < 0.55 && battleStations.length) ? rng.pick(battleStations)
+      const node = (r < 0.55 && battleStations.length) ? rng.pick(battleStations)
         : r < 0.75 ? rng.pick(corridors) : rng.pick(softRooms);
       const a = makeAgent(FACTION.ARMED, node, graph);
       a.hp = a.maxHp = P.combat.armed.hp;

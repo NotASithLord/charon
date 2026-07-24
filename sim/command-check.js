@@ -9,7 +9,9 @@ import { CMD } from './commands.js';
 
 function scriptedRun(seed) {
   const sim = new Sim(seed);
-  const target = sim.graph.byId.get('armory');
+  // NOT the armory — that starts SEALED now (ODST reserve), so an ordered
+  // squad could never arrive; medbay exercises the same order machinery
+  const target = sim.graph.byId.get('medbay');
   let arrivedTick = -1, cmdIssued = 0, sealedAt = -1;
   for (let i = 0; i < 15 * 60 * 3; i++) {
     const s0 = sim.squads[0];

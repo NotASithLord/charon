@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HALO CHARON // GAME</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #05070a; overflow: hidden; }
+  body { font: 13px/1.4 "SF Mono", "Cascadia Code", Consolas, monospace; color: #c8d2e0; }
+  #c { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hud { position: absolute; z-index: 5; pointer-events: none; }
+  #topbar { top: 12px; left: 14px; }
+  #topbar b { color: #e8eef7; font-size: 15px; }
+  #room { color: #7fd1a0; font-size: 15px; font-weight: 700; }
+  #vitals { top: 12px; right: 430px; text-align: right; }
+  #hp { font-size: 16px; font-weight: 700; color: #7fd1a0; }
+  #hp.low { color: #ff6a4d; }
+  #crosshair {
+    top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+    border: 1px solid rgba(255,255,255,0.65); border-radius: 50%;
+  }
+  /* the activity log: prominent, long, always visible (user note) */
+  #logwrap {
+    top: 0; right: 0; bottom: 0; width: 410px;
+    background: linear-gradient(to left, rgba(7,10,14,0.92), rgba(7,10,14,0.78));
+    border-left: 1px solid #1c2430; padding: 12px 14px 14px;
+    display: flex; flex-direction: column;
+  }
+  #logwrap h2 { font-size: 12px; color: #6a7686; letter-spacing: 1.5px; margin-bottom: 8px; }
+  #log { flex: 1; overflow-y: auto; font-size: 13.5px; line-height: 1.5; }
+  #log .ev { padding: 1.5px 0; color: #9aa7b8; }
+  #log .t { color: #4a5568; }
+  #log .ev-hive, #log .ev-carrier { color: #7fd1a0; }
+  #log .ev-rampage { color: #ff6a4d; font-weight: 700; }
+  #log .ev-convert { color: #b15fd9; }
+  #log .ev-radio { color: #6aa4f0; }
+  #log .ev-combat { color: #d0a24a; }
+  #log .ev-ambush, #log .ev-bait { color: #ffd23f; }
+  #log .ev-duct { color: #8a7fb0; font-style: italic; }
+  #log .ev-end { color: #fff; font-weight: 700; }
+  #overlay {
+    position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(4, 6, 9, 0.88); text-align: center; cursor: pointer;
+  }
+  #overlay h1 { font-size: 28px; color: #e8eef7; letter-spacing: 2px; }
+  #overlay p { color: #8a97a8; max-width: 520px; }
+  #overlay .keys { color: #6a7686; font-size: 12px; }
+  #overlay.hidden { display: none; }
+  #pinned {
+    top: 58%; left: 50%; transform: translateX(-50%);
+    color: #ff6a4d; font-weight: 700; font-size: 18px; display: none;
+  }
+  #vitals .bar {
+    width: 170px; height: 9px; margin: 3px 0 0 auto;
+    background: rgba(20,26,36,0.8); border: 1px solid #2a3547; border-radius: 2px;
+    overflow: hidden;
+  }
+  #armorBar { height: 100%; width: 100%; background: #6fb0f0; transition: width 0.1s; }
+  #healthBar { height: 100%; width: 100%; background: #d8574a; transition: width 0.1s; }
+  #hpText { color: #8fb5e8; font-size: 12px; margin-top: 2px; }
+  #ammo { color: #e8d98c; font-size: 16px; font-weight: 700; margin-top: 4px; }
+  #hint {
+    top: 64%; left: 50%; transform: translateX(-50%); display: none;
+    color: #e8d98c; font-size: 15px; font-weight: 700;
+    background: rgba(8, 11, 15, 0.75); padding: 6px 14px; border-radius: 5px;
+    border: 1px solid #3a3616;
+  }
+
+  #hitmarker {
+    position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%, -50%) rotate(45deg); pointer-events: none; opacity: 0;
+  }
+  #hitmarker::before, #hitmarker::after {
+    content: ""; position: absolute; background: #ff5348;
+  }
+  #hitmarker::before { left: 10px; top: 0; width: 2px; height: 22px; }
+  #hitmarker::after { left: 0; top: 10px; width: 22px; height: 2px; }
+  #dmgdir {
+    position: absolute; left: 50%; top: 50%; width: 130px; height: 130px;
+    margin: -65px 0 0 -65px; pointer-events: none; opacity: 0; border-radius: 50%;
+  }
+  #dmgdir::before {
+    content: ""; position: absolute; left: 50%; top: -6px; margin-left: -22px;
+    width: 44px; height: 16px; border-radius: 50% 50% 0 0;
+    background: radial-gradient(ellipse at 50% 100%, rgba(255,40,32,0.9), rgba(255,40,32,0));
+  }
+  #tracker {
+    position: absolute; left: 14px; bottom: 14px; width: 150px; height: 150px;
+    opacity: 0.88; pointer-events: none;
+  }
+  #frags {
+    position: absolute; right: 16px; bottom: 44px; color: #9fd4ff;
+    font: 14px/1 "SF Mono", Menlo, monospace; letter-spacing: 1px; text-align: right;
+  }
+  #order {
+    position: absolute; right: 16px; bottom: 22px; color: #6a8fb5;
+    font: 11px/1 "SF Mono", Menlo, monospace; letter-spacing: 1px; text-align: right;
+  }
+  /* MARINE TACNET map view (M): the ops picture — schematic always known,
+     contents only where marine teams have eyes */
+  #mapview {
+    position: absolute; top: 0; left: 0; right: 410px; bottom: 0; z-index: 8;
+    background: rgba(4, 6, 9, 0.94);
+  }
+  #mapview.mv-hidden { display: none; }
+  #mapcanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #maptitle {
+    position: absolute; top: 10px; left: 14px; color: #8fb5e8;
+    font-size: 13px; font-weight: 700; letter-spacing: 2px;
+  }
+  #maplegend {
+    position: absolute; bottom: 10px; left: 14px; right: 14px; color: #4a5568;
+    font-size: 11px;
+  }
+  #mapside {
+    position: absolute; top: 34px; left: 14px; width: 252px;
+    background: rgba(7, 10, 14, 0.85); border: 1px solid #1c2430; border-radius: 4px;
+    padding: 8px 10px; font-size: 11.5px; max-height: 70%; overflow-y: auto;
+  }
+  #mapside .mrow { padding: 3px 0; border-bottom: 1px solid #141a24; }
+  #mapside .mrow:last-child { border-bottom: none; }
+  #mapside .mhead { display: flex; justify-content: space-between; color: #6a7686; }
+  #mapside .mhead b { color: #c8d2e0; }
+  #mapside .mrow > span:first-child { color: #8fb5e8; }
+  #mapside .mrow b { color: #e8eef7; }
+  #mapside .pips { margin-left: 6px; }
+  #mapside .pips i {
+    display: inline-block; width: 9px; height: 9px; margin-right: 2px;
+    border-radius: 1px;
+  }
+  #mapside .obj { color: #6a7686; font-size: 10.5px; }
+  #mapside .obj em { color: #ff6a4d; font-style: normal; font-weight: 700; }
+  /* INTRO (user request): a military report that types itself out — any key
+     or click reveals it all, then a click deploys you */
+  #intro {
+    position: absolute; inset: 0; z-index: 12; background: #020409;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  #introText {
+    width: min(700px, 86vw); white-space: pre-wrap;
+    font-size: 14px; line-height: 1.68; color: #9fc8ac;
+    text-shadow: 0 0 9px rgba(110, 220, 155, 0.22);
+  }
+  #introText::after {
+    content: "▊"; color: #b8e8c8; animation: introblink 0.9s steps(1) infinite;
+  }
+  #introMission {
+    width: min(700px, 86vw); margin-top: 10px; white-space: pre-wrap;
+    font-size: 17px; font-weight: 700; letter-spacing: 2px; color: #ff6a4d;
+    text-shadow: 0 0 12px rgba(255, 90, 60, 0.35);
+  }
+  #introHint {
+    position: absolute; bottom: 26px; left: 0; right: 0; text-align: center;
+    color: #4a5568; font-size: 12px; letter-spacing: 1.5px;
+  }
+  #introHint.ready { color: #e8d98c; font-size: 14px; animation: introblink 1.1s steps(1) infinite; }
+  @keyframes introblink { 50% { opacity: 0.15; } }
+</style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="hud" id="topbar"><b>UNSC SATURN DEVOURING</b> · <span id="clock">0:00</span> · <span id="room">—</span></div>
+  <div class="hud" id="vitals">
+    <div class="bar"><div id="armorBar"></div></div>
+    <div class="bar"><div id="healthBar"></div></div>
+    <div id="hpText">50 | 45</div>
+    <div id="deckLabel">DECK —</div>
+    <div id="ammo">60 / 240</div>
+  </div>
+  <div class="hud" id="crosshair"></div>
+  <div class="hud" id="hint"></div>
+  <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
+  <div id="hitmarker"></div>
+  <div id="dmgdir"></div>
+  <canvas id="tracker" width="150" height="150"></canvas>
+  <div id="frags">4 FRAG</div>
+  <div id="order">FIRETEAM: FOLLOW</div>
+  <div id="mapview" class="mv-hidden">
+    <canvas id="mapcanvas"></canvas>
+    <div id="maptitle">MARINE TACNET — UNSC SATURN DEVOURING</div>
+    <div id="mapside"></div>
+    <div id="maplegend">M close · the schematic is always known — contacts, bodies and lights-out
+      show only where a marine team (or you) has eyes; red ◇ = last-seen report, fading with age</div>
+  </div>
+  <div class="hud" id="logwrap">
+    <h2>SHIP ACTIVITY</h2>
+    <div id="log"></div>
+  </div>
+  <div id="intro">
+    <div id="introText"></div>
+    <div id="introMission"></div>
+    <div id="introHint">any key or click — skip</div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">HALO CHARON</h1>
+    <p id="ovText">You are a lone crew member aboard the UNSC Saturn Devouring, a Charon-class frigate. Something hit the hangar deck.
+      The ship's marines, crew — and whatever came aboard — act entirely on their own. Survive.</p>
+    <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · G frag · E scavenge ammo · M tac map · 1 follow / 2 hold / 3 advance (fireteam) ·
+      ladders/stairs: stand at one, press L — always takes you to the other end · your fireteam follows you · ESC frees the mouse</p>
+  </div>
+  <script type="module" src="./bundle.js"></script>
+</body>
+</html>

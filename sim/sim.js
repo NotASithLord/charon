@@ -49,8 +49,11 @@ export class Sim {
     this.firstSweepCleared = false;
     this.burnOrderNode = -1; // last DESIGNATE_BURN target (companion §2.2)
     this.lastStand = false;
-    this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison).length;
+    // the ODST reserve doesn't count toward last-stand math — it's a sealed
+    // asset, not part of the line the lastStand fraction is measured against
+    this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison && !a.odst).length;
     this.armoryStock = this.P.armory.stock; // rifles on the rack, first come first served
+    this.armoryLocked = true; // the sealed reserve (init.js locked the blastdoor)
     this.outcome = null;
 
     this.stats = {
@@ -332,6 +335,7 @@ export class Sim {
       this._checkSelfArming();
       this._checkLastStand();
       this._lastStandStragglers();
+      this._armoryWatch();
       this.stats.conversionsRound = 0;
       this._expireCalls();
     }
@@ -441,8 +445,32 @@ export class Sim {
   // Once panic breaks out shipwide (before any last stand), some unarmed
   // civilians make a run for the armory and arm themselves — first come,
   // first served on the remaining rifles (user note).
+  // THE SEAL RELEASES (user rule): once the hive fields enough combat forms
+  // AND the marine line has worn thin, the armory blastdoor unlocks and the
+  // ODST reserve deploys — racks, grenades and the flamethrower behind them
+  // suddenly in play for whoever lives to reach them.
+  _armoryWatch() {
+    if (!this.armoryLocked) return;
+    let combat = 0, marines = 0;
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0) continue;
+      if (a.faction === FACTION.COMBAT && !a.downed) combat++;
+      else if (a.faction === FACTION.MARINE && !a.downed && !a.odst) marines++;
+    }
+    if (combat < this.P.armory.unlockCombatForms || marines > this.P.armory.unlockMarinesLeft) return;
+    this.armoryLocked = false;
+    const armoryIdx = this.graph.byId.get('armory');
+    for (const e of this.graph.edges) {
+      if ((e.a === armoryIdx || e.b === armoryIdx) && e.locked) e.locked = false;
+    }
+    // the reserve steps out ready to fight — its squad joins the strategic
+    // pool (the humans.js locked-gate stops applying the moment this flips)
+    this.log('radio', 'ARMORY SEAL RELEASED — ODST reserve deploying. Racks are open.');
+  }
+
   _checkSelfArming() {
     if (this._armingRolled || !this.floodKnown) return;
+    if (this.armoryLocked) return; // the crew knows the armory is sealed — no run on a locked door
     this._armingRolled = true;
     const armory = this.graph.byId.get('armory');
     let n = 0;
@@ -1533,6 +1561,7 @@ export class Sim {
       if (a.inShaftAmbush !== undefined) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;
+      if (a.odst) flags |= FLAG.ODST;
       if (a.move && a.move.layer === 'shaft' && a.move.hidden) flags |= FLAG.IN_SHAFT;
       // armed corpses carry the flag too so the renderer can lay the right
       // body down (and drop a rifle beside it)

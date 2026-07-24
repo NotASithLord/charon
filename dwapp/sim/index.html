@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halo Charon — Sim Harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #07090c; color: #c8d2e0;
+    font: 13px/1.45 "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 12px; background: #0c1015; border-bottom: 1px solid #1c2430;
+  }
+  header h1 { font-size: 14px; color: #7fd1a0; letter-spacing: 1px; margin-right: 8px; }
+  header .muted { color: #4a5568; font-size: 11px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #canvasWrap { flex: 1; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #legend {
+    position: absolute; left: 10px; bottom: 10px; z-index: 5;
+    background: rgba(8, 11, 15, 0.9); border: 1px solid #1c2430; border-radius: 6px;
+    padding: 8px 11px; font-size: 10.5px; line-height: 1.5; max-width: 250px;
+    color: #9aa7b8; pointer-events: none;
+  }
+  #legend.hidden { display: none; }
+  #legend .lgTitle { color: #4a5568; font-size: 9px; letter-spacing: 0.6px; margin: 6px 0 2px; }
+  #legend .lgTitle:first-child { margin-top: 0; }
+  #legend .lgGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  #legend .lgGrid span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  #legend .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+  #legend .dot.hollow { background: transparent; border: 1.4px solid; }
+  #legend .dot.ring { background: transparent; border: 1.4px solid; }
+  #legend .sq { width: 7px; height: 7px; flex: 0 0 auto; }
+  #legend .ln { width: 16px; height: 0; flex: 0 0 auto; border-top-width: 2px; border-top-style: solid; }
+  #legend .ln.solid { border-color: #3a4a61; }
+  #legend .ln.shaft { border-top-width: 3px; border-color: #7a6a2f; border-top-style: dashed; }
+  #legend .ln.vent { border-top-width: 1px; border-color: #2f6b46; border-top-style: dotted; }
+  #legend .ln.vent.grey { border-color: #2a2f36; }
+  #legend .mk { width: 8px; height: 8px; flex: 0 0 auto; }
+  #legend .mk.lock { background: #c0392b; }
+  #legend .mk.amb { width: 7px; height: 7px; background: #ffd23f; transform: rotate(45deg); }
+  #legend .mk.breach { border-radius: 50%; border: 2px solid #ff5533; }
+  #legend .mk.ring { border-radius: 50%; background: transparent; border: 1.4px solid; }
+  #legend .mk.ring.red { border-color: #f05a3c; }
+  #side {
+    width: 420px; border-left: 1px solid #1c2430; background: #0c1015;
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #stats { padding: 10px 12px; border-bottom: 1px solid #1c2430; }
+  #stats .row { display: flex; justify-content: space-between; padding: 1px 0; }
+  #stats .row b { color: #e8eef7; font-weight: 600; }
+  #stats .sep { border-top: 1px dashed #1c2430; margin: 5px 0; }
+  #cmd { padding: 8px 12px; border-bottom: 1px solid #1c2430; background: #0a0d11; }
+  #cmd .cmdhdr { color: #6a7686; font-size: 11px; margin-bottom: 6px; }
+  #cmd .cmdrow { display: flex; gap: 5px; margin-bottom: 5px; align-items: center; flex-wrap: wrap; }
+  #cmd select, #cmd button { font-size: 11px; padding: 3px 6px; }
+  #cmd .muted { color: #4a5568; font-size: 10px; }
+  #log { flex: 2.5; overflow-y: auto; padding: 8px 12px; font-size: 13px; line-height: 1.45; }
+  #stats { font-size: 11.5px; }
+  #stats .row { padding: 0; }
+  #log .ev-command { color: #e0b060; }
+  #log .ev { padding: 1px 0; color: #8a97a8; }
+  #log .t { color: #4a5568; }
+  #log .ev-hive, #log .ev-carrier { color: #7fd1a0; }
+  #log .ev-rampage { color: #ff6a4d; font-weight: 700; }
+  #log .ev-convert { color: #b15fd9; }
+  #log .ev-radio { color: #6aa4f0; }
+  #log .ev-combat { color: #d0a24a; }
+  #log .ev-ambush, #log .ev-bait { color: #ffd23f; }
+  #log .ev-end { color: #fff; font-weight: 700; }
+  button, input, select {
+    background: #131a24; color: #c8d2e0; border: 1px solid #263140;
+    border-radius: 4px; padding: 4px 9px; font: inherit; font-size: 12px;
+  }
+  button:hover { background: #1a2432; cursor: pointer; }
+  button.active { background: #23405c; border-color: #3d6a9c; }
+  input[type=range] { padding: 0; width: 90px; }
+  input[type=number] {
+    width: 64px; padding: 4px 6px; text-align: right;
+    -moz-appearance: textfield; appearance: textfield;
+  }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  label.chk { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #8a97a8; }
+  .dials {
+    display: flex; gap: 14px; padding: 6px 12px; background: #0a0d11;
+    border-bottom: 1px solid #1c2430; font-size: 11px; flex-wrap: wrap; align-items: center;
+  }
+  .dial { display: flex; align-items: center; gap: 6px; }
+  .dial span.val { color: #7fd1a0; min-width: 34px; }
+  .dial span.name { color: #6a7686; }
+  .grp { display: inline-flex; align-items: center; gap: 6px; color: #6a7686; }
+  .grp label { display: inline-flex; align-items: center; gap: 3px; color: #8a97a8; }
+  input.cnt { width: 46px; padding: 3px 5px; }
+  #deckBtns button { padding: 3px 7px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>HALO CHARON // SIM</h1>
+    <label>seed <input id="seed" size="10" value="charon-1"></label>
+    <button id="randomSeed" title="new random seed">🎲</button>
+    <button onclick="location.href='../game/?seed=' + encodeURIComponent(document.getElementById('seed').value)"
+      title="drop into this ship in first person" style="background:#23405c;border-color:#3d6a9c">▶ PLAY 3D</button>
+    <button id="restart">restart ▶</button>
+    <button id="pause">pause ⏸</button>
+    <button id="step">step round ⏭</button>
+    <label>speed <input id="speed" type="range" min="-2" max="3" step="0.5" value="0"> <span id="speedVal">1×</span></label>
+    <span id="deckBtns">
+      deck
+      <button data-deck="0" class="active">all</button><button data-deck="1">1</button><button data-deck="2">2</button><button data-deck="3">3</button><button data-deck="4">4</button><button data-deck="5">5</button>
+    </span>
+    <span>
+      <label class="chk"><input type="checkbox" id="ovInfluence" checked>influence</label>
+      <label class="chk"><input type="checkbox" id="ovShafts" checked>shafts</label>
+      <label class="chk"><input type="checkbox" id="ovVents" checked>vents</label>
+      <label class="chk"><input type="checkbox" id="ovCalls" checked>calls</label>
+      <label class="chk"><input type="checkbox" id="ovFire" checked>fire fx</label>
+      <label class="chk"><input type="checkbox" id="ovTracker">tracker</label>
+      <label class="chk"><input type="checkbox" id="ovBeliefs">hive beliefs</label>
+      <label class="chk"><input type="checkbox" id="ovLabels" checked>labels</label>
+      <label class="chk"><input type="checkbox" id="ovConns">conn IDs</label>
+    </span>
+    <button id="legendToggle" class="active">legend</button>
+  </header>
+  <div class="dials" title="exact counts — what you set is what you get; positions re-roll each run (applies on restart / Enter)">
+    <b style="color:#6a7686">SCENARIO</b>
+    <span class="grp">flood:
+      <label>infection <input class="cnt" id="startInf" type="number" min="0" max="60" value="20"></label>
+      <label>combat <input class="cnt" id="startCf" type="number" min="0" max="20" value="0"></label>
+      <label>carriers <input class="cnt" id="startCar" type="number" min="0" max="6" value="0"></label>
+    </span>
+    <span class="grp">marines:
+      <label>squads <input class="cnt" id="inSquads" type="number" min="0" max="8" value="4"></label>
+      <label>× size <input class="cnt" id="inSquadSize" type="number" min="1" max="8" value="4"></label>
+      <label>patrols <input class="cnt" id="inPatrols" type="number" min="0" max="6" value="3"></label>
+      <label>garrison <input class="cnt" id="inGarrison" type="number" min="0" max="12" value="6"></label>
+    </span>
+    <span class="grp">crew:
+      <label>civilians <input class="cnt" id="inCivilians" type="number" min="0" max="200" value="96"></label>
+      <label>armed <input class="cnt" id="inArmed" type="number" min="0" max="60" value="21"></label>
+      <label>maint <input class="cnt" id="inMaint" type="number" min="0" max="60" value="44"></label>
+    </span>
+    <span class="grp">bodies:
+      <label>ship <input class="cnt" id="inBodies" type="number" min="0" max="400" value="69"></label>
+      <label>breach <input class="cnt" id="inBreachBodies" type="number" min="0" max="40" value="10"></label>
+    </span>
+  </div>
+  <div class="dials">
+    <b style="color:#6a7686">MASTER DIALS</b>
+    <span class="dial"><span class="name">belief decay λ</span><input id="dialLambda" type="range" min="0.02" max="0.4" step="0.01" value="0.1"><span class="val" id="dialLambdaV">0.10</span></span>
+    <span class="dial"><span class="name">prediction q</span><input id="dialQ" type="range" min="0" max="1" step="0.05" value="0.7"><span class="val" id="dialQV">0.70</span></span>
+    <span class="dial"><span class="name">marine radio</span><input id="dialRadio" type="range" min="0.2" max="1" step="0.05" value="0.5"><span class="val" id="dialRadioV">0.50</span></span>
+    <span class="muted">(live — no restart needed; seed replay only exact if dials untouched)</span>
+  </div>
+  <main>
+    <div id="left"><div id="canvasWrap"><canvas id="canvas"></canvas>
+      <div id="legend">
+        <div class="lgTitle">CAMERA <span style="color:#39424c">scroll = zoom · drag = pan · dbl-click = whole ship</span></div>
+        <div class="lgTitle">AGENTS <span style="color:#39424c">(zoom in for full icons)</span></div>
+        <div class="lgGrid">
+          <span><i class="dot" style="background:#f2f2f2"></i>civilian</span>
+          <span><i class="dot" style="background:#e8c840"></i>armed crew (sidearm out)</span>
+          <span><i class="sq" style="background:#4d8ef0;border-radius:50% 50% 20% 20%"></i>marine (helmet + rifle)</span>
+          <span><i class="dot" style="background:#51ff6a"></i>infection form (tentacled pod)</span>
+          <span><i class="sq" style="background:#c0392b;clip-path:polygon(50% 0,100% 100%,0 100%)"></i>combat form (whip arm; gun if host had one)</span>
+          <span><i class="dot" style="background:#b15fd9"></i>carrier (belly swells to rupture)</span>
+          <span><i class="ln solid" style="border-color:#6d6d6d;width:10px"></i>corpse (lying)</span>
+        </div>
+        <div class="lgTitle">IN-ROOM ACTION</div>
+        <div class="lgGrid">
+          <span><i class="dot" style="background:#fff6dc"></i>muzzle flash + tracer</span>
+          <span><i class="ln solid" style="border-color:#c0392b"></i>charge streak (lunge)</span>
+          <span><i class="ln solid" style="border-color:#51ff6a"></i>grab in progress</span>
+          <span><i class="dot ring" style="border-color:#51ff6a"></i>body converting</span>
+          <span><i class="dot ring" style="border-color:#b15fd9"></i>rooting to carrier</span>
+        </div>
+        <div class="lgTitle">STATE MARKERS</div>
+        <div class="lgGrid">
+          <span><i class="dot hollow" style="border-color:#c0392b"></i>downed (revivable)</span>
+          <span><i class="dot" style="background:#111;border:1px solid #333"></i>burned (dead economy)</span>
+          <span><i class="dot ring" style="border-color:#aaffbb"></i>form transiting a vent</span>
+          <span><i class="dot ring" style="border-color:#ffd23f"></i>lying in ambush</span>
+          <span><i class="sq" style="background:#ff7733"></i>flamethrower</span>
+          <span><i class="sq" style="background:#fff"></i>panicked</span>
+        </div>
+        <div class="lgTitle">SHIP <span style="color:#39424c">(a real deck plan — doors sit on shared walls)</span></div>
+        <div class="lgGrid">
+          <span><i class="sq" style="background:#9fb4d4;height:4px"></i>door (opening in wall)</span>
+          <span><i class="sq" style="background:#c0392b;height:4px"></i>locked door</span>
+          <span><i class="dot ring" style="border-color:#2fd7f0"></i>L — lift pad (between decks)</span>
+          <span><i class="dot ring" style="border-color:#f0a52f"></i>K — ladder pad</span>
+          <span><i class="ln shaft"></i>maintenance shaft</span>
+          <span><i class="ln vent"></i>vent (infection only)</span>
+          <span><i class="ln vent grey"></i>blocked vent</span>
+          <span><i class="mk amb"></i>ambush corner</span>
+          <span><i class="mk breach"></i>breach room</span>
+          <span><i class="mk ring red"></i>distress call</span>
+        </div>
+        <div class="lgTitle">CONNECTION IDs <span style="color:#39424c">(toggle “conn IDs”)</span></div>
+        <div class="lgGrid">
+          <span>H- hatch</span><span>B- blastdoor</span>
+          <span>L- lift</span><span>K- ladder</span>
+          <span>S- maint shaft</span><span>V- vent</span>
+        </div>
+        <div class="lgTitle">NODE HEATMAP (influence)</div>
+        <div class="lgGrid">
+          <span><i class="dot" style="background:#2a6bd8"></i>human-controlled</span>
+          <span><i class="dot" style="background:#3fae4a"></i>flood-controlled</span>
+          <span><i class="dot" style="background:#161b23;border:1px solid #3d3d4d"></i>unpowered (dimmed)</span>
+        </div>
+      </div>
+    </div></div>
+    <div id="side">
+      <div id="stats"></div>
+      <div id="cmd">
+        <div class="cmdhdr">TACTICAL COMMAND <span class="muted">(companion §0 — orders enter the tick-stamped queue)</span></div>
+        <div class="cmdrow">
+          <select id="cmdSquad" title="squad"></select>
+          <select id="cmdType">
+            <option value="MOVE_TO">MOVE_TO</option>
+            <option value="GUARD">GUARD</option>
+            <option value="PATROL">PATROL (deck)</option>
+            <option value="SET_CALL_POLICY">CALLS: ignore</option>
+            <option value="RELEASE">RELEASE</option>
+          </select>
+          <select id="cmdNode"></select>
+          <button id="cmdIssue">issue ▸</button>
+        </div>
+        <div class="cmdrow">
+          <select id="cmdDoor"></select>
+          <button id="cmdSeal">seal</button>
+          <button id="cmdOpen">open</button>
+          <span class="muted">click a node dropdown then Designate: <button id="cmdBurn">burn ▸</button></span>
+        </div>
+      </div>
+      <div id="log"></div>
+    </div>
+  </main>
+  <script type="module" src="./bundle.js"></script>
+</body>
+</html>

@@ -23,6 +23,16 @@ npm run serve          # python http.server on :8000 (any static server works)
 | `/vat/` | VAT crowd renderer, 3 LOD tiers, §1 gate capture | WebGPU (Chrome/Edge 113+, Safari 18+) |
 | `/fused/` | Build step 9: VAT renderer fed by the live sim agent buffer | WebGPU |
 
+### Run it as a peerd dwapp — no server, no build
+
+`dwapp/` in this repo is the **pre-composed, ready-to-install** output: each of
+`dwapp/game`, `dwapp/sim`, `dwapp/fused` is a complete app of exactly two text
+files (`index.html` + a fully self-contained `bundle.js` with every mesh,
+texture and sound baked in as data/procedural). Point peerd at the folder
+(entry: `index.html`) or paste the two files into a peerd app — nothing to
+serve, nothing to build. Regenerate after code changes with
+`node scripts/build-dwapp.mjs` (writes `dist/dwapp/`, then copy over `dwapp/`).
+
 Headless (no browser, used for tuning and CI):
 
 ```sh

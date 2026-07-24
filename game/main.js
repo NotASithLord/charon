@@ -520,14 +520,56 @@ function stepFrags(dt) {
 
 // --- motion tracker (review P0): the classic 25 m sweep. Moving contacts
 // only — hold still and you vanish from it, exactly like the games. ---
+// UNRELIABLE (user rule: the radar lies like the comms do). It statics out
+// about half the time in ragged windows, and it HALLUCINATES — brief phantom
+// blips, friendly-yellow and hostile-red both, where nothing stands. You can
+// never fully trust it: a clean sweep might be static, a red blip might be
+// nothing, and the thing that kills you might never have painted.
 const trk = el('tracker').getContext('2d');
-function drawTracker() {
+const trkState = { static: false, until: 0, phantoms: [], nextPhantom: 0 };
+function trackerUnreliability(now) {
+  if (now >= trkState.until) {
+    // ~50% duty cycle: ragged clear windows vs ragged static windows
+    trkState.static = !trkState.static;
+    trkState.until = now + (trkState.static ? 1200 + Math.random() * 3200 : 1400 + Math.random() * 3000);
+  }
+  // phantom contacts spawn mostly as a window flips (interference artifacts)
+  if (now >= trkState.nextPhantom) {
+    trkState.nextPhantom = now + 2600 + Math.random() * 5200;
+    const n = 1 + (Math.random() < 0.3 ? 1 : 0);
+    for (let i = 0; i < n; i++) {
+      trkState.phantoms.push({
+        ang: Math.random() * Math.PI * 2,          // bearing in tracker space
+        dist: 0.25 + Math.random() * 0.7,          // fraction of range
+        hostile: Math.random() < 0.55,
+        until: now + 400 + Math.random() * 1100,   // brief — then it's just gone
+      });
+    }
+  }
+  for (let i = trkState.phantoms.length - 1; i >= 0; i--) {
+    if (now >= trkState.phantoms[i].until) trkState.phantoms.splice(i, 1);
+  }
+}
+function drawTracker(now) {
   const R = 75, RANGE = 25;
+  trackerUnreliability(now);
   trk.clearRect(0, 0, 150, 150);
   trk.fillStyle = 'rgba(10,16,22,0.75)';
   trk.beginPath(); trk.arc(R, R, 74, 0, Math.PI * 2); trk.fill();
   trk.strokeStyle = 'rgba(110,160,210,0.35)';
   for (const rr of [25, 50, 74]) { trk.beginPath(); trk.arc(R, R, rr, 0, Math.PI * 2); trk.stroke(); }
+  if (trkState.static) {
+    // the sweep is snow — no contacts paint through it at all
+    for (let i = 0; i < 110; i++) {
+      const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * 72;
+      const v = 120 + (Math.random() * 110) | 0;
+      trk.fillStyle = `rgba(${v},${v + 15},${v + 25},${0.12 + Math.random() * 0.3})`;
+      trk.fillRect(R + Math.cos(a) * rr, R + Math.sin(a) * rr, 1 + Math.random() * 2.4, 1 + Math.random() * 1.6);
+    }
+    trk.fillStyle = '#cfe0ff';
+    trk.beginPath(); trk.moveTo(R, R - 5); trk.lineTo(R - 4, R + 4); trk.lineTo(R + 4, R + 4); trk.fill();
+    return;
+  }
   const pov = player.dead ? ghostAlive() : player.agent;
   if (!pov) return;
   const [px, pz] = [player.x, player.z];
@@ -565,36 +607,97 @@ function drawTracker() {
       trk.beginPath(); trk.arc(tx, ty, 3.2, 0, Math.PI * 2); trk.stroke();
     }
   }
+  // phantoms: drawn EXACTLY like real same-deck contacts — indistinguishable
+  for (const ph of trkState.phantoms) {
+    const tx = R + Math.cos(ph.ang) * ph.dist * 70;
+    const ty = R + Math.sin(ph.ang) * ph.dist * 70;
+    trk.fillStyle = ph.hostile ? 'rgba(255,72,56,0.95)' : 'rgba(255,214,64,0.95)';
+    trk.beginPath(); trk.arc(tx, ty, 3.4, 0, Math.PI * 2); trk.fill();
+  }
+  // faint interference flecks even when "clear" — the unit is never healthy
+  for (let i = 0; i < 12; i++) {
+    const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * 72;
+    trk.fillStyle = `rgba(150,170,190,${0.05 + Math.random() * 0.1})`;
+    trk.fillRect(R + Math.cos(a) * rr, R + Math.sin(a) * rr, 1.4, 1.2);
+  }
   // you
   trk.fillStyle = '#cfe0ff';
   trk.beginPath(); trk.moveTo(R, R - 5); trk.lineTo(R - 4, R + 4); trk.lineTo(R + 4, R + 4); trk.fill();
 }
 
 // --- positional sound sweep: voice the sim's own senses ---
-let chitterAt = 0;
+// REWORKED (user: constant bumping/banging from clustered NPCs made you mute
+// it). The old sweep played a one-shot PER FIRING NODE per tick — a crowded
+// fight was a wall of overlapping bangs, and adjacent-deck fire was a raw
+// 'thud'. Now: same-deck gunfire is capped at the 3 NEAREST firing rooms,
+// other decks collapse into ONE soft distant rumble, and the flood/human
+// horror layer (growls, shrieks, gurgles, death screams) does the storytelling.
+let chitterAt = 0, growlAt = 0, shriekAt = 0, gurgleAt = 0;
+const _aliveHumans = new Map(); // id -> {x, y, deck} — for death screams
 function soundSweep(now) {
   const g = sim.graph;
+  // same-deck gunfire: nearest 3 firing rooms only, quieter with distance
+  const firing = [];
+  let offDeckFire = false;
   for (let n = 0; n < g.n; n++) {
     if (sim.tickCount - sim.gunfireTick[n] > 1 || sim.gunfireTick[n] < 5) continue;
     const nd = g.node(n);
-    if (Math.abs(nd.deck - player.deck) > 1) continue;
-    const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
-    audio.play(nd.deck === player.deck ? 'shotFar' : 'thud', { x: wx, z: wz }, 0.8, `gun${n}`, 160);
+    if (nd.deck === player.deck) {
+      const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
+      firing.push({ n, wx, wz, d: Math.hypot(wx - player.x, wz - player.z) });
+    } else if (Math.abs(nd.deck - player.deck) === 1) offDeckFire = true;
   }
+  firing.sort((a, b) => a.d - b.d);
+  for (const f of firing.slice(0, 3)) audio.play('shotFar', { x: f.wx, z: f.wz }, 0.7, `gun${f.n}`, 220);
+  // a battle on another deck is ONE muffled roll through the deckplates
+  if (offDeckFire) audio.play('rumble', null, 0.16, 'offdeck', 1400);
   for (let n = 0; n < g.n; n++) {
     if (sim.tickCount - sim.screamTick[n] > 1 || sim.screamTick[n] < 5) continue;
     const nd = g.node(n);
-    if (Math.abs(nd.deck - player.deck) > 1) continue;
+    if (nd.deck !== player.deck) continue;
     const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
     audio.play('scream', { x: wx, z: wz }, 0.7, `scr${n}`, 700);
   }
-  // nearest infection form chitters at you
-  if (now - chitterAt > 900) {
-    for (const a of sim.agents) {
-      if (a.dead || a.faction !== 3 || a.deck !== player.deck) continue;
-      const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
-      const d = Math.hypot(wx - player.x, wz - player.z);
-      if (d < 18) { audio.play('chitter', { x: wx, z: wz }, 0.8); chitterAt = now; break; }
+  // --- flood proximity (user: flood sounds and screams when they are nearby) ---
+  let nearCombat = null, nearCarrier = null, charging = null;
+  for (const a of sim.agents) {
+    if (a.dead || a.deck !== player.deck) continue;
+    if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
+    if (a.move?.hidden) continue; // in the ducts — heard via duct log, not here
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    const d = Math.hypot(wx - player.x, wz - player.z);
+    if (a.faction === 3 && d < 18 && now - chitterAt > 900) { audio.play('chitter', { x: wx, z: wz }, 0.8); chitterAt = now; }
+    if (a.faction === 4) {
+      if (!nearCombat || d < nearCombat.d) nearCombat = { wx, wz, d };
+      if (a.charging && d < 26 && (!charging || d < charging.d)) charging = { wx, wz, d };
+    }
+    if (a.faction === 5 && (!nearCarrier || d < nearCarrier.d)) nearCarrier = { wx, wz, d };
+  }
+  if (nearCombat && nearCombat.d < 22 && now - growlAt > 2600 + Math.random() * 2200) {
+    audio.play('growl', { x: nearCombat.wx, z: nearCombat.wz }, 0.9);
+    growlAt = now;
+  }
+  if (charging && now - shriekAt > 1800) { // it's coming — you HEAR it commit
+    audio.play('shriek', { x: charging.wx, z: charging.wz }, 1.0);
+    shriekAt = now;
+  }
+  if (nearCarrier && nearCarrier.d < 16 && now - gurgleAt > 3200 + Math.random() * 2500) {
+    audio.play('gurgle', { x: nearCarrier.wx, z: nearCarrier.wz }, 0.9);
+    gurgleAt = now;
+  }
+  // --- human death screams (user: human screams when they die and you're close) ---
+  for (const a of sim.agents) {
+    const isHuman = a.faction === 0 || a.faction === 1 || a.faction === 2;
+    const alive = isHuman && !a.dead && a.hp > 0 && !a.downed;
+    const was = _aliveHumans.get(a.id);
+    if (alive) _aliveHumans.set(a.id, { x: a.x, y: a.y, deck: a.deck });
+    else if (was) {
+      _aliveHumans.delete(a.id);
+      if (!a.isPlayer && Math.abs(was.deck - player.deck) <= 1) {
+        const [wx, wz] = world.simToWorld(was.x, was.y, was.deck);
+        const d = Math.hypot(wx - player.x, wz - player.z);
+        if (d < 30) audio.play('deathScream', { x: wx, z: wz }, was.deck === player.deck ? 0.95 : 0.5, 'death', 350);
+      }
     }
   }
   // fire crackle from the nearest burning site
@@ -685,11 +788,13 @@ function frame(now) {
 
   agents.update(dtReal);
   soundSweep(now);
-  drawTracker();
+  drawTracker(now);
   marineMap.observe();
   if (mapOpen) marineMap.draw(player.agent, player.dead);
   audio.setListener(player.x, player.z, player.yaw);
   audio.alarm(sim.lastStand && !ended);
+  audio.startAmbience(); // no-op until the AudioContext exists (first click)
+  audio.ambienceTick();
 
   // ALARM + POWER STATES (review P2 slice): the last stand turns the ship's
   // light red and pulsing; an unpowered compartment flickers your lamp
@@ -738,7 +843,8 @@ function frame(now) {
       const bearing = Math.atan2(ax - player.x, -(az - player.z));
       dmgAngle = bearing + player.yaw;
       dmgFlash = 1;
-      if (src2.faction === 4 || src2.faction === 3) audio.play('thud', { x: ax, z: az }, 0.9, 'hurt', 150);
+      // (the per-hit 'thud' is GONE — user: the constant banging in a brawl
+      // made you mute the game. The damage flash + growls carry the hit.)
     } else dmgFlash = 1;
   }
   lastSinceHit = player.sinceHit;

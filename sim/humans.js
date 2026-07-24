@@ -269,6 +269,15 @@ function updateMarineTick(sim, a, dt) {
     return;
   }
 
+  // ODST reserve sealed in the armory (user rule): until the seal releases
+  // they hold the room — posted at the racks, killing anything that crawls
+  // in through the ducts, taking no orders and answering no calls.
+  if (a.odst && sim.armoryLocked) {
+    a.state = sim.floodStrengthAt(a.pnode ?? a.node) > 0 ? STATE.FIGHT : STATE.IDLE;
+    a.path = []; a.move = null;
+    return;
+  }
+
   const squad = sim.squads[a.squad];
   if (!squad || squad.broken) { updateArmed(sim, a, dt); return; }
 
@@ -431,6 +440,7 @@ export function strategicSquads(sim) {
       continue;
     }
     if (squad.broken || members.length === 0) continue;
+    if (squad.odst && sim.armoryLocked) continue; // the sealed reserve takes no taskings
     const leader = members[0];
 
     // engaged squads don't re-plan

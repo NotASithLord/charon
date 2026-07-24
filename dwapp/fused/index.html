@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halo Charon — Fused (Sim → VAT)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #06080b; color: #c8d2e0; height: 100vh; overflow: hidden;
+    font: 13px/1.45 "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; background: #0c1015; border-bottom: 1px solid #1c2430;
+  }
+  h1 { font-size: 14px; color: #9fd17f; letter-spacing: 1px; }
+  button, input { background: #131a24; color: #c8d2e0; border: 1px solid #263140; border-radius: 4px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: #1a2432; }
+  main { flex: 1; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #hud {
+    position: absolute; top: 10px; left: 10px; background: rgba(8, 11, 15, 0.85);
+    border: 1px solid #1c2430; border-radius: 6px; padding: 10px 12px; font-size: 12px; min-width: 240px;
+  }
+  #hud .row { display: flex; justify-content: space-between; gap: 14px; }
+  #hud b { color: #e8eef7; }
+  #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: #ff8866; padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>HALO CHARON // FUSED — live sim buffer → VAT renderer</h1>
+    <label>seed <input id="seed" size="10" value="charon-1"></label>
+    <button id="restart">restart</button>
+    <span style="color:#4a5568;font-size:11px">the 3D crowd below is driven tick-for-tick by the same AgentBuffer the schematic view reads — build step 9</span>
+  </header>
+  <main>
+    <canvas id="canvas"></canvas>
+    <div id="hud"></div>
+    <div id="err"></div>
+  </main>
+  <script type="module" src="./bundle.js"></script>
+</body>
+</html>
