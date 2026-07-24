@@ -17,12 +17,15 @@ import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
 import { PhysicsWorld, initRapier, PHYS_DT } from '../physics/physics-world.js';
+import { PostFX } from './post.js';
 
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.35;
+// tone mapping moved into the HDR post pipeline (game/post.js) — the scene
+// renders LINEAR into a half-float target so fires/lamps/tracers can stack
+// past 1.0 and bloom; ACES + exposure happen in the final grade pass.
+renderer.toneMapping = THREE.NoToneMapping;
 // REAL SHADOWS (user: lighting needs a vast improvement) — soft-filtered
 // shadow maps; the flashlight is the shadow caster, so cover and bodies
 // throw moving shadows down the corridors as your beam sweeps.
@@ -34,6 +37,32 @@ scene.background = new THREE.Color(0x05070a);
 scene.fog = new THREE.Fog(0x05070a, 18, 60);
 
 const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 220);
+const post = new PostFX(renderer);
+
+// IMAGE-BASED LIGHTING (the RoomEnvironment recipe, compacted): a tiny
+// procedural interior baked through PMREM gives every PBR material real
+// specular response — metal rails, rifle bodies and visors pick up soft
+// directional sheen instead of rendering flat. environmentIntensity is
+// graded with the darkness state so IBL NEVER leaks light into a black room.
+{
+  const env = new THREE.Scene();
+  const em = (color, intensity, w, h, x, y, z, ry = 0) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color }));
+    m.material.color.multiplyScalar(intensity);
+    m.position.set(x, y, z); m.rotation.y = ry;
+    env.add(m);
+  };
+  env.add(new THREE.Mesh(new THREE.BoxGeometry(20, 8, 20),
+    new THREE.MeshBasicMaterial({ color: 0x10141c, side: THREE.BackSide })));
+  em(0xbfd8ff, 4, 6, 1, 0, 3.9, 0);            // cool overhead strip
+  em(0x8fa8d8, 1.2, 3, 2, -9.9, 1.5, 0, Math.PI / 2);  // pale port glow
+  em(0xff5030, 0.8, 2, 1, 9.9, 1.2, 0, -Math.PI / 2);  // faint red starboard
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(env, 0.04).texture;
+  scene.environmentIntensity = 0.35;
+  pmrem.dispose();
+}
 
 const hemi = new THREE.HemisphereLight(0x9fb2d0, 0x141821, 1.4);
 scene.add(hemi);
@@ -134,6 +163,53 @@ const sparks = new SparkFX(scene);
       else sparks.add(wx, elevOf(deck) + 1.7, wz);
     }
   }
+}
+
+// DUST IN THE AIR (fidelity pass): a drift of fine particulate rides along
+// with the player — visible where light crosses it, invisible in the black.
+// Motes wrap around a 9m cube centered on you so the cloud never runs out.
+const motes = (() => {
+  const N = 140, HALF = 4.5;
+  const geo = new THREE.BufferGeometry();
+  const p = new Float32Array(N * 3);
+  const seeds = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    p[i * 3] = (Math.random() - 0.5) * HALF * 2;
+    p[i * 3 + 1] = Math.random() * 2.6 + 0.2;
+    p[i * 3 + 2] = (Math.random() - 0.5) * HALF * 2;
+    seeds[i] = Math.random() * 10;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  const c = document.createElement('canvas'); c.width = c.height = 16;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(8, 8, 0.5, 8, 8, 7.5);
+  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 16, 16);
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+    color: 0x9daabb, size: 0.014, transparent: true, opacity: 0.13,
+    map: new THREE.CanvasTexture(c), alphaMap: new THREE.CanvasTexture(c),
+    depthWrite: false, sizeAttenuation: true,
+  }));
+  pts.frustumCulled = false;
+  scene.add(pts);
+  return { pts, geo, seeds, HALF, t: 0 };
+})();
+function updateMotes(dt) {
+  motes.t += dt;
+  const pos = motes.geo.attributes.position;
+  const H = motes.HALF;
+  for (let i = 0; i < pos.count; i++) {
+    const s = motes.seeds[i];
+    let x = pos.getX(i) + Math.sin(motes.t * 0.3 + s) * 0.0012 + 0.0007;
+    let y = pos.getY(i) + Math.sin(motes.t * 0.22 + s * 2.1) * 0.0009 - 0.0004;
+    let z = pos.getZ(i) + Math.cos(motes.t * 0.26 + s) * 0.0012;
+    if (x > H) x -= H * 2; if (x < -H) x += H * 2;
+    if (z > H) z -= H * 2; if (z < -H) z += H * 2;
+    if (y < 0.1) y = 2.8; if (y > 2.9) y = 0.2;
+    pos.setXYZ(i, x, y, z);
+  }
+  pos.needsUpdate = true;
+  motes.pts.position.set(player.x, elevOf(player.deck), player.z);
 }
 
 // shadow plumbing: the world is built — floors/ceilings receive, cover and
@@ -450,6 +526,7 @@ function renderLog() {
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
+  post.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
@@ -1012,6 +1089,7 @@ function frame(now) {
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
   sparks.update(dtReal, now / 1000, player.x, player.z);
+  updateMotes(dtReal);
   updateRoomLightPool();
   updateDoorSpill();
   updateMuzzleLights();
@@ -1021,7 +1099,9 @@ function frame(now) {
   // adjusting, not a switch.
   {
     const expTarget = inFog ? 0.9 : inDark ? 1.12 : 1.35;
-    renderer.toneMappingExposure += (expTarget - renderer.toneMappingExposure) * Math.min(1, dtReal * 1.6);
+    post.exposure += (expTarget - post.exposure) * Math.min(1, dtReal * 1.6);
+    // IBL never lights a black room — it fades with the ambient state
+    scene.environmentIntensity = 0.35 * (ambient.intensity / 0.3);
   }
 
   // hit feedback fades
@@ -1138,7 +1218,7 @@ function frame(now) {
     }
   }
 
-  renderer.render(scene, camera);
+  post.render(scene, camera, now / 1000);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

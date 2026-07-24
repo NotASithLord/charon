@@ -261,13 +261,22 @@ export class World {
     const g = this.graph;
     const floorTexBase = this._deckTex('#242c3a', '#161d28');
     const wallTexBase = this._wallTex('#3a465c', '#2a3446');
+    // MICRO-RELIEF (fidelity pass): the same plate/panel textures double as
+    // bump maps, so plate seams, rivets and conduits catch the flashlight as
+    // real raised detail sweeping past — the cheapest normal-mapping there is.
     const mkFloorMat = (w, d, tint) => {
       const tex = floorTexBase.clone();
       tex.needsUpdate = true;
       tex.repeat.set(Math.max(1, w / 4), Math.max(1, d / 4));
-      return new THREE.MeshStandardMaterial({ map: tex, color: tint, roughness: 0.85, metalness: 0.35 });
+      return new THREE.MeshStandardMaterial({
+        map: tex, color: tint, roughness: 0.85, metalness: 0.35,
+        bumpMap: tex, bumpScale: 0.6,
+      });
     };
-    this._matWall = new THREE.MeshStandardMaterial({ map: wallTexBase, color: 0xaebdd8, roughness: 0.7, metalness: 0.5 });
+    this._matWall = new THREE.MeshStandardMaterial({
+      map: wallTexBase, color: 0xaebdd8, roughness: 0.7, metalness: 0.5,
+      bumpMap: wallTexBase, bumpScale: 0.5,
+    });
     const matWall = this._matWall;
     const matCeil = new THREE.MeshStandardMaterial({ color: 0x141a26, emissive: 0x2a3a58, emissiveIntensity: 0.35, roughness: 1, side: THREE.DoubleSide });
     this._matCeil = matCeil;
@@ -367,7 +376,7 @@ export class World {
         // They die with the room if the flood takes it (updateDarkness).
         {
           const emMat = new THREE.MeshStandardMaterial({
-            color: 0x2a0e0a, emissive: 0xff3018, emissiveIntensity: 1.6, roughness: 0.6,
+            color: 0x2a0e0a, emissive: 0xff3018, emissiveIntensity: 2.4, roughness: 0.6,
           });
           let anchor = null;
           for (const e of g.edges) {
@@ -435,6 +444,30 @@ export class World {
           else wall.position.set(run.fixed, elev + roomH / 2, (a + b) / 2);
           this.scene.add(wall);
           this.wallMeshes.push(wall);
+          // CONTACT SHADOW SKIRT (fidelity pass): a soft dark gradient along
+          // the wall base grounds the geometry — the poor man's ambient
+          // occlusion, and it reads shockingly close to the baked thing.
+          const skirt = new THREE.Mesh(
+            run.horiz ? new THREE.PlaneGeometry(len, 0.55) : new THREE.PlaneGeometry(0.55, len),
+            this._skirtMat ?? (this._skirtMat = (() => {
+              const c = document.createElement('canvas'); c.width = 4; c.height = 32;
+              const x = c.getContext('2d');
+              const gr = x.createLinearGradient(0, 0, 0, 32);
+              gr.addColorStop(0, 'rgba(0,0,0,0.55)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+              x.fillStyle = gr; x.fillRect(0, 0, 4, 32);
+              const t = new THREE.CanvasTexture(c);
+              return new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false });
+            })()));
+          skirt.rotation.x = -Math.PI / 2;
+          if (run.horiz) {
+            skirt.rotation.z = run.fixed < wz ? Math.PI : 0;
+            skirt.position.set((a + b) / 2, elev + 0.015, run.fixed + (run.fixed < wz ? 0.28 : -0.28));
+          } else {
+            skirt.rotation.z = run.fixed < wx ? Math.PI / 2 : -Math.PI / 2;
+            skirt.position.set(run.fixed + (run.fixed < wx ? 0.28 : -0.28), elev + 0.015, (a + b) / 2);
+          }
+          skirt.renderOrder = 1;
+          this.scene.add(skirt);
         }
       }
     }
@@ -1045,7 +1078,7 @@ export class World {
       const L = this.roomLights[n];
       if (L && sim.darkAt(n)) { L.lvl = 0.02; L.mat.emissiveIntensity = 0.02; }
       // even the battery lamps die when the growth takes the room
-      if (L?.emMat) L.emMat.emissiveIntensity = sim.darkAt(n) ? 0.04 : 1.6;
+      if (L?.emMat) L.emMat.emissiveIntensity = sim.darkAt(n) ? 0.04 : 2.4;
       const sign = this.roomSigns?.[n];
       if (sign) sign.material.opacity = sim.darkAt(n) ? 0.06 : 0.95;
     }
