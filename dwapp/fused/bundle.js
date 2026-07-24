@@ -347,6 +347,11 @@ var PARAMS = {
     soloDarkSec: 60,
     fogSec: 120,
     maxHoldSec: 150,
+    // FOG PERSISTENCE (user rule): once a room fogs, the murk does NOT fade
+    // on its own. It burns off only after the last flood inside is eliminated
+    // AND the player or an ODST holds the room for this long — and any flood
+    // re-entry before that mark restarts the clock in full.
+    fogLingerSec: 120,
     darkAccMult: 0.75,
     // flashlight fighting
     fogAccMult: 0.8,
@@ -4130,6 +4135,7 @@ var Sim = class {
     this._floodAt = new Float32Array(graph.n);
     this._humanAt = new Uint16Array(graph.n);
     this.floodHoldSec = new Float64Array(graph.n);
+    this.fogLinger = new Float64Array(graph.n).fill(this.P.darkness.fogLingerSec);
     this.gunfireTick = new Int32Array(graph.n).fill(-9999);
     this.screamTick = new Int32Array(graph.n).fill(-9999);
     this.sweptAt = new Float64Array(graph.n).fill(-9999);
@@ -5179,13 +5185,31 @@ var Sim = class {
   // a pure function of occupancy.
   _advanceDarkness(dt) {
     const D = this.P.darkness;
+    const clearCrew = this._fogCrew ?? (this._fogCrew = new Uint8Array(this.graph.n));
+    clearCrew.fill(0);
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || a.downed) continue;
+      if (a.isPlayer || a.odst) clearCrew[a.pnode ?? a.node] = 1;
+    }
     for (let n = 0; n < this.graph.n; n++) {
       const was = this.floodHoldSec[n];
+      const fogged = was >= D.fogSec;
       if (this._floodAt[n] > 0 && this._humanAt[n] === 0) {
         this.floodHoldSec[n] = Math.min(D.maxHoldSec, was + dt);
-      } else if (this._floodAt[n] === 0 && this._humanAt[n] > 0) {
+      } else if (!fogged && this._floodAt[n] === 0 && this._humanAt[n] > 0) {
         this.floodHoldSec[n] = Math.max(0, was - dt * 2);
       }
+      if (fogged) {
+        if (this._floodAt[n] > 0) {
+          this.fogLinger[n] = D.fogLingerSec;
+        } else if (clearCrew[n]) {
+          this.fogLinger[n] = Math.max(0, this.fogLinger[n] - dt);
+          if (this.fogLinger[n] === 0) {
+            this.floodHoldSec[n] = D.fogSec - 0.01;
+            this.log("radio", `the spore fog finally thins out in ${this.graph.node(n).name}`, n);
+          }
+        }
+      } else this.fogLinger[n] = D.fogLingerSec;
       const now = this.floodHoldSec[n];
       if (was < D.soloDarkSec && now >= D.soloDarkSec) {
         this.log("hive", `the lights die in ${this.graph.node(n).name} — the growth has taken the room`, n);

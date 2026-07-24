@@ -208,6 +208,11 @@ export const PARAMS = {
     soloDarkSec: 60,
     fogSec: 120,
     maxHoldSec: 150,
+    // FOG PERSISTENCE (user rule): once a room fogs, the murk does NOT fade
+    // on its own. It burns off only after the last flood inside is eliminated
+    // AND the player or an ODST holds the room for this long — and any flood
+    // re-entry before that mark restarts the clock in full.
+    fogLingerSec: 120,
     darkAccMult: 0.75,   // flashlight fighting
     fogAccMult: 0.8,     // stacked on top in spore fog (net ~0.6)
     fogViewM: 8,         // how far the player's flashlight cuts into the fog

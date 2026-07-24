@@ -72,6 +72,7 @@ export class Sim {
     this._floodAt = new Float32Array(graph.n);
     this._humanAt = new Uint16Array(graph.n);
     this.floodHoldSec = new Float64Array(graph.n); // solo-occupancy clock (darkness)
+    this.fogLinger = new Float64Array(graph.n).fill(this.P.darkness.fogLingerSec); // burn-off clock per fogged room
     this.gunfireTick = new Int32Array(graph.n).fill(-9999);
     this.screamTick = new Int32Array(graph.n).fill(-9999);
     this.sweptAt = new Float64Array(graph.n).fill(-9999); // last time a marine cleared a room
@@ -1249,14 +1250,38 @@ export class Sim {
   // a pure function of occupancy.
   _advanceDarkness(dt) {
     const D = this.P.darkness;
+    // FOG PERSISTENCE (user rule): spore fog does NOT fade under the old
+    // 2x-recovery rule — once a room fogs it stays fogged until the last
+    // flood inside is dead AND the player or an ODST has HELD the room for
+    // fogLingerSec (2 min). Any flood re-entry restarts that clock in full.
+    // Only they can burn it off: line marines refuse fogged rooms anyway,
+    // and a cowering civilian doesn't clear flood growth.
+    const clearCrew = this._fogCrew ?? (this._fogCrew = new Uint8Array(this.graph.n));
+    clearCrew.fill(0);
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || a.downed) continue;
+      if (a.isPlayer || a.odst) clearCrew[a.pnode ?? a.node] = 1;
+    }
     for (let n = 0; n < this.graph.n; n++) {
       const was = this.floodHoldSec[n];
+      const fogged = was >= D.fogSec;
       if (this._floodAt[n] > 0 && this._humanAt[n] === 0) {
         this.floodHoldSec[n] = Math.min(D.maxHoldSec, was + dt);
-      } else if (this._floodAt[n] === 0 && this._humanAt[n] > 0) {
-        // humans holding the room WITHOUT flood beat the growth back
+      } else if (!fogged && this._floodAt[n] === 0 && this._humanAt[n] > 0) {
+        // humans holding a merely-dark room WITHOUT flood beat the growth back
         this.floodHoldSec[n] = Math.max(0, was - dt * 2);
       } // empty or contested: the growth neither spreads nor dies
+      if (fogged) {
+        if (this._floodAt[n] > 0) {
+          this.fogLinger[n] = D.fogLingerSec; // flood inside — the clock restarts
+        } else if (clearCrew[n]) {
+          this.fogLinger[n] = Math.max(0, this.fogLinger[n] - dt);
+          if (this.fogLinger[n] === 0) {
+            this.floodHoldSec[n] = D.fogSec - 0.01; // fog lifts; the dark remains
+            this.log('radio', `the spore fog finally thins out in ${this.graph.node(n).name}`, n);
+          }
+        }
+      } else this.fogLinger[n] = D.fogLingerSec; // primed for the next bloom
       const now = this.floodHoldSec[n];
       if (was < D.soloDarkSec && now >= D.soloDarkSec) {
         this.log('hive', `the lights die in ${this.graph.node(n).name} — the growth has taken the room`, n);
