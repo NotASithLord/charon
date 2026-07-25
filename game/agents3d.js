@@ -393,6 +393,9 @@ export class Agents3D {
       if (bp && bp.deck === body.deck) { bp.x = body.x; bp.y = body.y; }
     }
 
+    // deck-scoped stamping (perf, user: don't render the whole ship): a body
+    // two opaque decks away cannot be seen — don't animate or stamp it
+    const playerDeck = sim.byId.get(this.playerId)?.deck ?? 3;
     for (let i = 0; i < buf.count; i++) {
       const id = buf.id[i];
       if (id === this.playerId) continue; // first person — don't draw your own body
@@ -409,6 +412,7 @@ export class Agents3D {
       curId = id;
       const rp = this.rpos.get(id);
       const deck = rp.deck;
+      if (Math.abs(deck - playerDeck) > 1) continue; // invisible through opaque decks
       const [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
       // feet on the ground surface — in a stairwell room that follows the
       // mezzanine/ramp/hall, so bodies walk the stairs instead of floating

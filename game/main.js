@@ -1072,6 +1072,9 @@ function frame(now) {
   scene.fog.near = inFog ? 1.5 : 18;
   scene.fog.color.setHex(inFog ? 0x1c2410 : 0x05070a);
   scene.background.setHex(inFog ? 0x151b0a : 0x05070a);
+  // deck-scoped rendering (user: don't draw the whole ship): decks you
+  // physically cannot see — beyond ±1 through hatches/stairwell — are hidden
+  world.setActiveDecks(player.deck - 1, player.deck + 1);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);

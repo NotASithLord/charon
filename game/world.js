@@ -112,16 +112,27 @@ export class World {
   _mergeStaticPass() {
     const moving = new Set(this.doors.map((d) => d.mesh));
     const byMat = new Map();
+    // DECK-SCOPED GROUPS (user: don't render the whole ship): meshes merge
+    // per material AND per deck, so whole decks can be hidden when the
+    // player can't possibly see them (decks are opaque; only hatches and
+    // the stairwell pierce ADJACENT decks — ±1 is always kept visible).
+    const deckOf = (y) => Math.max(1, Math.min(5, 5 - Math.round(y / DECK_H)));
     for (const o of this.scene.children) {
       if (!o.isMesh || o.isInstancedMesh || moving.has(o)) continue;
       if (!o.geometry?.attributes?.position || !o.geometry.attributes.normal) continue;
       if (o.geometry.attributes.position.count > 5000) continue; // already big
-      (byMat.get(o.material) ?? byMat.set(o.material, []).get(o.material)).push(o);
+      const key = o.material.uuid + ':' + deckOf(o.position.y);
+      const e = byMat.get(key) ?? byMat.set(key, { mat: o.material, list: [] }).get(key);
+      e.list.push(o);
     }
+    this._deckBins = new Map(); // deck -> [static objects], toggled by setActiveDecks
     const wallSet = new Set(this.wallMeshes);
     const v = new THREE.Vector3();
     const nm = new THREE.Matrix3();
-    for (const [mat, list] of byMat) {
+    const binDeck = (deck, obj) => {
+      (this._deckBins.get(deck) ?? this._deckBins.set(deck, []).get(deck)).push(obj);
+    };
+    for (const [, { mat, list }] of byMat) {
       if (list.length < 8) continue;
       let vtot = 0, itot = 0;
       for (const m of list) {
@@ -169,8 +180,29 @@ export class World {
       mesh.receiveShadow = true;
       this.scene.add(mesh);
       if (anyWall) wallSet.add(mesh);
+      binDeck(Math.max(1, Math.min(5, 5 - Math.round(merged.boundingSphere.center.y / DECK_H))), mesh);
     }
     this.wallMeshes = [...wallSet];
+    // bin the surviving per-room statics too (floors, strips, lamps —
+    // NOT doors/veils/signs, whose visibility/opacity is animated per frame)
+    const binned = new Set();
+    for (const list of this._deckBins.values()) for (const o of list) binned.add(o);
+    const skip = new Set([...moving, ...this.darkVeils.filter(Boolean), ...(this.roomSigns ?? []).filter(Boolean)]);
+    for (const o of this.scene.children) {
+      if (!o.isMesh || o.isInstancedMesh || skip.has(o) || binned.has(o)) continue;
+      binDeck(deckOf(o.position.y), o);
+    }
+  }
+
+  // hide everything on decks the player cannot possibly see (opaque decks;
+  // hatches + the grand stairwell only pierce ±1)
+  setActiveDecks(lo, hi) {
+    if (this._activeLo === lo && this._activeHi === hi) return;
+    this._activeLo = lo; this._activeHi = hi;
+    for (const [deck, list] of this._deckBins ?? []) {
+      const vis = deck >= lo && deck <= hi;
+      for (const o of list) o.visible = vis;
+    }
   }
 
   // DECK PLATING (texture pass): worn steel plates — per-plate value drift,
