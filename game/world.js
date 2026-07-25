@@ -117,20 +117,34 @@ export class World {
     // player can't possibly see them (decks are opaque; only hatches and
     // the stairwell pierce ADJACENT decks — ±1 is always kept visible).
     const deckOf = (y) => Math.max(1, Math.min(5, 5 - Math.round(y / DECK_H)));
+    // FORE/AFT THIRDS (fog-exact culling): scene.fog.far never exceeds 60m
+    // and three's fog is FULLY opaque at far — geometry beyond ~70m is
+    // pixel-for-pixel invisible. The ship is ~220m long, so each deck merges
+    // into three fore/aft chunks and far chunks are dropped losslessly.
+    let minX = Infinity, maxX = -Infinity;
+    for (const n of this.graph.nodes) {
+      minX = Math.min(minX, n.x - n.w / 2);
+      maxX = Math.max(maxX, n.x + n.w / 2);
+    }
+    this._thirdEdges = [minX, minX + (maxX - minX) / 3, minX + (maxX - minX) * 2 / 3, maxX];
+    const thirdOf = (x) => x < this._thirdEdges[1] ? 0 : x < this._thirdEdges[2] ? 1 : 2;
     for (const o of this.scene.children) {
       if (!o.isMesh || o.isInstancedMesh || moving.has(o)) continue;
       if (!o.geometry?.attributes?.position || !o.geometry.attributes.normal) continue;
       if (o.geometry.attributes.position.count > 5000) continue; // already big
-      const key = o.material.uuid + ':' + deckOf(o.position.y);
+      const key = o.material.uuid + ':' + deckOf(o.position.y) + ':' + thirdOf(o.position.x);
       const e = byMat.get(key) ?? byMat.set(key, { mat: o.material, list: [] }).get(key);
       e.list.push(o);
     }
-    this._deckBins = new Map(); // deck -> [static objects], toggled by setActiveDecks
+    this._deckOf = deckOf;
+    this._thirdOf = thirdOf;
+    this._volBins = new Map(); // 'deck:third' -> [static objects], toggled by setActiveVolume
     const wallSet = new Set(this.wallMeshes);
     const v = new THREE.Vector3();
     const nm = new THREE.Matrix3();
-    const binDeck = (deck, obj) => {
-      (this._deckBins.get(deck) ?? this._deckBins.set(deck, []).get(deck)).push(obj);
+    const binVol = (deck, third, obj) => {
+      const k = deck + ':' + third;
+      (this._volBins.get(k) ?? this._volBins.set(k, []).get(k)).push(obj);
     };
     for (const [, { mat, list }] of byMat) {
       if (list.length < 8) continue;
@@ -180,27 +194,32 @@ export class World {
       mesh.receiveShadow = true;
       this.scene.add(mesh);
       if (anyWall) wallSet.add(mesh);
-      binDeck(Math.max(1, Math.min(5, 5 - Math.round(merged.boundingSphere.center.y / DECK_H))), mesh);
+      binVol(deckOf(merged.boundingSphere.center.y), thirdOf(merged.boundingSphere.center.x), mesh);
     }
     this.wallMeshes = [...wallSet];
     // bin the surviving per-room statics too (floors, strips, lamps —
     // NOT doors/veils/signs, whose visibility/opacity is animated per frame)
     const binned = new Set();
-    for (const list of this._deckBins.values()) for (const o of list) binned.add(o);
+    for (const list of this._volBins.values()) for (const o of list) binned.add(o);
     const skip = new Set([...moving, ...this.darkVeils.filter(Boolean), ...(this.roomSigns ?? []).filter(Boolean)]);
     for (const o of this.scene.children) {
       if (!o.isMesh || o.isInstancedMesh || skip.has(o) || binned.has(o)) continue;
-      binDeck(deckOf(o.position.y), o);
+      binVol(deckOf(o.position.y), thirdOf(o.position.x), o);
     }
   }
 
-  // hide everything on decks the player cannot possibly see (opaque decks;
-  // hatches + the grand stairwell only pierce ±1)
-  setActiveDecks(lo, hi) {
-    if (this._activeLo === lo && this._activeHi === hi) return;
-    this._activeLo = lo; this._activeHi = hi;
-    for (const [deck, list] of this._deckBins ?? []) {
-      const vis = deck >= lo && deck <= hi;
+  // hide every volume the player cannot possibly see: decks beyond +/-1
+  // (opaque decks; hatches/stairwell pierce one), and fore/aft thirds whose
+  // NEAREST edge is beyond full fog (pixel-exact — fog is opaque at far)
+  setActiveVolume(playerDeck, playerX) {
+    const key = playerDeck + ':' + Math.round(playerX / 8);
+    if (this._activeKey === key) return; // re-evaluate only on real movement
+    this._activeKey = key;
+    const E = this._thirdEdges;
+    for (const [k, list] of this._volBins ?? []) {
+      const [deck, third] = k.split(':').map(Number);
+      const nearEdge = Math.max(E[third] - playerX, playerX - E[third + 1], 0);
+      const vis = Math.abs(deck - playerDeck) <= 1 && nearEdge < 70;
       for (const o of list) o.visible = vis;
     }
   }

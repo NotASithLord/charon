@@ -413,6 +413,13 @@ export class Agents3D {
       const rp = this.rpos.get(id);
       const deck = rp.deck;
       if (Math.abs(deck - playerDeck) > 1) continue; // invisible through opaque decks
+      // beyond scene.fog.far (max 60m) fog is FULLY opaque — a body 62m out
+      // is pixel-for-pixel invisible; skip its pose math and stamping
+      if (this.viewX !== undefined) {
+        const [ax, az] = world.simToWorld(rp.x, rp.y, deck);
+        const vdx = ax - this.viewX, vdz = az - this.viewZ;
+        if (vdx * vdx + vdz * vdz > 62 * 62) continue;
+      }
       const [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
       // feet on the ground surface — in a stairwell room that follows the
       // mezzanine/ramp/hall, so bodies walk the stairs instead of floating

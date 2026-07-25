@@ -31,6 +31,9 @@ const HD = new URLSearchParams(location.search).has('hd');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25));
 renderer.info.autoReset = false; // accumulated per-frame in the main loop (__perf)
+// HALF-RATE SHADOWS: the flashlight's shadow map refreshes at 30Hz instead
+// of 60 — imperceptible for a handheld light, halves the shadow pass cost
+renderer.shadowMap.autoUpdate = false;
 // tone mapping moved into the HDR post pipeline (game/post.js) — the scene
 // renders LINEAR into a half-float target so fires/lamps/tracers can stack
 // past 1.0 and bloom; ACES + exposure happen in the final grade pass.
@@ -961,6 +964,7 @@ function playerObstacles() {
 }
 
 // --- main loop ---
+let _ftEMA = 16, _resAt = 0, frameNo = 0; // dynamic-resolution governor state
 let acc = 0;
 let physAcc = 0;
 let shownLost = false;
@@ -1020,6 +1024,7 @@ function frame(now) {
   }
   if (guard >= 60) acc = 0;
 
+  agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
   soundSweep(now);
   drawTracker(now);
@@ -1072,9 +1077,9 @@ function frame(now) {
   scene.fog.near = inFog ? 1.5 : 18;
   scene.fog.color.setHex(inFog ? 0x1c2410 : 0x05070a);
   scene.background.setHex(inFog ? 0x151b0a : 0x05070a);
-  // deck-scoped rendering (user: don't draw the whole ship): decks you
-  // physically cannot see — beyond ±1 through hatches/stairwell — are hidden
-  world.setActiveDecks(player.deck - 1, player.deck + 1);
+  // volume-scoped rendering (user: don't draw the whole ship): decks beyond
+  // ±1 and fore/aft thirds beyond full fog are hidden — both pixel-exact
+  world.setActiveVolume(player.deck, player.x);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
@@ -1209,6 +1214,25 @@ function frame(now) {
     }
   }
 
+  // DYNAMIC RESOLUTION (the console trick): frame-time EMA governs the
+  // pixel ratio between 0.85 and the cap — the game finds each machine's
+  // sweet spot on its own instead of shipping one guess. Re-evaluated every
+  // ~3s so RT reallocation never hitches moment-to-moment play.
+  _ftEMA = _ftEMA * 0.94 + Math.min(50, dtReal * 1000) * 0.06;
+  if (now - _resAt > 3000) {
+    _resAt = now;
+    const cur = renderer.getPixelRatio();
+    const cap = Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25);
+    let next = cur;
+    if (_ftEMA > 20 && cur > 0.85) next = Math.max(0.85, cur - 0.15);
+    else if (_ftEMA < 13 && cur < cap) next = Math.min(cap, cur + 0.1);
+    if (Math.abs(next - cur) > 0.01) {
+      renderer.setPixelRatio(next);
+      renderer.setSize(window.innerWidth, window.innerHeight, false);
+      post.setSize(window.innerWidth, window.innerHeight);
+    }
+  }
+  if ((frameNo++ & 1) === 0) renderer.shadowMap.needsUpdate = true; // 30Hz shadows
   renderer.info.reset(); // per-frame accumulation across all post passes
   post.render(scene, camera, now / 1000);
   requestAnimationFrame(frame);
