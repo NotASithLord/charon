@@ -199,10 +199,18 @@ export class Player {
       // vertical: feet rest on the ground surface, which in a stairwell room
       // follows the switchback ramp (world.groundHeightAt)
       const base = elevOf(this.deck);
-      const groundY = this.world.groundHeightAt(this.deck, this.x, this.z);
+      const groundY = this.world.groundHeightAt(this.deck, this.x, this.z, base + this.h);
+      const wasGrounded = this.onGround;
       let footY = base + this.h + this.vy * dt;
       if (footY <= groundY) { footY = groundY; this.vy = 0; this.onGround = true; }
-      else this.onGround = false;
+      else if (wasGrounded && this.vy <= 0 && footY - groundY < 0.55) {
+        // STEP-DOWN SNAP (stairwell UX): walking down a ramp, gravity alone
+        // can't keep pace with the surface dropping away — without this the
+        // player goes micro-airborne every step, loses ground control, and
+        // crawls down the flights. Grounded + not jumping + surface within a
+        // step below = stay glued.
+        footY = groundY; this.vy = 0; this.onGround = true;
+      } else this.onGround = false;
       this.h = footY - base;
       const ceilH = this.world.ceilHeightAt(this.deck, this.x, this.z);
       if (this.h > ceilH - 1.85) { this.h = ceilH - 1.85; this.vy = Math.min(0, this.vy); }
@@ -263,6 +271,22 @@ export class Player {
       const baseZ = g.wellCz - g.wellHz;   // front edge = foot of the stairs
       const inWellX = this.x >= g.wellCx - 0.3 && this.x <= g.wellCx + g.wellHx + 0.5;
       const worldY = elevOf(this.deck) + this.h;
+      // BAILED OVER A RAILING (user fix): you're inside the stair room but
+      // below the entry ring and NOT over the switchback — that's the
+      // hangar's airspace. Hand the fall to the deck below so you land on
+      // its floor, instead of being popped back up through the ring.
+      if (this.deck === g.deck && worldY < g.hiElev - 0.6) {
+        const inRoom = this.x >= g.cx - g.hx && this.x <= g.cx + g.hx
+          && this.z >= g.cz - g.hz && this.z <= g.cz + g.hz;
+        const inWell = this.x >= g.wellCx - g.wellHx && this.x <= g.wellCx + g.wellHx
+          && this.z >= g.wellCz - g.wellHz && this.z <= g.wellCz + g.wellHz;
+        if (inRoom && !inWell) {
+          this.deck = hangarDeck;
+          this.h = worldY - elevOf(hangarDeck);
+          this.physics.teleportPlayer(this.x, worldY, this.z);
+          continue;
+        }
+      }
       if (this.deck === g.deck) {
         if (worldY <= g.loElev + 0.45 && inWellX && this.z <= baseZ + 0.4 && this.vz < 0.05) {
           this.deck = hangarDeck;

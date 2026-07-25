@@ -81,7 +81,7 @@ export const PARAMS = {
     gunfireHops: 3,    // gunfire carries further
   },
   radio: {
-    marineCallReliability: 0.5,   // MASTER DIAL — marine coordination efficiency / difficulty lever
+    marineCallReliability: 0.5,   // MASTER DIAL — CROSS-DECK receipt odds (same-deck calls always land)
                                   // (0.95 = intact comms; the portal event damaged them.
                                   //  Raise it and the response snuffs most outbreaks —
                                   //  re-tuned down after adding the top-deck garrison,

@@ -485,7 +485,11 @@ export function strategicSquads(sim) {
       if (sim.t - call.t > P.radio.callFadeSec) continue;
       if (call.rolled.has(squad.id)) continue;
       call.rolled.add(squad.id);
-      if (!sim.rng.chance(P.radio.marineCallReliability)) {
+      // deck-based receipt (user): same-deck broadcasts always land; anything
+      // cross-deck fights the dying net — the same rule the player's feed
+      // lives by, so marine coordination degrades exactly like your own intel
+      const sameDeck = sim.graph.node(call.node).deck === sim.graph.node(leader.node).deck;
+      if (!sameDeck && !sim.rng.chance(P.radio.marineCallReliability)) {
         sim.log('radio', `squad ${squad.id + 1} missed a distress call (comms damage)`);
         continue;
       }
@@ -575,7 +579,9 @@ function patrolPlan(sim, squad, leader) {
     if (sim.t - call.t > P.radio.callFadeSec) continue;
     if (call.rolled.has(squad.id)) continue;
     call.rolled.add(squad.id);
-    if (!sim.rng.chance(P.radio.marineCallReliability)) continue;
+    // same deck-based receipt rule as the squads (and the player's feed)
+    const sameDeckP = sim.graph.node(call.node).deck === sim.graph.node(leader.node).deck;
+    if (!sameDeckP && !sim.rng.chance(P.radio.marineCallReliability)) continue;
     const responders = sim.squads.filter((s) => !s.broken && s.respondingTo === call.id).length;
     if (responders >= 2) continue;
     const cur = squad.objective?.kind === 'distress'

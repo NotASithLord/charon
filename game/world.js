@@ -824,12 +824,17 @@ export class World {
 
   // floor elevation under a world point — the deck floor normally; in a
   // stairwell room, the entry floor or the switchback where it descends.
-  groundHeightAt(deck, wx, wz) {
+  // feetY matters in the stair room: a body that bailed over a railing and
+  // is BELOW the entry ring must not be given the ring as its floor (that
+  // was the clip-back-to-the-upper-deck bug) — the surface under it is the
+  // deck below.
+  groundHeightAt(deck, wx, wz, feetY = Infinity) {
     for (const g of (this.stairRooms ?? [])) {
       if (g.deck !== deck) continue;
       if (wx < g.cx - g.hx || wx > g.cx + g.hx || wz < g.cz - g.hz || wz > g.cz + g.hz) continue;
       const sy = this._switchbackY(g, wx, wz);
-      return sy === null ? g.hiElev : sy;   // entry floor, or the stairs
+      if (sy !== null) return sy;           // on the switchback
+      return feetY >= g.hiElev - 0.4 ? g.hiElev : g.loElev; // ring, or fallen past it
     }
     return elevOf(deck);
   }
@@ -896,23 +901,89 @@ export class World {
     const land = new THREE.Mesh(new THREE.BoxGeometry(2 * wellHx, 0.14, 2.0), matStep);
     land.position.set(wellCx, midElev - 0.07, wellCz + wellHz - 1.0);
     this.scene.add(land);
-    // switchback spine wall between the two flights
-    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.12, hiElev - loElev, 2 * wellHz - 2.2), matStep);
+    // switchback spine wall between the two flights, with a bright cap rail
+    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.14, hiElev - loElev, 2 * wellHz - 2.2), matStep);
     spine.position.set(wellCx, (hiElev + loElev) / 2, wellCz - 1.0);
     this.scene.add(spine); this.wallMeshes.push(spine);
-    // railings around the well opening on the entry floor (so you don't just
-    // step off into it — you go down the stairs)
-    for (const [px, pz, w, d] of [
-      [wellCx, wellCz - wellHz, 2 * wellHx, 0.06], [wellCx, wellCz + wellHz, 2 * wellHx, 0.06],
-      [wellCx - wellHx, wellCz, 0.06, 2 * wellHz], [wellCx + wellHx, wellCz, 0.06, 2 * wellHz]]) {
-      // gap the fore rail where flight A meets the entry floor (top of stairs)
-      if (pz === wellCz - wellHz) continue; // front edge is the stair mouth — open
-      const r = new THREE.Mesh(new THREE.BoxGeometry(w, 0.06, d), matRail);
-      r.position.set(px, hiElev + 1.0, pz);
-      this.scene.add(r); this.wallMeshes.push(r);
-      const rl = new THREE.Mesh(new THREE.BoxGeometry(Math.max(w, 0.08), 1.0, Math.max(d, 0.08)), matRail);
-      rl.visible = false; // (posts omitted for brevity; rail bar reads fine)
+    const spineCap = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 2 * wellHz - 2.2), matRail);
+    spineCap.position.set(wellCx, hiElev + 0.04, wellCz - 1.0);
+    this.scene.add(spineCap);
+
+    // GUARD SYSTEM (user: the old railings floated and looked like crap).
+    // Solid balustrade panels with a bright cap rail, all REAL collision —
+    // you take the stairs because the panels physically stop everything else.
+    const matPanel = new THREE.MeshStandardMaterial({ color: 0x39404b, roughness: 0.55, metalness: 0.65 });
+    const matHazard = new THREE.MeshStandardMaterial({ color: 0xc79a1f, roughness: 0.6, metalness: 0.3 });
+    const guard = (px, py, pz, w, h, d, solid = true) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matPanel);
+      m.position.set(px, py, pz);
+      this.scene.add(m);
+      if (solid) this.wallMeshes.push(m);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(Math.max(w, 0.2), 0.07, Math.max(d, 0.2)), matRail);
+      cap.position.set(px, py + h / 2 + 0.035, pz);
+      this.scene.add(cap);
+      return m;
+    };
+    const RAIL_H = 1.02, T = 0.08;
+    // entry-ring guards: back edge, both side edges, and the FRONT-RIGHT half
+    // (over flight B's bottom — a 5m open drop the old build left unguarded).
+    // Front-left stays open: that's the stair mouth onto flight A.
+    guard(wellCx, hiElev + RAIL_H / 2, wellCz + wellHz + T / 2, 2 * wellHx + 2 * T, RAIL_H, T);
+    guard(wellCx - wellHx - T / 2, hiElev + RAIL_H / 2, wellCz, T, RAIL_H, 2 * wellHz + 2 * T);
+    guard(wellCx + wellHx + T / 2, hiElev + RAIL_H / 2, wellCz, T, RAIL_H, 2 * wellHz + 2 * T);
+    guard(wellCx + wellHx / 2, hiElev + RAIL_H / 2, wellCz - wellHz - T / 2, wellHx, RAIL_H, T);
+    // newel posts framing the stair mouth
+    for (const nx of [wellCx - wellHx + 0.09, wellCx - 0.09]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, RAIL_H + 0.12, 0.16), matRail);
+      post.position.set(nx, hiElev + (RAIL_H + 0.12) / 2, wellCz - wellHz - 0.08);
+      this.scene.add(post); this.wallMeshes.push(post);
     }
+    // hazard nosing where the ring floor meets the well
+    for (const [px, pz, w, d] of [
+      [wellCx, wellCz + wellHz - 0.09, 2 * wellHx, 0.18],
+      [wellCx - wellHx + 0.09, wellCz, 0.18, 2 * wellHz],
+      [wellCx + wellHx - 0.09, wellCz, 0.18, 2 * wellHz]]) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, d), matHazard);
+      strip.position.set(px, hiElev + 0.011, pz);
+      this.scene.add(strip);
+    }
+    // stepped balustrades down the OUTER edge of each flight: three panel
+    // segments per flight that follow the descent, collision-true (the old
+    // build had a floating bar and invisible posts — and let you bail off
+    // the side into a clip-back)
+    const SEGS = 3;
+    const stepGuard = (xEdge, yAt) => {
+      for (let s = 0; s < SEGS; s++) {
+        const z0 = (wellCz - wellHz) + (s / SEGS) * 2 * wellHz;
+        const z1 = (wellCz - wellHz) + ((s + 1) / SEGS) * 2 * wellHz;
+        const yLo = Math.min(yAt(z0), yAt(z1));
+        const yHi = Math.max(yAt(z0), yAt(z1)) + RAIL_H;
+        guard(xEdge, (yLo + yHi) / 2, (z0 + z1) / 2, T, yHi - yLo, z1 - z0);
+      }
+    };
+    const tOf = (z) => (z - (wellCz - wellHz)) / (2 * wellHz);
+    stepGuard(wellCx - wellHx + T / 2, (z) => hiElev - (hiElev - midElev) * tOf(z)); // flight A outer
+    stepGuard(wellCx + wellHx - T / 2, (z) => loElev + (midElev - loElev) * tOf(z)); // flight B outer
+    // sloped soffit closing the underside of each flight (visual — from the
+    // hangar the stairs read as a solid structure, not floating treads)
+    const run = 2 * wellHz, rise = hiElev - midElev;
+    const soffitLen = Math.hypot(run, rise);
+    const mkSoffit = (xLo, xHi, yMid, slopeSign) => {
+      const s = new THREE.Mesh(new THREE.BoxGeometry(xHi - xLo, 0.1, soffitLen), matStep);
+      s.position.set((xLo + xHi) / 2, yMid - 0.28, wellCz);
+      s.rotation.x = Math.atan2(rise, run) * slopeSign;
+      this.scene.add(s);
+    };
+    mkSoffit(wellCx - wellHx, wellCx, (hiElev + midElev) / 2, 1);   // under flight A
+    mkSoffit(wellCx, wellCx + wellHx, (midElev + loElev) / 2, -1);  // under flight B
+    // fascia beam under the landing's leading edge
+    const fascia = new THREE.Mesh(new THREE.BoxGeometry(2 * wellHx, 0.34, 0.1), matStep);
+    fascia.position.set(wellCx, midElev - 0.24, wellCz + wellHz - 2.0);
+    this.scene.add(fascia);
+    // landing back guard: past the well's rear edge at mid height is open
+    // hangar airspace under the entry ring — wall it off (also gives the
+    // switchback a proper backdrop instead of a void)
+    guard(wellCx, midElev + RAIL_H / 2, wellCz + wellHz - T / 2, 2 * wellHx, RAIL_H, T);
   }
 
   // ---- sliding doors (user note): panels that open for ANY movement near

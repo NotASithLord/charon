@@ -165,7 +165,7 @@ var PARAMS = {
   },
   radio: {
     marineCallReliability: 0.5,
-    // MASTER DIAL — marine coordination efficiency / difficulty lever
+    // MASTER DIAL — CROSS-DECK receipt odds (same-deck calls always land)
     // (0.95 = intact comms; the portal event damaged them.
     //  Raise it and the response snuffs most outbreaks —
     //  re-tuned down after adding the top-deck garrison,
@@ -1969,7 +1969,8 @@ function strategicSquads(sim2) {
       if (sim2.t - call.t > P.radio.callFadeSec) continue;
       if (call.rolled.has(squad.id)) continue;
       call.rolled.add(squad.id);
-      if (!sim2.rng.chance(P.radio.marineCallReliability)) {
+      const sameDeck = sim2.graph.node(call.node).deck === sim2.graph.node(leader.node).deck;
+      if (!sameDeck && !sim2.rng.chance(P.radio.marineCallReliability)) {
         sim2.log("radio", `squad ${squad.id + 1} missed a distress call (comms damage)`);
         continue;
       }
@@ -2030,7 +2031,8 @@ function patrolPlan(sim2, squad, leader) {
     if (sim2.t - call.t > P.radio.callFadeSec) continue;
     if (call.rolled.has(squad.id)) continue;
     call.rolled.add(squad.id);
-    if (!sim2.rng.chance(P.radio.marineCallReliability)) continue;
+    const sameDeckP = sim2.graph.node(call.node).deck === sim2.graph.node(leader.node).deck;
+    if (!sameDeckP && !sim2.rng.chance(P.radio.marineCallReliability)) continue;
     const responders = sim2.squads.filter((s) => !s.broken && s.respondingTo === call.id).length;
     if (responders >= 2) continue;
     const cur = squad.objective?.kind === "distress" ? sim2.graph.hops(leader.node, squad.objective.node, ["std"], humanPass) : Infinity;
@@ -2500,6 +2502,29 @@ var Hive = class {
     }
     return best;
   }
+  // RADIO-DARK DECKS (user): the marines' distress net only lands reliably
+  // on their own deck, and the hive "knows" it — a deck with no marines
+  // hears nothing and answers slowly, so it's prime growth space. When the
+  // squads cluster onto one deck, every other deck gets darker. Returns a
+  // 0..2 bonus for how safe a deck is to operate on. Cached per tick.
+  radioDark(deck) {
+    if (this._darkTick !== this.sim.tickCount) {
+      this._darkTick = this.sim.tickCount;
+      const byDeck = {};
+      let alive = 0;
+      for (const a of this.sim.agents) {
+        if (a.dead || a.hp <= 0 || a.faction !== FACTION.MARINE) continue;
+        alive++;
+        const dk = this.sim.graph.node(a.node).deck;
+        byDeck[dk] = (byDeck[dk] ?? 0) + 1;
+      }
+      const maxD = Math.max(0, ...Object.values(byDeck));
+      this._darkCluster = alive ? maxD / alive : 1;
+      this._darkByDeck = byDeck;
+    }
+    const m = this._darkByDeck[deck] ?? 0;
+    return m === 0 ? 1 + this._darkCluster : m <= 2 ? 0.5 * this._darkCluster : 0;
+  }
   // Score every plausible den node near the breach (out of the sweep's
   // sightline, quiet, defensible, ideally sitting on carrier food).
   denCandidates(maxHops = 3) {
@@ -2523,6 +2548,7 @@ var Hive = class {
       score += Math.min(this.garrisonDist[n.idx] === -1 ? 4 : this.garrisonDist[n.idx], 4) * 0.5;
       if (this.exitCount(n.idx) < 2) score -= 3;
       score -= d * 0.2;
+      score += this.radioDark(n.deck) * 1.8;
       out.push({ node: n.idx, score });
     }
     out.sort((a, b) => b.score - a.score);
@@ -2708,7 +2734,7 @@ var Hive = class {
         for (const n of g.nodes) {
           if (!n.roles.includes("soft") && !n.roles.includes("medbay")) continue;
           if (this.believedHardness[n.idx] > 0.3) continue;
-          const s = this.believedHumanStr[n.idx] - this.believedHardness[n.idx] * 2;
+          const s = this.believedHumanStr[n.idx] - this.believedHardness[n.idx] * 2 + this.radioDark(n.deck) * 1.2;
           if (s > bestS) {
             bestS = s;
             bestT = n.idx;
@@ -4190,12 +4216,24 @@ var SURNAMES = [
   "Tremblay",
   "Ueda"
 ];
-var RANKS = {
-  marine: ["Pvt", "Pvt", "Pvt", "PFC", "PFC", "LCpl", "Cpl", "Sgt"],
-  odst: ["LCpl", "Cpl", "Cpl", "Sgt", "SSgt", "GySgt"],
-  armed: ["MA3", "MA2", "MA2", "MA1", "PO2", "PO1"],
-  // masters-at-arms / petty officers
-  crew: ["Crewman", "Crewman", "Crewman", "Tech", "Tech", "PO3", "PO2", "Chief"]
+var RANK_POOLS = {
+  // naval ratings (most of the crew are support and ops): ~60% junior
+  // crewmen, a technician layer, thin petty-officer tiers, a bare handful
+  // of chiefs across the whole complement
+  crew: [
+    ...Array(30).fill("Crewman"),
+    ...Array(10).fill("Tech"),
+    ...Array(5).fill("PO3"),
+    ...Array(3).fill("PO2"),
+    "PO1",
+    "Chief"
+  ],
+  // masters-at-arms (the armed watch) — mostly juniors, one senior per shift
+  armed: ["MA3", "MA3", "MA3", "MA3", "MA2", "MA2", "MA1"],
+  // marine riflemen below the leadership billets
+  marine: ["Pvt", "Pvt", "Pvt", "PFC", "PFC", "LCpl"],
+  // ODST troopers below the squad lead
+  odst: ["Cpl", "Cpl", "Sgt"]
 };
 function hash32(str) {
   let h = 2166136261 >>> 0;
@@ -4210,14 +4248,13 @@ function hash32(str) {
   h ^= h >>> 16;
   return h >>> 0;
 }
-function callsignFor(seed, id, kind) {
+function nameFor(seed, id) {
   const h = hash32(`${seed}:${id}`);
-  const ranks = RANKS[kind] ?? RANKS.crew;
   const initial = String.fromCharCode(65 + (h >>> 16) % 26);
-  return {
-    rank: ranks[(h >>> 8) % ranks.length],
-    name: `${initial}. ${SURNAMES[h % SURNAMES.length]}`
-  };
+  return `${initial}. ${SURNAMES[h % SURNAMES.length]}`;
+}
+function rankFromPool(seed, id, pool) {
+  return pool[hash32(`${seed}:rank:${id}`) % pool.length];
 }
 
 // sim/sim.js
@@ -4246,6 +4283,7 @@ var Sim = class {
     this.squads = squads;
     this.byId = new Map(agents.map((a) => [a.id, a]));
     for (const a of agents) this._assignCallsign(a);
+    this._assignRanks();
     this._deckRooms = {};
     for (const n of graph.nodes) (this._deckRooms[n.deck] ??= []).push(n);
     this.buffer = new AgentBuffer(512);
@@ -4439,6 +4477,8 @@ var Sim = class {
     }
     squad.size0 = size;
     this.squads.push(squad);
+    const lead = this.byId.get(squad.members[0]);
+    if (lead?.callsign) lead.callsign.rank = "Cpl";
     this.log("radio", `your fireteam forms up — ${size} marines on you`);
     return squad;
   }
@@ -4470,7 +4510,55 @@ var Sim = class {
   _assignCallsign(a) {
     if (a.callsign || a.isPlayer || a.faction === FACTION.INFECTION) return;
     const kind = a.odst ? "odst" : a.faction === FACTION.MARINE ? "marine" : a.faction === FACTION.ARMED ? "armed" : "crew";
-    a.callsign = callsignFor(this.seed, a.id, kind);
+    a.callsign = {
+      rank: rankFromPool(this.seed, a.id, RANK_POOLS[kind]),
+      name: nameFor(this.seed, a.id)
+    };
+  }
+  // Leadership billets, proportioned for a ~200-soul frigate (user): the
+  // pyramid pick above fills the ranks; this pass seats the structure —
+  // exactly one Sgt leading each marine squad (the first line squad carries
+  // the platoon's 2ndLt), Cpl-led patrol pairs, a corporal of the guard on
+  // the garrison, GySgt/SSgt over the ODST reserve, and the ship's officers
+  // (a CDR — small ship, no captain — with an LT and an ENS) on the bridge.
+  _assignRanks() {
+    let lineSquads = 0;
+    for (const squad of this.squads) {
+      const members = squad.members.map((id) => this.byId.get(id)).filter((m) => m?.callsign);
+      if (!members.length) continue;
+      if (members[0].odst) {
+        members[0].callsign.rank = "GySgt";
+        if (members[1]) members[1].callsign.rank = "SSgt";
+        continue;
+      }
+      if (squad.patrol) {
+        members[0].callsign.rank = "Cpl";
+        continue;
+      }
+      lineSquads++;
+      if (lineSquads === 1) {
+        members[0].callsign.rank = "2ndLt";
+        if (members[1]) members[1].callsign.rank = "Sgt";
+        if (members[2]) members[2].callsign.rank = "Cpl";
+      } else {
+        members[0].callsign.rank = "Sgt";
+        if (members[1]) members[1].callsign.rank = "Cpl";
+      }
+    }
+    const guard = this.agents.find((a) => a.garrison && a.callsign);
+    if (guard) guard.callsign.rank = "Cpl";
+    const bIdx = this.graph.byId.get("bridge");
+    const bDeck = bIdx !== void 0 ? this.graph.node(bIdx).deck : 1;
+    const civs = this.agents.filter((a) => a.faction === FACTION.CIVILIAN && a.callsign && !a.dead);
+    const seated = civs.map((a) => {
+      const n = this.graph.node(a.node);
+      const k = a.node === bIdx ? 0 : (n.roles ?? []).includes("command") ? 1 : n.deck === bDeck && !/brig/i.test(n.id ?? "") ? 2 : 3;
+      return { a, k };
+    }).sort((x, y) => x.k - y.k || x.a.id - y.a.id);
+    const officers = ["CDR", "LT", "ENS"];
+    for (let i = 0; i < officers.length && i < seated.length; i++) {
+      seated[i].a.callsign.rank = officers[i];
+    }
   }
   removeAgent(a) {
     a.dead = true;

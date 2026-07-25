@@ -469,6 +469,30 @@ export class Hive {
     return best;
   }
 
+  // RADIO-DARK DECKS (user): the marines' distress net only lands reliably
+  // on their own deck, and the hive "knows" it — a deck with no marines
+  // hears nothing and answers slowly, so it's prime growth space. When the
+  // squads cluster onto one deck, every other deck gets darker. Returns a
+  // 0..2 bonus for how safe a deck is to operate on. Cached per tick.
+  radioDark(deck) {
+    if (this._darkTick !== this.sim.tickCount) {
+      this._darkTick = this.sim.tickCount;
+      const byDeck = {};
+      let alive = 0;
+      for (const a of this.sim.agents) {
+        if (a.dead || a.hp <= 0 || a.faction !== FACTION.MARINE) continue;
+        alive++;
+        const dk = this.sim.graph.node(a.node).deck;
+        byDeck[dk] = (byDeck[dk] ?? 0) + 1;
+      }
+      const maxD = Math.max(0, ...Object.values(byDeck));
+      this._darkCluster = alive ? maxD / alive : 1; // no marines left: everywhere is dark
+      this._darkByDeck = byDeck;
+    }
+    const m = this._darkByDeck[deck] ?? 0;
+    return m === 0 ? 1 + this._darkCluster : m <= 2 ? 0.5 * this._darkCluster : 0;
+  }
+
   // Score every plausible den node near the breach (out of the sweep's
   // sightline, quiet, defensible, ideally sitting on carrier food).
   denCandidates(maxHops = 3) {
@@ -492,6 +516,9 @@ export class Hive {
       score += Math.min(this.garrisonDist[n.idx] === -1 ? 4 : this.garrisonDist[n.idx], 4) * 0.5;
       if (this.exitCount(n.idx) < 2) score -= 3;
       score -= d * 0.2;
+      // radio-dark bonus: an unmarined deck is worth claiming, and the more
+      // the marines bunch up on one deck, the more the dark decks pay
+      score += this.radioDark(n.deck) * 1.8;
       out.push({ node: n.idx, score });
     }
     out.sort((a, b) => b.score - a.score);
@@ -744,7 +771,10 @@ export class Hive {
         for (const n of g.nodes) {
           if (!n.roles.includes('soft') && !n.roles.includes('medbay')) continue;
           if (this.believedHardness[n.idx] > 0.3) continue; // believed guarded — not this one
-          const s = this.believedHumanStr[n.idx] - this.believedHardness[n.idx] * 2;
+          // radio-dark decks make better hunting: the screaming brings help
+          // late or not at all
+          const s = this.believedHumanStr[n.idx] - this.believedHardness[n.idx] * 2
+            + this.radioDark(n.deck) * 1.2;
           if (s > bestS) { bestS = s; bestT = n.idx; }
         }
         if (bestT !== -1) {

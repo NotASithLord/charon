@@ -13,7 +13,7 @@ import { updateFloodTick } from './floodExec.js';
 import { resolveCombat, humanDeathToCorpse, hurtFloodForm } from './combat.js';
 import { CommandQueue, CMD } from './commands.js';
 import { applyCommand } from './commandApply.js';
-import { callsignFor } from '../shared/names.js';
+import { nameFor, rankFromPool, RANK_POOLS } from '../shared/names.js';
 
 const TINT = {
   [FACTION.CIVILIAN]: 0xf2f2f2, [FACTION.ARMED]: 0xe8c840, [FACTION.MARINE]: 0x4d8ef0,
@@ -39,10 +39,12 @@ export class Sim {
     this.byId = new Map(agents.map((a) => [a.id, a]));
     // CALLSIGNS (user: radio-transcript log + reticle nameplates): every
     // human — including the corpses and everyone the flood will later wear —
-    // gets a deterministic rank+name. Pure function of (seed, id): no RNG
-    // stream consumed, so replays and divergence are untouched. Conversions
-    // mutate the same record, so combat forms keep their host's name.
+    // gets a deterministic rank+name. Pure function of (seed, id) plus a
+    // structural pass for the leadership billets: no RNG stream consumed,
+    // so replays and divergence are untouched. Conversions mutate the same
+    // record, so combat forms keep their host's name.
     for (const a of agents) this._assignCallsign(a);
+    this._assignRanks();
     // rooms indexed by deck, for the physical-room lookup (_pnodeOf)
     this._deckRooms = {};
     for (const n of graph.nodes) (this._deckRooms[n.deck] ??= []).push(n);
@@ -239,6 +241,9 @@ export class Sim {
     }
     squad.size0 = size;
     this.squads.push(squad);
+    // the fireteam detailed to you is corporal-led
+    const lead = this.byId.get(squad.members[0]);
+    if (lead?.callsign) lead.callsign.rank = 'Cpl';
     this.log('radio', `your fireteam forms up — ${size} marines on you`);
     return squad;
   }
@@ -279,7 +284,58 @@ export class Sim {
     const kind = a.odst ? 'odst'
       : a.faction === FACTION.MARINE ? 'marine'
         : a.faction === FACTION.ARMED ? 'armed' : 'crew';
-    a.callsign = callsignFor(this.seed, a.id, kind);
+    a.callsign = {
+      rank: rankFromPool(this.seed, a.id, RANK_POOLS[kind]),
+      name: nameFor(this.seed, a.id),
+    };
+  }
+
+  // Leadership billets, proportioned for a ~200-soul frigate (user): the
+  // pyramid pick above fills the ranks; this pass seats the structure —
+  // exactly one Sgt leading each marine squad (the first line squad carries
+  // the platoon's 2ndLt), Cpl-led patrol pairs, a corporal of the guard on
+  // the garrison, GySgt/SSgt over the ODST reserve, and the ship's officers
+  // (a CDR — small ship, no captain — with an LT and an ENS) on the bridge.
+  _assignRanks() {
+    let lineSquads = 0;
+    for (const squad of this.squads) {
+      const members = squad.members.map((id) => this.byId.get(id)).filter((m) => m?.callsign);
+      if (!members.length) continue;
+      if (members[0].odst) {
+        members[0].callsign.rank = 'GySgt';
+        if (members[1]) members[1].callsign.rank = 'SSgt';
+        continue;
+      }
+      if (squad.patrol) { members[0].callsign.rank = 'Cpl'; continue; }
+      lineSquads++;
+      if (lineSquads === 1) {
+        members[0].callsign.rank = '2ndLt';
+        if (members[1]) members[1].callsign.rank = 'Sgt';
+        if (members[2]) members[2].callsign.rank = 'Cpl';
+      } else {
+        members[0].callsign.rank = 'Sgt';
+        if (members[1]) members[1].callsign.rank = 'Cpl';
+      }
+    }
+    const guard = this.agents.find((a) => a.garrison && a.callsign);
+    if (guard) guard.callsign.rank = 'Cpl';
+    const bIdx = this.graph.byId.get('bridge'); // byId maps to the node INDEX
+    const bDeck = bIdx !== undefined ? this.graph.node(bIdx).deck : 1;
+    const civs = this.agents.filter((a) => a.faction === FACTION.CIVILIAN && a.callsign && !a.dead);
+    // seat the officers as close to the bridge as the spawn allows: on the
+    // bridge itself, else a command-role room, else elsewhere on the command
+    // deck — and never in the brig
+    const seated = civs.map((a) => {
+      const n = this.graph.node(a.node);
+      const k = a.node === bIdx ? 0
+        : (n.roles ?? []).includes('command') ? 1
+          : n.deck === bDeck && !/brig/i.test(n.id ?? '') ? 2 : 3;
+      return { a, k };
+    }).sort((x, y) => x.k - y.k || x.a.id - y.a.id);
+    const officers = ['CDR', 'LT', 'ENS'];
+    for (let i = 0; i < officers.length && i < seated.length; i++) {
+      seated[i].a.callsign.rank = officers[i];
+    }
   }
   removeAgent(a) {
     a.dead = true;
