@@ -62,7 +62,7 @@ const buildTarget = async (t) => {
       map[`${t.assets.replace(`${t.dir}/`, '')}/${n}`] = dataUri(await readFile(join(assetDir, n)));
     }
     const prelude = [
-      `import * as THREE from ${JSON.stringify(join(pageDir, 'vendor/three.module.js'))};`,
+      `import * as THREE from ${JSON.stringify(join(pageDir, 'vendor/three.webgpu.module.js'))};`,
       `const ASSETS = ${JSON.stringify(map)};`,
       `const norm = (u) => String(u).replace(/^\\.\\//, '');`,
       `THREE.DefaultLoadingManager.setURLModifier((u) => ASSETS[norm(u)] ?? u);`,

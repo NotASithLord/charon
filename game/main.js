@@ -3,7 +3,7 @@
 // Mechanics layer ported from the first-strike vertical slice (MA5 loop,
 // armor-over-health, movement feel). The sim is untouched and authoritative.
 
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.webgpu.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
 import { hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf } from './world.js';
@@ -31,12 +31,32 @@ const canvas = document.getElementById('c');
 const QP = new URLSearchParams(location.search);
 const HD = QP.has('hd');
 const QTIER = QP.get('q');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+// WEBGPU (user: a discrete GPU behind WebGL can be hostage to the OS's
+// per-app GPU routing — WebGPU's adapter request isn't). three's
+// WebGPURenderer asks the browser for the high-performance adapter
+// directly, so a laptop's discrete card gets used even when the browser
+// process sits on the integrated GPU. Falls back to WebGL2 automatically
+// (same node/TSL materials compile to GLSL there); ?gl=1 forces the
+// fallback for A/B testing.
+const renderer = new THREE.WebGPURenderer({
+  canvas, antialias: false, powerPreference: 'high-performance',
+  forceWebGL: QP.has('gl'),
+});
+await renderer.init();
+// SAFETY NET: a flaky driver can lose the WebGPU device mid-run (the spec
+// allows it at any time). Rather than a frozen black canvas, reload once
+// onto the WebGL2 fallback — same materials, same look, GLSL path.
+if (renderer.backend.isWebGPUBackend && !QP.has('gl')) {
+  renderer.backend.device?.lost?.then((info) => {
+    if (info.reason === 'destroyed') return; // normal teardown
+    const u = new URL(location.href);
+    u.searchParams.set('gl', '1');
+    u.searchParams.set('seed', seed); // reboot into the same ship
+    location.replace(u);
+  });
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25));
 renderer.info.autoReset = false; // accumulated per-frame in the main loop (__perf)
-// HALF-RATE SHADOWS: the flashlight's shadow map refreshes at 30Hz instead
-// of 60 — imperceptible for a handheld light, halves the shadow pass cost
-renderer.shadowMap.autoUpdate = false;
 // tone mapping moved into the HDR post pipeline (game/post.js) — the scene
 // renders LINEAR into a half-float target so fires/lamps/tracers can stack
 // past 1.0 and bloom; ACES + exposure happen in the final grade pass.
@@ -52,7 +72,7 @@ scene.background = new THREE.Color(0x05070a);
 scene.fog = new THREE.Fog(0x05070a, 18, 60);
 
 const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 220);
-const post = new PostFX(renderer);
+const post = new PostFX(renderer, scene, camera);
 // ONE fixed pool serves every dynamic light source (fires, sparks, room
 // fixtures, door spill, NPC muzzles, your muzzle/impacts/grenades) — see
 // game/lights.js. Constant light count = bounded fragment cost and ZERO
@@ -98,6 +118,9 @@ const torchTarget = new THREE.Object3D();
 scene.add(torch, torchTarget);
 torch.target = torchTarget;
 torch.castShadow = true;
+// HALF-RATE SHADOWS: the WebGPU renderer throttles per-light — the loop
+// stamps shadow.needsUpdate at 30Hz instead of every frame
+torch.shadow.autoUpdate = false;
 torch.shadow.mapSize.set(1024, 1024);
 torch.shadow.camera.near = 0.3;
 torch.shadow.camera.far = 32;
@@ -265,7 +288,7 @@ function setQuality(q) {
   const low = q === 'low';
   renderer.shadowMap.enabled = !low;
   torch.castShadow = !low;
-  if (!low) renderer.shadowMap.needsUpdate = true;
+  if (!low) torch.shadow.needsUpdate = true;
   lightPool.setActive(low ? 6 : 10);
   post.lite = low;
   motes.geo.setDrawRange(0, low ? 12 : Infinity);
@@ -275,10 +298,18 @@ window.__quality = setQuality;
 if (QTIER === 'low') setQuality('low');
 else if (QTIER !== 'full' && !HD) {
   try {
-    const gl = renderer.getContext();
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
-    const weak = /Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Intel\(R\)? (U?HD|Iris|GMA)/i.test(gpu)
+    // WebGPU exposes GPUAdapterInfo; the WebGL2 fallback still has the
+    // debug-renderer string. Either way, known-weak silicon starts low.
+    let gpu = '';
+    if (renderer.backend.isWebGPUBackend) {
+      const a = renderer.backend.adapter?.info;
+      gpu = [a?.vendor, a?.architecture, a?.device, a?.description].filter(Boolean).join(' ');
+    } else {
+      const gl = renderer.backend.gl;
+      const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+      gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    }
+    const weak = /Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Intel\(R\)? (U?HD|Iris|GMA)|\bgen-9|software/i.test(gpu)
       || (navigator.deviceMemory !== undefined && navigator.deviceMemory <= 4);
     if (weak) setQuality('low');
   } catch { /* boot heuristic only — the governor still catches slow machines */ }
@@ -558,8 +589,9 @@ window.__perf = () => {
     if (o.isLight && (o.intensity ?? 0) > 0.01) lights++;
   });
   return {
-    calls: renderer.info.render.calls, tris: renderer.info.render.triangles,
+    calls: renderer.info.render.drawCalls, tris: renderer.info.render.triangles,
     meshes, lights, pr: renderer.getPixelRatio(), quality,
+    backend: renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2',
   };
 };
 
@@ -1316,7 +1348,7 @@ function frame(now) {
       if (++_slowEvals >= 2) setQuality('low');
     } else _slowEvals = 0;
   }
-  if (renderer.shadowMap.enabled && (frameNo & 1) === 0) renderer.shadowMap.needsUpdate = true; // 30Hz shadows
+  if (renderer.shadowMap.enabled && (frameNo & 1) === 0) torch.shadow.needsUpdate = true; // 30Hz shadows
   frameNo++;
   renderer.info.reset(); // per-frame accumulation across all post passes
   post.render(scene, camera, now / 1000);
@@ -1325,4 +1357,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // debug hooks
-window.__game = { sim, world, player, agents, weapon };
+window.__game = { sim, world, player, agents, weapon, camera, scene, renderer };

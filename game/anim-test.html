@@ -3,7 +3,7 @@
 <body>
 <canvas id="c" width="1400" height="700"></canvas>
 <script type="module">
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.webgpu.module.js';
 import { characterParts } from './characters.js';
 
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });

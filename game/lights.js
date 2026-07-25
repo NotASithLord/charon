@@ -13,7 +13,7 @@
 // away through three walls contributed nothing visible, the screen looks
 // IDENTICAL — the far sources were pure waste.
 
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.webgpu.module.js';
 
 export class LightPool {
   constructor(scene, n = 10) {

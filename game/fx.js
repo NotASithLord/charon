@@ -6,52 +6,66 @@
 // doors, flamethrower burns) plus seeded small damage smolders. Render-only;
 // the sim never sees any of it.
 
-import * as THREE from './vendor/three.module.js';
+import * as THREE from './vendor/three.webgpu.module.js';
+import {
+  Fn, uniform, uv, float, vec2, vec3, vec4,
+  fract, sin, dot, floor, mix, smoothstep, abs, clamp, Loop,
+} from './vendor/three.tsl.module.js';
 
-const FLAME_VERT = /* glsl */`
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-const FLAME_FRAG = /* glsl */`
-  precision highp float;
-  varying vec2 vUv;
-  uniform float uT;
-  uniform float uSeed;
-  uniform float uIntensity;
-  // cheap value-noise fbm — plenty at flame scale
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
-               mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
-  }
-  float fbm(vec2 p) {
-    float v = 0.0, a = 0.5;
-    for (int k = 0; k < 4; k++) { v += a * noise(p); p *= 2.03; a *= 0.5; }
-    return v;
-  }
-  void main() {
-    vec2 uv = vUv;
+// TSL flame — the same fbm value-noise tongue shader as the old GLSL, term
+// for term, but built as a node graph so it compiles to WGSL on WebGPU and
+// GLSL on the WebGL2 fallback from one source.
+const hash2 = Fn(([p]) => fract(sin(dot(p, vec2(127.1, 311.7))).mul(43758.5453)));
+const noise2 = Fn(([p]) => {
+  const i = floor(p), f = fract(p);
+  const u = f.mul(f).mul(f.mul(-2.0).add(3.0));
+  return mix(
+    mix(hash2(i), hash2(i.add(vec2(1, 0))), u.x),
+    mix(hash2(i.add(vec2(0, 1))), hash2(i.add(vec2(1, 1))), u.x), u.y);
+});
+const fbm2 = Fn(([pIn]) => {
+  const p = pIn.toVar();
+  const v = float(0).toVar();
+  const a = float(0.5).toVar();
+  Loop(4, () => {
+    v.addAssign(a.mul(noise2(p)));
+    p.mulAssign(2.03);
+    a.mulAssign(0.5);
+  });
+  return v;
+});
+
+// builds one flame card material; per-card uniforms live on the material so
+// FireFX.update can drive the time exactly as before
+function makeFlameMaterial(seed) {
+  const uT = uniform(0);
+  const uSeed = uniform(seed);
+  const uIntensity = uniform(1.35);
+  const mat = new THREE.MeshBasicNodeMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide, fog: false,
+  });
+  mat.colorNode = Fn(() => {
+    const uvN = uv();
     // turbulence rises: sample noise scrolling DOWN so features rise
-    float n = fbm(vec2(uv.x * 3.0 + uSeed * 17.0, uv.y * 4.0 - uT * 2.6));
-    float n2 = fbm(vec2(uv.x * 7.0 - uSeed * 9.0, uv.y * 9.0 - uT * 4.1));
+    const n = fbm2(vec2(uvN.x.mul(3.0).add(uSeed.mul(17.0)), uvN.y.mul(4.0).sub(uT.mul(2.6))));
+    const n2 = fbm2(vec2(uvN.x.mul(7.0).sub(uSeed.mul(9.0)), uvN.y.mul(9.0).sub(uT.mul(4.1))));
     // flame envelope: wide at the base, licking to a point, side falloff
-    float cx = uv.x - 0.5 + (n - 0.5) * 0.35 * uv.y;
-    float body = 1.0 - smoothstep(0.0, 0.42 * (1.0 - uv.y * 0.75), abs(cx));
-    float tongue = 1.0 - smoothstep(0.55, 1.0, uv.y + (n2 - 0.5) * 0.55);
-    float f = body * tongue * (0.65 + 0.55 * n2);
-    f = clamp(f * uIntensity, 0.0, 1.0);
-    if (f < 0.03) discard;
+    const cx = uvN.x.sub(0.5).add(n.sub(0.5).mul(0.35).mul(uvN.y));
+    const body = smoothstep(0.0, uvN.y.mul(0.75).oneMinus().mul(0.42), abs(cx)).oneMinus();
+    const tongue = smoothstep(0.55, 1.0, uvN.y.add(n2.sub(0.5).mul(0.55))).oneMinus();
+    const f = clamp(body.mul(tongue).mul(n2.mul(0.55).add(0.65)).mul(uIntensity), 0.0, 1.0);
     // black-body ramp: deep red -> orange -> yellow-white core
-    vec3 col = mix(vec3(0.55, 0.08, 0.0), vec3(1.0, 0.45, 0.05), smoothstep(0.1, 0.55, f));
-    col = mix(col, vec3(1.0, 0.92, 0.6), smoothstep(0.65, 1.0, f));
-    gl_FragColor = vec4(col * (0.8 + 0.5 * n2), f * 0.92);
-  }
-`;
+    const col = mix(
+      mix(vec3(0.55, 0.08, 0.0), vec3(1.0, 0.45, 0.05), smoothstep(0.1, 0.55, f)),
+      vec3(1.0, 0.92, 0.6), smoothstep(0.65, 1.0, f));
+    // additive blending: alpha scales the contribution, near-zero adds nothing
+    // (the old shader's discard was only a blending shortcut)
+    return vec4(col.mul(n2.mul(0.5).add(0.8)), f.mul(0.92));
+  })();
+  mat.userData.uT = uT;
+  return mat;
+}
 
 export class FireFX {
   constructor(scene, lightPool = null) {
@@ -105,16 +119,7 @@ export class FireFX {
     // two crossed flame cards, billboarded toward the player per-frame (Y-only)
     const cards = [];
     for (let k = 0; k < 2; k++) {
-      const mat = new THREE.ShaderMaterial({
-        vertexShader: FLAME_VERT, fragmentShader: FLAME_FRAG,
-        uniforms: {
-          uT: { value: 0 },
-          uSeed: { value: (x * 7.3 + z * 3.1 + k * 13.7) % 10 },
-          uIntensity: { value: 1.35 },
-        },
-        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      });
+      const mat = makeFlameMaterial((x * 7.3 + z * 3.1 + k * 13.7) % 10);
       const card = new THREE.Mesh(this._quadGeo, mat);
       card.scale.set(1.15 * scale, 1.7 * scale, 1);
       card.position.set(x, elev + 0.02, z);
@@ -190,7 +195,7 @@ export class FireFX {
       const face = Math.atan2(px - f.x, pz - f.z);
       for (let k = 0; k < f.cards.length; k++) {
         const c = f.cards[k];
-        c.material.uniforms.uT.value = f.t;
+        c.material.userData.uT.value = f.t;
         c.rotation.y = face + (k === 0 ? 0 : Math.PI / 2);
       }
       // embers rise and die
