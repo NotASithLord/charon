@@ -120,6 +120,7 @@ export class PostFX {
     this.renderer = renderer;
     this.exposure = 1.35;      // main.js grades this (fog/dark stops)
     this.enabled = true;
+    this.lite = false;         // low quality tier: single quarter-res bloom mip
     const mkRT = (w, h) => new THREE.WebGLRenderTarget(w, h, {
       type: THREE.HalfFloatType,
       format: THREE.RGBAFormat,
@@ -184,31 +185,43 @@ export class PostFX {
     // 1. scene in linear HDR
     r.setRenderTarget(this.rtScene);
     r.render(scene, camera);
-    // 2. bright pass into half-res
+    // 2. bright pass + blur — full: two mips (half + quarter, 5 passes);
+    // lite: one quarter-res mip (3 passes at 1/16th the pixels). The halo is
+    // a touch tighter on lite but reads the same in motion.
     this.matBright.uniforms.tScene.value = this.rtScene.texture;
-    this._pass(this.matBright, this.rtA);
-    // 3. blur half-res (H then V)
-    const blur = (src, dst, w, h) => {
-      this.matBlur.uniforms.tSrc.value = src.texture;
-      this.matBlur.uniforms.uDir.value.set(1 / w, 0);
-      this._pass(this.matBlur, dst);
-      this.matBlur.uniforms.tSrc.value = dst.texture;
-      this.matBlur.uniforms.uDir.value.set(0, 1 / h);
-      this._pass(this.matBlur, src);
-    };
-    blur(this.rtA, this.rtA2, this.rtA.width, this.rtA.height);
-    // 4. downsample to quarter and blur wider
-    this.matBlur.uniforms.tSrc.value = this.rtA.texture;
-    this.matBlur.uniforms.uDir.value.set(1 / this.rtB.width, 0);
-    this._pass(this.matBlur, this.rtB);
-    this.matBlur.uniforms.tSrc.value = this.rtB.texture;
-    this.matBlur.uniforms.uDir.value.set(0, 1 / this.rtB.height);
-    this._pass(this.matBlur, this.rtB2);
+    let bloomA, bloomB;
+    if (this.lite) {
+      this._pass(this.matBright, this.rtB);
+      this.matBlur.uniforms.tSrc.value = this.rtB.texture;
+      this.matBlur.uniforms.uDir.value.set(1 / this.rtB.width, 0);
+      this._pass(this.matBlur, this.rtB2);
+      this.matBlur.uniforms.tSrc.value = this.rtB2.texture;
+      this.matBlur.uniforms.uDir.value.set(0, 1 / this.rtB.height);
+      this._pass(this.matBlur, this.rtB);
+      bloomA = this.rtB; bloomB = this.rtB;
+    } else {
+      this._pass(this.matBright, this.rtA);
+      // 3. blur half-res (H then V)
+      this.matBlur.uniforms.tSrc.value = this.rtA.texture;
+      this.matBlur.uniforms.uDir.value.set(1 / this.rtA.width, 0);
+      this._pass(this.matBlur, this.rtA2);
+      this.matBlur.uniforms.tSrc.value = this.rtA2.texture;
+      this.matBlur.uniforms.uDir.value.set(0, 1 / this.rtA.height);
+      this._pass(this.matBlur, this.rtA);
+      // 4. downsample to quarter and blur wider
+      this.matBlur.uniforms.tSrc.value = this.rtA.texture;
+      this.matBlur.uniforms.uDir.value.set(1 / this.rtB.width, 0);
+      this._pass(this.matBlur, this.rtB);
+      this.matBlur.uniforms.tSrc.value = this.rtB.texture;
+      this.matBlur.uniforms.uDir.value.set(0, 1 / this.rtB.height);
+      this._pass(this.matBlur, this.rtB2);
+      bloomA = this.rtA; bloomB = this.rtB2;
+    }
     // 5. grade into LDR
     const g = this.matGrade.uniforms;
     g.tScene.value = this.rtScene.texture;
-    g.tBloomA.value = this.rtA.texture;
-    g.tBloomB.value = this.rtB2.texture;
+    g.tBloomA.value = bloomA.texture;
+    g.tBloomB.value = bloomB.texture;
     g.uExposure.value = this.exposure;
     g.uTime.value = timeSec % 100;
     this._pass(this.matGrade, this.rtLDR);

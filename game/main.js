@@ -26,8 +26,11 @@ const canvas = document.getElementById('c');
 // pixel ratio caps at 1.25 instead of 2. Retina pr2 was rendering ~4M px
 // through the 5-pass HDR pipeline × every light × PCFSoft; at 1.25 + FXAA +
 // grain + bloom the difference on a laptop panel is imperceptible and the
-// fragment bill drops ~2.6x. `?hd=1` opts back into full resolution.
-const HD = new URLSearchParams(location.search).has('hd');
+// fragment bill drops ~2.6x. `?hd=1` opts back into full resolution;
+// `?q=low` / `?q=full` pin the quality tier (see setQuality below).
+const QP = new URLSearchParams(location.search);
+const HD = QP.has('hd');
+const QTIER = QP.get('q');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25));
 renderer.info.autoReset = false; // accumulated per-frame in the main loop (__perf)
@@ -243,6 +246,43 @@ for (const set of [agents.civSet, agents.armedSet, agents.marineSet, agents.odst
 }
 agents.carrier.castShadow = true;
 agents.rifle.castShadow = true;
+
+// QUALITY TIERS (user: anything low-hanging for weaker hardware?). 'full' is
+// everything the fidelity pass built. 'low' keeps the entire look — HDR,
+// bloom, ACES grade, light pool, materials, IBL — and sheds only the costs
+// integrated/mobile GPUs actually choke on:
+//   - the PCFSoft shadow pass (the single most expensive item on an iGPU),
+//   - 4 of the 10 pool lights (smaller light loop compiled into every shader),
+//   - the half-res bloom mip (one quarter-res mip carries the glow),
+//   - a deeper dynamic-resolution floor (0.55 vs 0.85) with a 1.0 cap.
+// Engaged automatically at boot on known-weak GPUs / low-memory devices, or
+// live by the governor if full tier can't hold frame at its resolution
+// floor. ?q=low forces it, ?q=full pins full and disables the auto-demote.
+let quality = 'full';
+function setQuality(q) {
+  if (q === quality) return;
+  quality = q;
+  const low = q === 'low';
+  renderer.shadowMap.enabled = !low;
+  torch.castShadow = !low;
+  if (!low) renderer.shadowMap.needsUpdate = true;
+  lightPool.setActive(low ? 6 : 10);
+  post.lite = low;
+  motes.geo.setDrawRange(0, low ? 12 : Infinity);
+  console.info(`[charon] quality tier: ${q}`);
+}
+window.__quality = setQuality;
+if (QTIER === 'low') setQuality('low');
+else if (QTIER !== 'full' && !HD) {
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const gpu = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    const weak = /Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Intel\(R\)? (U?HD|Iris|GMA)/i.test(gpu)
+      || (navigator.deviceMemory !== undefined && navigator.deviceMemory <= 4);
+    if (weak) setQuality('low');
+  } catch { /* boot heuristic only — the governor still catches slow machines */ }
+}
 
 // REAL FLICKER SPILL (user: flickering lighting for real in each room): the
 // ceiling strips' flicker used to be emissive-only — visible on the fixture,
@@ -519,7 +559,7 @@ window.__perf = () => {
   });
   return {
     calls: renderer.info.render.calls, tris: renderer.info.render.triangles,
-    meshes, lights, pr: renderer.getPixelRatio(),
+    meshes, lights, pr: renderer.getPixelRatio(), quality,
   };
 };
 
@@ -1001,7 +1041,7 @@ function playerObstacles() {
 }
 
 // --- main loop ---
-let _ftEMA = 16, _resAt = 0, frameNo = 0; // dynamic-resolution governor state
+let _ftEMA = 16, _resAt = 0, frameNo = 0, _slowEvals = 0; // dynamic-resolution governor state
 let acc = 0;
 let physAcc = 0;
 let shownLost = false;
@@ -1259,17 +1299,25 @@ function frame(now) {
   if (now - _resAt > 3000) {
     _resAt = now;
     const cur = renderer.getPixelRatio();
-    const cap = Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25);
+    const floor = quality === 'low' ? 0.55 : 0.85;
+    const cap = Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1.0 : HD ? 2 : 1.25);
     let next = cur;
-    if (_ftEMA > 20 && cur > 0.85) next = Math.max(0.85, cur - 0.15);
+    if (_ftEMA > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
     else if (_ftEMA < 13 && cur < cap) next = Math.min(cap, cur + 0.1);
     if (Math.abs(next - cur) > 0.01) {
       renderer.setPixelRatio(next);
       renderer.setSize(window.innerWidth, window.innerHeight, false);
       post.setSize(window.innerWidth, window.innerHeight);
     }
+    // ESCAPE HATCH: pinned at full tier's resolution floor and still under
+    // ~38fps for two straight evaluations means the machine is below the
+    // tier — drop to low live (unless ?q=full pinned it).
+    if (quality === 'full' && QTIER !== 'full' && !HD && _ftEMA > 26 && cur <= floor + 0.01) {
+      if (++_slowEvals >= 2) setQuality('low');
+    } else _slowEvals = 0;
   }
-  if ((frameNo++ & 1) === 0) renderer.shadowMap.needsUpdate = true; // 30Hz shadows
+  if (renderer.shadowMap.enabled && (frameNo & 1) === 0) renderer.shadowMap.needsUpdate = true; // 30Hz shadows
+  frameNo++;
   renderer.info.reset(); // per-frame accumulation across all post passes
   post.render(scene, camera, now / 1000);
   requestAnimationFrame(frame);

@@ -17,12 +17,28 @@ import * as THREE from './vendor/three.module.js';
 
 export class LightPool {
   constructor(scene, n = 10) {
+    this.scene = scene;
     this.lights = Array.from({ length: n }, () => {
       const L = new THREE.PointLight(0xffffff, 0, 10, 1.8);
       scene.add(L);
       return L;
     });
+    this.active = n;
     this.virtual = [];
+  }
+
+  // shrink/grow the live pool (quality tiers). Removing a light from the
+  // scene shrinks the light loop compiled into every shader — a real
+  // per-fragment cut, not just dimming to zero. Costs one program rebuild
+  // at the moment of the switch, then stays stable.
+  setActive(n) {
+    n = Math.max(1, Math.min(n, this.lights.length));
+    if (n === this.active) return;
+    this.active = n;
+    this.lights.forEach((L, i) => {
+      if (i < n) { if (!L.parent) this.scene.add(L); }
+      else if (L.parent) { L.intensity = 0; this.scene.remove(L); }
+    });
   }
 
   // start a frame: forget last frame's declarations
@@ -41,7 +57,7 @@ export class LightPool {
       v.score = d > 55 ? 0 : v.intensity * v.distance / (1 + d * d * 0.015);
     }
     this.virtual.sort((a, b) => b.score - a.score);
-    for (let i = 0; i < this.lights.length; i++) {
+    for (let i = 0; i < this.active; i++) {
       const L = this.lights[i];
       const v = this.virtual[i];
       if (!v || v.score <= 0) { L.intensity = 0; continue; }
