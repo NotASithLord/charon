@@ -38,6 +38,17 @@
   #log .ev-ambush, #log .ev-bait { color: #ffd23f; }
   #log .ev-duct { color: #8a7fb0; font-style: italic; }
   #log .ev-end { color: #fff; font-weight: 700; }
+  #log .spk { color: #cfe0ff; font-weight: 700; letter-spacing: 0.04em; }
+  #nameplate {
+    position: absolute; z-index: 6; transform: translate(-50%, -100%);
+    font-weight: 700; font-size: 11px; letter-spacing: 0.14em;
+    text-shadow: 0 0 5px #000, 0 1px 2px #000;
+    pointer-events: none; white-space: nowrap; display: none;
+  }
+  #nameplate.np-marine { color: #8ed49a; }
+  #nameplate.np-crew { color: #a8c6ea; }
+  #nameplate.np-flood { color: #e06a55; }
+  #nameplate.np-corpse { color: #8a8f96; }
   #overlay {
     position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 14px;
@@ -170,6 +181,7 @@
     <div id="ammo">60 / 240</div>
   </div>
   <div class="hud" id="crosshair"></div>
+  <div id="nameplate"></div>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>

@@ -4090,6 +4090,136 @@ function setOrder(sim2, squad, order, desc, peerId) {
   sim2.log("command", `squad ${squad.id + 1}: ${desc}`);
 }
 
+// shared/names.js
+var SURNAMES = [
+  "Jenkins",
+  "Vance",
+  "Okafor",
+  "Reyes",
+  "Kowalski",
+  "Tanaka",
+  "Brahe",
+  "Mendez",
+  "Holt",
+  "Adebayo",
+  "Silva",
+  "Novak",
+  "Kessler",
+  "Duarte",
+  "Lindqvist",
+  "Ochoa",
+  "Petrov",
+  "Kimathi",
+  "Farrell",
+  "Yoon",
+  "Castillo",
+  "Marek",
+  "Osei",
+  "Bishop",
+  "Devereaux",
+  "Nakamura",
+  "Sorensen",
+  "Ferro",
+  "Ambrose",
+  "Calloway",
+  "Diaz",
+  "Eriksen",
+  "Ganda",
+  "Haddad",
+  "Ivanov",
+  "Jarrah",
+  "Kaminski",
+  "Laghari",
+  "Moreau",
+  "Nwosu",
+  "Oduya",
+  "Pryce",
+  "Quan",
+  "Rousseau",
+  "Santiago",
+  "Thorne",
+  "Ulrich",
+  "Vasquez",
+  "Whitaker",
+  "Xiang",
+  "Yaeger",
+  "Zubair",
+  "Ashworth",
+  "Boateng",
+  "Crowe",
+  "Delacroix",
+  "Emerson",
+  "Fontaine",
+  "Grigoryan",
+  "Huang",
+  "Iwu",
+  "Jansen",
+  "Katsaros",
+  "Lombardi",
+  "Mbeki",
+  "Nazari",
+  "Olsen",
+  "Paredes",
+  "Quinlan",
+  "Rahal",
+  "Sandoval",
+  "Takeda",
+  "Umarov",
+  "Villanueva",
+  "Wren",
+  "Yamada",
+  "Zielinski",
+  "Abara",
+  "Beckett",
+  "Cardoso",
+  "Dietrich",
+  "Espinoza",
+  "Fischer",
+  "Guerra",
+  "Halloran",
+  "Ito",
+  "Joshi",
+  "Kaur",
+  "Lachance",
+  "Mattias",
+  "Ngata",
+  "Oyelaran",
+  "Pavic",
+  "Rios",
+  "Sturm",
+  "Tremblay",
+  "Ueda"
+];
+var RANKS = {
+  marine: ["Pvt", "Pvt", "Pvt", "PFC", "PFC", "LCpl", "Cpl", "Sgt"],
+  odst: ["LCpl", "Cpl", "Cpl", "Sgt", "SSgt", "GySgt"],
+  armed: ["MA3", "MA2", "MA2", "MA1", "PO2", "PO1"],
+  // masters-at-arms / petty officers
+  crew: ["Crewman", "Crewman", "Crewman", "Tech", "Tech", "PO3", "PO2", "Chief"]
+};
+function hash32(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 2246822507);
+  h ^= h >>> 13;
+  h = Math.imul(h, 3266489909);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+function callsignFor(seed, id, kind) {
+  const h = hash32(`${seed}:${id}`);
+  const ranks = RANKS[kind] ?? RANKS.crew;
+  const initial = String.fromCharCode(65 + (h >>> 16) % 26);
+  return {
+    rank: ranks[(h >>> 8) % ranks.length],
+    name: `${initial}. ${SURNAMES[h % SURNAMES.length]}`
+  };
+}
+
 // sim/sim.js
 var TINT = {
   [FACTION.CIVILIAN]: 15921906,
@@ -4115,6 +4245,7 @@ var Sim = class {
     this.agents = agents;
     this.squads = squads;
     this.byId = new Map(agents.map((a) => [a.id, a]));
+    for (const a of agents) this._assignCallsign(a);
     this._deckRooms = {};
     for (const n of graph.nodes) (this._deckRooms[n.deck] ??= []).push(n);
     this.buffer = new AgentBuffer(512);
@@ -4332,8 +4463,14 @@ var Sim = class {
     if (this.events.length > 1600) this.events.splice(0, 200);
   }
   spawn(a) {
+    this._assignCallsign(a);
     this.agents.push(a);
     this.byId.set(a.id, a);
+  }
+  _assignCallsign(a) {
+    if (a.callsign || a.isPlayer || a.faction === FACTION.INFECTION) return;
+    const kind = a.odst ? "odst" : a.faction === FACTION.MARINE ? "marine" : a.faction === FACTION.ARMED ? "armed" : "crew";
+    a.callsign = callsignFor(this.seed, a.id, kind);
   }
   removeAgent(a) {
     a.dead = true;

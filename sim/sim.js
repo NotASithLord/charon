@@ -13,6 +13,7 @@ import { updateFloodTick } from './floodExec.js';
 import { resolveCombat, humanDeathToCorpse, hurtFloodForm } from './combat.js';
 import { CommandQueue, CMD } from './commands.js';
 import { applyCommand } from './commandApply.js';
+import { callsignFor } from '../shared/names.js';
 
 const TINT = {
   [FACTION.CIVILIAN]: 0xf2f2f2, [FACTION.ARMED]: 0xe8c840, [FACTION.MARINE]: 0x4d8ef0,
@@ -36,6 +37,12 @@ export class Sim {
     this.agents = agents;
     this.squads = squads;
     this.byId = new Map(agents.map((a) => [a.id, a]));
+    // CALLSIGNS (user: radio-transcript log + reticle nameplates): every
+    // human — including the corpses and everyone the flood will later wear —
+    // gets a deterministic rank+name. Pure function of (seed, id): no RNG
+    // stream consumed, so replays and divergence are untouched. Conversions
+    // mutate the same record, so combat forms keep their host's name.
+    for (const a of agents) this._assignCallsign(a);
     // rooms indexed by deck, for the physical-room lookup (_pnodeOf)
     this._deckRooms = {};
     for (const n of graph.nodes) (this._deckRooms[n.deck] ??= []).push(n);
@@ -262,8 +269,17 @@ export class Sim {
   }
 
   spawn(a) {
+    this._assignCallsign(a);
     this.agents.push(a);
     this.byId.set(a.id, a);
+  }
+
+  _assignCallsign(a) {
+    if (a.callsign || a.isPlayer || a.faction === FACTION.INFECTION) return;
+    const kind = a.odst ? 'odst'
+      : a.faction === FACTION.MARINE ? 'marine'
+        : a.faction === FACTION.ARMED ? 'armed' : 'crew';
+    a.callsign = callsignFor(this.seed, a.id, kind);
   }
   removeAgent(a) {
     a.dead = true;

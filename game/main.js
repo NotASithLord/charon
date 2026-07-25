@@ -547,11 +547,68 @@ function endScreen(title, text, final = true) {
 }
 
 let lastEvent = 0;
-// FOG OF WAR FOR THE FEED (user rule): the GAME's ship log never narrates
-// the flood's mind. Flood-POV events are dropped outright, or replaced by
-// what a crew would actually perceive — screams, noises, something stirring.
-// The sim debug page keeps the full omniscient log.
+// RADIO NET (user: the log is radio-report transcripts now, and its
+// unreliability is IMPLICIT). Every line the player sees is a broadcast
+// from a NAMED crew member. The rules:
+//   - an event needs a living WITNESS in or adjacent to the room, or
+//     nobody transmits and the player never hears about it;
+//   - same-deck broadcasts always reach you;
+//   - everything cross-deck is a crapshoot (the comms are dying);
+//   - the armory ODSTs' hardened gear ALWAYS punches through.
+// The sim debug page keeps the full omniscient log; the flood's mind is
+// still never narrated here.
 const _ominousAt = {};
+const HUMAN_F = new Set([0, 1, 2]); // civilian, armed, marine
+function humanIn(node, pred) {
+  for (const a of sim.agents) {
+    if (a.dead || a.hp <= 0 || a.isPlayer || !a.callsign) continue;
+    if (!HUMAN_F.has(a.faction) || a.node !== node) continue;
+    if (!pred || pred(a)) return a;
+  }
+  return null;
+}
+function witnessNear(node, pred = null) {
+  if (node == null || node < 0) return null;
+  const here = humanIn(node, pred);
+  if (here) return here;
+  for (const { to } of sim.graph.adj.std[node] ?? []) {
+    const w = humanIn(to, pred);
+    if (w) return w;
+  }
+  return null;
+}
+function squadSpeaker(msg) {
+  const m = msg.match(/squad (\d+)/) ?? msg.match(/patrol (\d+)/);
+  if (!m) return null;
+  const isPatrol = m[0].startsWith('patrol');
+  const squad = sim.squads.find((s) => isPatrol ? s.patrolNo === +m[1] : s.id === +m[1] - 1);
+  if (!squad) return null;
+  for (const id of squad.members) {
+    const a = sim.byId.get(id);
+    if (a && !a.dead && a.hp > 0 && a.callsign) return a;
+  }
+  return null;
+}
+function odstSpeaker() {
+  for (const a of sim.agents) {
+    if (a.odst && !a.dead && a.hp > 0 && !a.isPlayer && a.callsign) return a;
+  }
+  return null;
+}
+// did the broadcast reach you? (Math.random is fine here — receipt is a
+// display-layer concern; the sim never sees it)
+function delivered(speaker, always = false) {
+  if (always) return true;
+  if (!speaker) return false;               // nobody transmitted
+  if (speaker.odst) return true;            // ODST comms always punch through
+  if (speaker.deck === player.deck) return true;
+  return Math.random() < 0.45;              // cross-deck: the net is dying
+}
+const spkName = (a) => a?.callsign ? `${a.callsign.rank} ${a.callsign.name}`.toUpperCase() : null;
+function rx(e, speaker, msg, { always = false, type = 'radio', spk } = {}) {
+  if (!delivered(speaker, always)) return null;
+  return { t: e.t, type, spk: spk ?? spkName(speaker), msg };
+}
 function gameLogView(e) {
   const room = e.node >= 0 ? sim.graph.node(e.node).name : null;
   const throttle = (key, sec = 20) => {
@@ -559,26 +616,95 @@ function gameLogView(e) {
     _ominousAt[key] = e.t;
     return true;
   };
+  const msg = e.msg;
   switch (e.type) {
     case 'hive': case 'carrier': case 'bait': case 'vent':
       return null; // the hive does not report to the bridge
-    case 'ambush':
-      return e; // a sprung ambush IS seen/heard by whoever's there — show it (user request)
-    case 'convert':
+    case 'init':
+      return { ...e, spk: 'FLEETCOM' };
+    case 'end':
+      return e; // endgame banner, not radio
+    case 'ambush': {
+      const w = witnessNear(e.node);
+      return room ? rx(e, w, `contact! they were waiting for us in ${room}!`, { type: 'combat' }) : e;
+    }
+    case 'convert': {
       if (!room || !throttle('c' + e.node)) return null;
-      return { t: e.t, type: 'radio', msg: e.msg.includes('taken')
-        ? `screams heard from ${room}` : `strange noises reported from ${room}` };
-    case 'rampage':
+      const w = witnessNear(e.node);
+      return rx(e, w, msg.includes('taken')
+        ? `screams coming from ${room} — someone's in trouble` : `strange noises out of ${room}`);
+    }
+    case 'rampage': {
       if (!room || !throttle('m' + e.node, 15)) return null;
-      return { t: e.t, type: 'combat', msg: `heavy movement reported near ${room}` };
-    case 'revive': case 'reanimate':
+      const w = witnessNear(e.node);
+      return rx(e, w, `heavy movement near ${room} — multiple contacts`, { type: 'combat' });
+    }
+    case 'revive': case 'reanimate': {
       if (!room || !throttle('r' + e.node)) return null;
-      return { t: e.t, type: 'radio', msg: `something stirs in ${room}` };
-    case 'duct':
-      // thin the duct chatter (user): the crew only calls in about half of
-      // what they hear in the ductwork — a coin flip per event, rolled once
-      // (each event passes through here exactly once)
-      return Math.random() < 0.5 ? e : null;
+      const w = witnessNear(e.node);
+      return rx(e, w, `something's moving in ${room}... it was down a second ago`);
+    }
+    case 'duct': {
+      // someone has to be close enough to HEAR the ductwork, then transmit,
+      // then you have to receive it
+      const w = witnessNear(e.node);
+      return rx(e, w, msg.startsWith('noises')
+        ? msg.replace('noises in the ducts', 'hearing something moving in the trunking')
+        : `hearing something in the ducts near ${room ?? 'my position'}`);
+    }
+    case 'combat': {
+      if (msg.includes('(you)') || msg.startsWith('you ')) return e; // your own actions, no radio
+      if (msg.startsWith('a marine falls')) {
+        const w = witnessNear(e.node, (a) => a.faction === 2 || a.faction === 1);
+        return rx(e, w, `we have a man down in ${room ?? 'here'}!`, { type: 'combat' });
+      }
+      if (msg.includes('arms up at the armory')) {
+        return rx(e, odstSpeaker(), 'civilians drawing rifles off the racks — arming everyone who can hold one', { always: !sim.armoryLocked });
+      }
+      return e;
+    }
+    case 'burn': {
+      const w = witnessNear(e.node, (a) => a.faction === 2);
+      return rx(e, w, room ? `burning the bodies in ${room}` : msg);
+    }
+    case 'sweep': case 'morale': {
+      const s = squadSpeaker(msg);
+      return rx(e, s, msg, { type: e.type });
+    }
+    case 'radio': {
+      if (msg.includes('(you)') || msg.startsWith('your fireteam') || msg.startsWith('fireteam:')) return e;
+      if (msg.startsWith('ARMORY SEAL RELEASED')) {
+        return rx(e, odstSpeaker(), 'armory seal released — ODST reserve deploying. racks are open', { always: true });
+      }
+      if (msg.startsWith('distress call')) {
+        const w = witnessNear(e.node);
+        return rx(e, w, `taking fire in ${room ?? 'here'}! anyone copy?`, { type: 'combat' });
+      }
+      if (msg.startsWith('FALL BACK')) {
+        // CIC all-hands broadcast — strong transmitter, but the same rules:
+        // command deck is deck 1; if you're below and the net drops it, you
+        // find out when the stragglers do
+        const cic = { deck: 1, callsign: null };
+        return rx(e, cic, msg.toLowerCase().replace('fall back', 'FALL BACK'), { spk: 'CIC' });
+      }
+      if (msg.includes('souls heard the call') || msg.includes('stragglers')) {
+        return rx(e, { deck: 1 }, msg, { spk: 'CIC' });
+      }
+      if (msg.includes('missed a distress call')) return null; // non-receipt IS silence now
+      if (msg.includes('word of the outbreak')) return null;   // omniscient narration
+      if (msg.startsWith('squad') || msg.startsWith('patrol')) {
+        const s = squadSpeaker(msg);
+        return rx(e, s, msg.replace(/^(squad|patrol) \d+ /, 'we are '));
+      }
+      if (msg.includes('spore fog') || msg.includes('power flickers')) {
+        const w = witnessNear(e.node);
+        return rx(e, w, msg.includes('power')
+          ? `power's coming back in ${room ?? 'this section'}`
+          : `air's finally clearing in ${room ?? 'this section'}`);
+      }
+      const w = e.node >= 0 ? witnessNear(e.node) : null;
+      return w ? rx(e, w, msg) : e;
+    }
     default:
       return e;
   }
@@ -587,12 +713,14 @@ function renderLog() {
   const log = el('log');
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   let added = false;
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   while (lastEvent < sim.events.length) {
     const e = gameLogView(sim.events[lastEvent++]);
     if (!e) continue;
     const div = document.createElement('div');
     div.className = `ev ev-${e.type}`;
-    div.innerHTML = `<span class="t">${fmtTime(e.t)}</span> ${e.msg.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}`;
+    const spk = e.spk ? `<span class="spk">[${esc(e.spk)}]</span> ` : '';
+    div.innerHTML = `<span class="t">${fmtTime(e.t)}</span> ${spk}${esc(e.msg)}`;
     log.appendChild(div);
     added = true;
   }
@@ -600,6 +728,60 @@ function renderLog() {
     while (log.childNodes.length > 400) log.removeChild(log.firstChild);
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
+}
+
+// RETICLE NAMEPLATE (user): point at anyone — living crew, a corpse on the
+// deck, or the combat form sprinting at you — and their rank+name floats
+// above them. Conversions keep the host's callsign, so the thing wearing
+// Pvt Jenkins still reads PVT JENKINS. Infection forms were never anyone.
+const _npDir = new THREE.Vector3();
+const _npVec = new THREE.Vector3();
+const _npRay = new THREE.Raycaster();
+let _npSticky = null; // hysteresis: the current target keeps a wider cone
+function updateNameplate() {
+  const np = el('nameplate');
+  if (player.dead) { np.style.display = 'none'; return; }
+  camera.getWorldDirection(_npDir);
+  let best = null, bestScore = 1;
+  for (const a of sim.agents) {
+    if (a.isPlayer || !a.callsign || a.deck !== player.deck) continue;
+    const low = a.faction === 6 || a.downed; // corpses and downed forms lie on the deck
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    const base = elevOf(a.deck);
+    _npVec.set(wx, base + (low ? 0.3 : 1.45), wz).sub(camera.position);
+    const dist = _npVec.length();
+    if (dist > 32 || dist < 0.4) continue;
+    _npVec.divideScalar(dist);
+    const err = Math.hypot(_npVec.x - _npDir.x, _npVec.y - _npDir.y, _npVec.z - _npDir.z);
+    // the cone widens up close (a body fills the screen at arm's length):
+    // accept ~0.7m of lateral miss at any range, floor ~5 degrees far out;
+    // the target you already have holds on with a wider cone so a shuffling
+    // marine at arm's length doesn't strobe the plate
+    const cone = Math.max(0.09, 0.7 / dist) * (a === _npSticky ? 1.8 : 1);
+    if (err < cone && err / cone < bestScore) {
+      bestScore = err / cone;
+      best = { a, wx, wz, dist, labelY: base + (low ? 0.6 : 2.05) };
+    }
+  }
+  if (best) {
+    // a wall between you and them kills the plate
+    _npVec.set(best.wx, best.labelY - 0.6, best.wz).sub(camera.position).normalize();
+    _npRay.set(camera.position, _npVec);
+    _npRay.far = best.dist - 0.3;
+    if (_npRay.intersectObjects(world.wallMeshes, false).length) best = null;
+  }
+  _npSticky = best?.a ?? null;
+  if (!best) { np.style.display = 'none'; return; }
+  const a = best.a;
+  _npVec.set(best.wx, best.labelY, best.wz).project(camera);
+  if (_npVec.z > 1) { np.style.display = 'none'; return; }
+  np.style.left = `${(_npVec.x * 0.5 + 0.5) * canvas.clientWidth}px`;
+  np.style.top = `${Math.max(20, (-_npVec.y * 0.5 + 0.5) * canvas.clientHeight)}px`;
+  np.className = a.faction === 4 || a.faction === 5 ? 'np-flood'
+    : a.faction === 6 ? 'np-corpse'
+      : a.faction === 2 || a.odst ? 'np-marine' : 'np-crew';
+  np.textContent = `${a.callsign.rank} ${a.callsign.name}`.toUpperCase();
+  np.style.display = 'block';
 }
 
 // debug: raycast from the camera in a direction, report what's hit
@@ -1331,6 +1513,7 @@ function frame(now) {
   }
   el('pinned').style.display = player.pinned && !player.dead ? 'block' : 'none';
   renderLog();
+  updateNameplate();
 
   if (player.dead && ghost) {
     if (!spectateShown) {
