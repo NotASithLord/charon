@@ -43,18 +43,6 @@ const renderer = new THREE.WebGPURenderer({
   forceWebGL: QP.has('gl'),
 });
 await renderer.init();
-// SAFETY NET: a flaky driver can lose the WebGPU device mid-run (the spec
-// allows it at any time). Rather than a frozen black canvas, reload once
-// onto the WebGL2 fallback — same materials, same look, GLSL path.
-if (renderer.backend.isWebGPUBackend && !QP.has('gl')) {
-  renderer.backend.device?.lost?.then((info) => {
-    if (info.reason === 'destroyed') return; // normal teardown
-    const u = new URL(location.href);
-    u.searchParams.set('gl', '1');
-    u.searchParams.set('seed', seed); // reboot into the same ship
-    location.replace(u);
-  });
-}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25));
 renderer.info.autoReset = false; // accumulated per-frame in the main loop (__perf)
 // tone mapping moved into the HDR post pipeline (game/post.js) — the scene
@@ -132,6 +120,29 @@ torch.shadow.radius = 4; // soft edges on everything the beam throws
 // infection forms, no combat forms/carriers yet) ---
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
+
+// SAFETY NET: either backend can lose its device mid-run — WebGPU by spec
+// at any time, WebGL2 by context loss (which the node renderer routes here
+// too, with the browser's auto-restore suppressed). Rather than a frozen
+// black canvas: WebGPU loss reloads once onto the WebGL2 fallback; a
+// WebGL2 loss reloads in place, capped by a session counter so a hopeless
+// driver doesn't reload-loop. Same seed either way — same ship.
+let _deviceLostHandled = false;
+renderer.onDeviceLost = (info) => {
+  if (_deviceLostHandled || info?.reason === 'destroyed') return;
+  _deviceLostHandled = true;
+  console.error('[charon] render device lost:', info?.message ?? info);
+  const u = new URL(location.href);
+  if (renderer.backend.isWebGPUBackend) {
+    u.searchParams.set('gl', '1');
+  } else {
+    const n = +(sessionStorage.getItem('charon-gl-lost') ?? 0);
+    if (n >= 2) return; // twice is a pattern — stop reloading into it
+    sessionStorage.setItem('charon-gl-lost', String(n + 1));
+  }
+  u.searchParams.set('seed', seed); // reboot into the same ship
+  location.replace(u);
+};
 const sim = new Sim(seed);
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
@@ -188,6 +199,8 @@ for (const d of world.doors) {
 // event rattled the whole hull, so every deck carries a few small smolders
 // and shorted panels. Never on the player's spawn room.
 const sparks = new SparkFX(scene, lightPool);
+fire.camera = camera;   // embers/sparks are instanced quads that billboard
+sparks.camera = camera; // to the camera each update
 {
   const dmgRng = new RNG(seed + ':damage');
   const byDeck = new Map();
@@ -213,7 +226,8 @@ const sparks = new SparkFX(scene, lightPool);
 // Motes wrap around a 9m cube centered on you so the cloud never runs out.
 const motes = (() => {
   const N = 36, HALF = 4.5; // cut hard from 140 (user: fewer, smaller — gladly)
-  const geo = new THREE.BufferGeometry();
+  // instanced billboard quads — the node renderer draws point primitives at
+  // a fixed 1px, so the old THREE.Points motes silently vanished
   const p = new Float32Array(N * 3);
   const seeds = new Float32Array(N);
   for (let i = 0; i < N; i++) {
@@ -222,36 +236,46 @@ const motes = (() => {
     p[i * 3 + 2] = (Math.random() - 0.5) * HALF * 2;
     seeds[i] = Math.random() * 10;
   }
-  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
   const c = document.createElement('canvas'); c.width = c.height = 16;
   const x = c.getContext('2d');
   const g = x.createRadialGradient(8, 8, 0.5, 8, 8, 7.5);
   g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
   x.fillStyle = g; x.fillRect(0, 0, 16, 16);
-  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
-    color: 0x9daabb, size: 0.01, transparent: true, opacity: 0.1,
-    map: new THREE.CanvasTexture(c), alphaMap: new THREE.CanvasTexture(c),
-    depthWrite: false, sizeAttenuation: true,
-  }));
+  const tex = new THREE.CanvasTexture(c);
+  const pts = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0x9daabb, transparent: true, opacity: 0.1,
+      map: tex, alphaMap: tex, depthWrite: false, fog: false,
+    }), N);
   pts.frustumCulled = false;
   scene.add(pts);
-  return { pts, geo, seeds, HALF, t: 0 };
+  return {
+    pts, p, seeds, HALF, t: 0, count: N,
+    setLow(low) { this.count = low ? 12 : N; this.pts.count = this.count; },
+  };
 })();
+const _moteM4 = new THREE.Matrix4();
+const _moteV = new THREE.Vector3();
+const _moteS = new THREE.Vector3(0.014, 0.014, 0.014);
 function updateMotes(dt) {
   motes.t += dt;
-  const pos = motes.geo.attributes.position;
   const H = motes.HALF;
-  for (let i = 0; i < pos.count; i++) {
+  const p = motes.p;
+  const q = camera.quaternion;
+  for (let i = 0; i < motes.count; i++) {
     const s = motes.seeds[i];
-    let x = pos.getX(i) + Math.sin(motes.t * 0.3 + s) * 0.0012 + 0.0007;
-    let y = pos.getY(i) + Math.sin(motes.t * 0.22 + s * 2.1) * 0.0009 - 0.0004;
-    let z = pos.getZ(i) + Math.cos(motes.t * 0.26 + s) * 0.0012;
+    let x = p[i * 3] + Math.sin(motes.t * 0.3 + s) * 0.0012 + 0.0007;
+    let y = p[i * 3 + 1] + Math.sin(motes.t * 0.22 + s * 2.1) * 0.0009 - 0.0004;
+    let z = p[i * 3 + 2] + Math.cos(motes.t * 0.26 + s) * 0.0012;
     if (x > H) x -= H * 2; if (x < -H) x += H * 2;
     if (z > H) z -= H * 2; if (z < -H) z += H * 2;
     if (y < 0.1) y = 2.8; if (y > 2.9) y = 0.2;
-    pos.setXYZ(i, x, y, z);
+    p[i * 3] = x; p[i * 3 + 1] = y; p[i * 3 + 2] = z;
+    _moteM4.compose(_moteV.set(x, y, z), q, _moteS);
+    motes.pts.setMatrixAt(i, _moteM4);
   }
-  pos.needsUpdate = true;
+  motes.pts.instanceMatrix.needsUpdate = true;
   motes.pts.position.set(player.x, elevOf(player.deck), player.z);
 }
 
@@ -276,22 +300,28 @@ agents.rifle.castShadow = true;
 // integrated/mobile GPUs actually choke on:
 //   - the PCFSoft shadow pass (the single most expensive item on an iGPU),
 //   - 4 of the 10 pool lights (smaller light loop compiled into every shader),
-//   - the half-res bloom mip (one quarter-res mip carries the glow),
+//   - half the bloom chain's resolution (input scale 0.5 -> 0.25),
 //   - a deeper dynamic-resolution floor (0.55 vs 0.85) with a 1.0 cap.
 // Engaged automatically at boot on known-weak GPUs / low-memory devices, or
 // live by the governor if full tier can't hold frame at its resolution
 // floor. ?q=low forces it, ?q=full pins full and disables the auto-demote.
 let quality = 'full';
-function setQuality(q) {
+function setQuality(q, staged = false) {
   if (q === quality) return;
   quality = q;
   const low = q === 'low';
   renderer.shadowMap.enabled = !low;
   torch.castShadow = !low;
   if (!low) torch.shadow.needsUpdate = true;
-  lightPool.setActive(low ? 6 : 10);
+  // both the shadow flag and the light count sit in the node renderer's
+  // scene cache key — each flip rebuilds every pipeline. A staged (live,
+  // mid-game) switch spaces the two recompile waves ~2.5s apart so one
+  // frame never absorbs both; boot-time switches happen before the first
+  // frame and stay immediate.
+  const shrink = () => lightPool.setActive(low ? 6 : 10);
+  if (staged) setTimeout(shrink, 2500); else shrink();
   post.lite = low;
-  motes.geo.setDrawRange(0, low ? 12 : Infinity);
+  motes.setLow(low);
   console.info(`[charon] quality tier: ${q}`);
 }
 window.__quality = setQuality;
@@ -302,7 +332,8 @@ else if (QTIER !== 'full' && !HD) {
     // debug-renderer string. Either way, known-weak silicon starts low.
     let gpu = '';
     if (renderer.backend.isWebGPUBackend) {
-      const a = renderer.backend.adapter?.info;
+      // GPUDevice.adapterInfo — the backend stores the device, not the adapter
+      const a = renderer.backend.device?.adapterInfo;
       gpu = [a?.vendor, a?.architecture, a?.device, a?.description].filter(Boolean).join(' ');
     } else {
       const gl = renderer.backend.gl;
@@ -1345,7 +1376,7 @@ function frame(now) {
     // ~38fps for two straight evaluations means the machine is below the
     // tier — drop to low live (unless ?q=full pinned it).
     if (quality === 'full' && QTIER !== 'full' && !HD && _ftEMA > 26 && cur <= floor + 0.01) {
-      if (++_slowEvals >= 2) setQuality('low');
+      if (++_slowEvals >= 2) setQuality('low', true); // staged: spread the recompiles
     } else _slowEvals = 0;
   }
   if (renderer.shadowMap.enabled && (frameNo & 1) === 0) torch.shadow.needsUpdate = true; // 30Hz shadows

@@ -66,8 +66,9 @@ class BloomNode extends TempNode {
 	 * @param {number} [strength=1] - The strength of the bloom.
 	 * @param {number} [radius=0] - The radius of the bloom.
 	 * @param {number} [threshold=0] - The luminance threshold limits which bright areas contribute to the bloom effect.
+	 * @param {number} [nMips=5] - Number of blur mips (charon patch: configurable so a 2-mip chain can match a lighter hand-rolled bloom).
 	 */
-	constructor( inputNode, strength = 1, radius = 0, threshold = 0 ) {
+	constructor( inputNode, strength = 1, radius = 0, threshold = 0, nMips = 5 ) {
 
 		super( 'vec4' );
 
@@ -144,7 +145,7 @@ class BloomNode extends TempNode {
 		 * @private
 		 * @type {number}
 		 */
-		this._nMips = 5;
+		this._nMips = Math.max( 1, Math.min( 5, nMips ) ); // charon patch: was fixed 5
 
 		/**
 		 * The render target for the luminance pass.
@@ -209,44 +210,19 @@ class BloomNode extends TempNode {
 		this._textureNodeBright = texture( this._renderTargetBright.texture );
 
 		/**
-		 * The result of the first blur pass as a texture node for further processing.
+		 * The results of the blur passes as texture nodes for further processing.
+		 * (charon patch: array sized to _nMips instead of five fixed fields)
 		 *
 		 * @private
-		 * @type {TextureNode}
+		 * @type {Array<TextureNode>}
 		 */
-		this._textureNodeBlur0 = texture( this._renderTargetsVertical[ 0 ].texture );
+		this._textureNodesBlur = [];
 
-		/**
-		 * The result of the second blur pass as a texture node for further processing.
-		 *
-		 * @private
-		 * @type {TextureNode}
-		 */
-		this._textureNodeBlur1 = texture( this._renderTargetsVertical[ 1 ].texture );
+		for ( let i = 0; i < this._nMips; i ++ ) {
 
-		/**
-		 * The result of the third blur pass as a texture node for further processing.
-		 *
-		 * @private
-		 * @type {TextureNode}
-		 */
-		this._textureNodeBlur2 = texture( this._renderTargetsVertical[ 2 ].texture );
+			this._textureNodesBlur.push( texture( this._renderTargetsVertical[ i ].texture ) );
 
-		/**
-		 * The result of the fourth blur pass as a texture node for further processing.
-		 *
-		 * @private
-		 * @type {TextureNode}
-		 */
-		this._textureNodeBlur3 = texture( this._renderTargetsVertical[ 3 ].texture );
-
-		/**
-		 * The result of the fifth blur pass as a texture node for further processing.
-		 *
-		 * @private
-		 * @type {TextureNode}
-		 */
-		this._textureNodeBlur4 = texture( this._renderTargetsVertical[ 4 ].texture );
+		}
 
 		/**
 		 * The result of the effect is represented as a separate texture node.
@@ -410,7 +386,8 @@ class BloomNode extends TempNode {
 
 		// These sizes have been changed to account for the altered coefficients-calculation to avoid blockiness,
 		// while retaining the same blur-strength. For details see https://github.com/mrdoob/three.js/pull/31528
-		const kernelSizeArray = [ 6, 10, 14, 18, 22 ];
+		// (charon patch: a short chain uses smaller kernels — the wide taps existed to feed the tiny far mips)
+		const kernelSizeArray = this._nMips <= 2 ? [ 4, 8 ] : [ 6, 10, 14, 18, 22 ];
 
 		for ( let i = 0; i < this._nMips; i ++ ) {
 
@@ -440,13 +417,15 @@ class BloomNode extends TempNode {
 
 		const compositePass = Fn( () => {
 
-			const color0 = lerpBloomFactor( bloomFactors.element( 0 ), this.radius ).mul( vec4( bloomTintColors.element( 0 ), 1.0 ) ).mul( this._textureNodeBlur0 );
-			const color1 = lerpBloomFactor( bloomFactors.element( 1 ), this.radius ).mul( vec4( bloomTintColors.element( 1 ), 1.0 ) ).mul( this._textureNodeBlur1 );
-			const color2 = lerpBloomFactor( bloomFactors.element( 2 ), this.radius ).mul( vec4( bloomTintColors.element( 2 ), 1.0 ) ).mul( this._textureNodeBlur2 );
-			const color3 = lerpBloomFactor( bloomFactors.element( 3 ), this.radius ).mul( vec4( bloomTintColors.element( 3 ), 1.0 ) ).mul( this._textureNodeBlur3 );
-			const color4 = lerpBloomFactor( bloomFactors.element( 4 ), this.radius ).mul( vec4( bloomTintColors.element( 4 ), 1.0 ) ).mul( this._textureNodeBlur4 );
+			// charon patch: composite only the mips that exist (JS loop unrolls into the graph)
+			let sum = null;
 
-			const sum = color0.add( color1 ).add( color2 ).add( color3 ).add( color4 );
+			for ( let i = 0; i < this._nMips; i ++ ) {
+
+				const color = lerpBloomFactor( bloomFactors.element( i ), this.radius ).mul( vec4( bloomTintColors.element( i ), 1.0 ) ).mul( this._textureNodesBlur[ i ] );
+				sum = sum === null ? color : sum.add( color );
+
+			}
 
 			return sum.mul( this.strength );
 
@@ -567,8 +546,9 @@ class BloomNode extends TempNode {
  * @param {number} [strength=1] - The strength of the bloom.
  * @param {number} [radius=0] - The radius of the bloom.
  * @param {number} [threshold=0] - The luminance threshold limits which bright areas contribute to the bloom effect.
+ * @param {number} [nMips=5] - Number of blur mips (charon patch).
  * @returns {BloomNode}
  */
-export const bloom = ( node, strength, radius, threshold ) => new BloomNode( nodeObject( node ), strength, radius, threshold );
+export const bloom = ( node, strength, radius, threshold, nMips ) => new BloomNode( nodeObject( node ), strength, radius, threshold, nMips );
 
 export default BloomNode;

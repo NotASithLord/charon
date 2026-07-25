@@ -8,8 +8,8 @@
 
 import * as THREE from './vendor/three.webgpu.module.js';
 import {
-  Fn, uniform, uv, float, vec2, vec3, vec4,
-  fract, sin, dot, floor, mix, smoothstep, abs, clamp, Loop,
+  Fn, uv, float, vec2, vec3, vec4,
+  fract, sin, dot, floor, mix, smoothstep, abs, clamp, Loop, userData,
 } from './vendor/three.tsl.module.js';
 
 // TSL flame — the same fbm value-noise tongue shader as the old GLSL, term
@@ -35,12 +35,16 @@ const fbm2 = Fn(([pIn]) => {
   return v;
 });
 
-// builds one flame card material; per-card uniforms live on the material so
-// FireFX.update can drive the time exactly as before
-function makeFlameMaterial(seed) {
-  const uT = uniform(0);
-  const uSeed = uniform(seed);
-  const uIntensity = uniform(1.35);
+// ONE material serves every flame card in the game (review swarm: a fresh
+// Fn() graph per material misses the node-builder cache by design — its key
+// is the node instance id — so each ignition paid two full TSL builds
+// mid-frame). Per-card time/seed ride on the MESH's userData via userData()
+// nodes, which the node system uploads per rendered object.
+let _flameMat = null;
+function flameMaterial() {
+  if (_flameMat) return _flameMat;
+  const uT = userData('fireT', 'float');
+  const uSeed = userData('fireSeed', 'float');
   const mat = new THREE.MeshBasicNodeMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide, fog: false,
@@ -54,7 +58,7 @@ function makeFlameMaterial(seed) {
     const cx = uvN.x.sub(0.5).add(n.sub(0.5).mul(0.35).mul(uvN.y));
     const body = smoothstep(0.0, uvN.y.mul(0.75).oneMinus().mul(0.42), abs(cx)).oneMinus();
     const tongue = smoothstep(0.55, 1.0, uvN.y.add(n2.sub(0.5).mul(0.55))).oneMinus();
-    const f = clamp(body.mul(tongue).mul(n2.mul(0.55).add(0.65)).mul(uIntensity), 0.0, 1.0);
+    const f = clamp(body.mul(tongue).mul(n2.mul(0.55).add(0.65)).mul(1.35), 0.0, 1.0);
     // black-body ramp: deep red -> orange -> yellow-white core
     const col = mix(
       mix(vec3(0.55, 0.08, 0.0), vec3(1.0, 0.45, 0.05), smoothstep(0.1, 0.55, f)),
@@ -63,19 +67,39 @@ function makeFlameMaterial(seed) {
     // (the old shader's discard was only a blending shortcut)
     return vec4(col.mul(n2.mul(0.5).add(0.8)), f.mul(0.92));
   })();
-  mat.userData.uT = uT;
+  _flameMat = mat;
   return mat;
 }
+
+// billboard-quad scratch (embers/sparks are instanced quads now — the node
+// renderer draws point primitives at a fixed 1px, so THREE.Points sprites
+// silently vanished on both backends)
+const _m4 = new THREE.Matrix4();
+const _pos = new THREE.Vector3();
+const _scl = new THREE.Vector3();
+const _IDENT_Q = new THREE.Quaternion();
 
 export class FireFX {
   constructor(scene, lightPool = null) {
     this.scene = scene;
     this.pool = lightPool; // fire light goes through the global pool (perf)
+    this.camera = null;    // main.js sets this; embers billboard to its quaternion
     this.fires = new Map();
     this._quadGeo = new THREE.PlaneGeometry(1, 1);
     this._quadGeo.translate(0, 0.5, 0); // pivot at the base of the flame
     this._scorchTex = FireFX._makeScorchTex();
     this._spotTex = FireFX._makeSpotTex();
+    // shared across fires: ember quad + material, scorch geometry + material
+    this._emberGeo = new THREE.PlaneGeometry(1, 1);
+    this._emberMat = new THREE.MeshBasicMaterial({
+      color: 0xffb45c, map: this._spotTex, alphaMap: this._spotTex,
+      transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+      depthWrite: false, fog: false,
+    });
+    this._scorchGeo = new THREE.PlaneGeometry(1, 1);
+    this._scorchMat = new THREE.MeshBasicMaterial({
+      map: this._scorchTex, transparent: true, depthWrite: false,
+    });
   }
 
   static _makeSpotTex() {
@@ -119,8 +143,9 @@ export class FireFX {
     // two crossed flame cards, billboarded toward the player per-frame (Y-only)
     const cards = [];
     for (let k = 0; k < 2; k++) {
-      const mat = makeFlameMaterial((x * 7.3 + z * 3.1 + k * 13.7) % 10);
-      const card = new THREE.Mesh(this._quadGeo, mat);
+      const card = new THREE.Mesh(this._quadGeo, flameMaterial());
+      card.userData.fireT = 0;
+      card.userData.fireSeed = (x * 7.3 + z * 3.1 + k * 13.7) % 10;
       card.scale.set(1.15 * scale, 1.7 * scale, 1);
       card.position.set(x, elev + 0.02, z);
       card.rotation.y = k * Math.PI / 2;
@@ -128,27 +153,22 @@ export class FireFX {
       group.add(card);
       cards.push(card);
     }
-    // embers: a sparse fountain of hot points
+    // embers: a sparse fountain of hot instanced billboard quads
     const N = 26;
-    const geo = new THREE.BufferGeometry();
-    const pos = new Float32Array(N * 3);
     const seeds = new Float32Array(N);
+    for (let i = 0; i < N; i++) seeds[i] = (i * 0.61803398) % 1;
+    const embers = new THREE.InstancedMesh(this._emberGeo, this._emberMat, N);
+    _scl.setScalar(0.085 * scale);
     for (let i = 0; i < N; i++) {
-      seeds[i] = (i * 0.61803398) % 1;
-      pos[i * 3] = x; pos[i * 3 + 1] = elev; pos[i * 3 + 2] = z;
+      _m4.compose(_pos.set(x, elev, z), _IDENT_Q, _scl);
+      embers.setMatrixAt(i, _m4);
     }
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const embers = new THREE.Points(geo, new THREE.PointsMaterial({
-      color: 0xffb45c, size: 0.085 * scale, transparent: true, opacity: 0.9,
-      map: this._spotTex, alphaMap: this._spotTex,
-      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
-    }));
+    embers.renderOrder = 4;
     embers.frustumCulled = false;
     group.add(embers);
-    // scorch burned into the deck under the fire
-    const scorch = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.4 * scale, 2.4 * scale),
-      new THREE.MeshBasicMaterial({ map: this._scorchTex, transparent: true, depthWrite: false }));
+    // scorch burned into the deck under the fire (shared geo/mat, scaled)
+    const scorch = new THREE.Mesh(this._scorchGeo, this._scorchMat);
+    scorch.scale.setScalar(2.4 * scale);
     scorch.rotation.x = -Math.PI / 2;
     scorch.position.set(x, elev + 0.012, z);
     scorch.renderOrder = 1;
@@ -164,7 +184,10 @@ export class FireFX {
     const f = this.fires.get(key);
     if (!f) return;
     this.scene.remove(f.group);
-    for (const c of f.cards) c.material.dispose();
+    // cards/scorch use shared material+geometry (never disposed); the only
+    // per-fire GPU resource is the ember instance buffer (review swarm: the
+    // old remove() leaked ember/scorch geometry and materials)
+    f.embers.dispose();
     this.fires.delete(key);
   }
 
@@ -195,22 +218,24 @@ export class FireFX {
       const face = Math.atan2(px - f.x, pz - f.z);
       for (let k = 0; k < f.cards.length; k++) {
         const c = f.cards[k];
-        c.material.userData.uT.value = f.t;
+        c.userData.fireT = f.t;
         c.rotation.y = face + (k === 0 ? 0 : Math.PI / 2);
       }
-      // embers rise and die
-      const pos = f.embers.geometry.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
+      // embers rise and die — instanced quads billboarded to the camera
+      const q = this.camera?.quaternion ?? _IDENT_Q;
+      _scl.setScalar(0.085 * f.scale);
+      for (let i = 0; i < f.embers.count; i++) {
         const s = f.seeds[i];
         const life = (f.t * (0.35 + s * 0.5) + s * 7) % 1;
         const ang = s * 6.283 + f.t * (s - 0.5) * 1.6;
         const r = 0.4 * f.scale * (0.3 + s * 0.7) * (0.5 + life * 0.8);
-        pos.setXYZ(i,
+        _m4.compose(_pos.set(
           f.x + Math.cos(ang) * r,
           f.elev + 0.15 + life * (1.9 + s) * f.scale,
-          f.z + Math.sin(ang) * r);
+          f.z + Math.sin(ang) * r), q, _scl);
+        f.embers.setMatrixAt(i, _m4);
       }
-      pos.needsUpdate = true;
+      f.embers.instanceMatrix.needsUpdate = true;
     }
   }
 }
@@ -223,21 +248,29 @@ export class SparkFX {
   constructor(scene, lightPool = null) {
     this.scene = scene;
     this.pool = lightPool;
+    this.camera = null; // main.js sets this; sparks billboard to its quaternion
     this.sites = [];
-    const N = 18;
-    this._geo = new THREE.BufferGeometry();
-    this._geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-    this._n = N;
+    this._n = 18;
     this._spotTex = FireFX._makeSpotTex();
+    this._quadGeo = new THREE.PlaneGeometry(1, 1);
   }
 
   add(x, y, z) {
-    const geo = this._geo.clone();
-    const pts = new THREE.Points(geo, new THREE.PointsMaterial({
-      color: 0xcfe4ff, size: 0.06, transparent: true, opacity: 0,
+    // instanced billboard quads (Points render 1px under the node renderer);
+    // material cloned per site because opacity animates per burst — standard
+    // materials share their compiled program regardless
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xcfe4ff, transparent: true, opacity: 0,
       map: this._spotTex, alphaMap: this._spotTex,
-      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
-    }));
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    });
+    const pts = new THREE.InstancedMesh(this._quadGeo, mat, this._n);
+    _scl.setScalar(0.06);
+    for (let i = 0; i < this._n; i++) {
+      _m4.compose(_pos.set(x, y, z), _IDENT_Q, _scl);
+      pts.setMatrixAt(i, _m4);
+    }
+    pts.renderOrder = 4;
     pts.frustumCulled = false;
     this.scene.add(pts);
     this.sites.push({
@@ -263,16 +296,18 @@ export class SparkFX {
       // hard stab of light with a fast flicker, sparks arcing down under gravity
       this.pool?.add(s.x, s.y, s.z, 0x9fc8ff, (1 - p) * (7 + Math.sin(t * 90) * 4), 7, 2.0);
       s.pts.material.opacity = 1 - p;
-      const pos = s.pts.geometry.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
+      const q = this.camera?.quaternion ?? _IDENT_Q;
+      _scl.setScalar(0.06);
+      for (let i = 0; i < s.pts.count; i++) {
         const sd = s.seeds[i];
         const ang = sd * 6.283, v = 1.4 + sd * 2.4;
-        pos.setXYZ(i,
+        _m4.compose(_pos.set(
           s.x + Math.cos(ang) * v * p,
           s.y + (sd - 0.2) * 1.2 * p - 3.2 * p * p, // ballistic fall
-          s.z + Math.sin(ang) * v * p * 0.6);
+          s.z + Math.sin(ang) * v * p * 0.6), q, _scl);
+        s.pts.setMatrixAt(i, _m4);
       }
-      pos.needsUpdate = true;
+      s.pts.instanceMatrix.needsUpdate = true;
     }
   }
 }

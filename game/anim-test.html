@@ -6,7 +6,11 @@
 import * as THREE from './vendor/three.webgpu.module.js';
 import { characterParts } from './characters.js';
 
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+const renderer = new THREE.WebGPURenderer({
+  canvas: document.getElementById('c'), antialias: true,
+  forceWebGL: new URLSearchParams(location.search).has('gl'),
+});
+await renderer.init();
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a2030);
 scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x223, 2.2));

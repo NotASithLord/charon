@@ -18,10 +18,10 @@
 import * as THREE from './vendor/three.webgpu.module.js';
 import {
   pass, uniform, uv, Fn, float, vec2, vec3, vec4,
-  fract, sin, dot, floor, mix, smoothstep, clamp, pow, max,
+  fract, sin, dot, floor, mix, smoothstep, clamp, pow, max, min, abs,
+  select, rtt, textureSize,
 } from './vendor/three.tsl.module.js';
 import { bloom } from './vendor/BloomNode.js';
-import { fxaa } from './vendor/FXAANode.js';
 
 export class PostFX {
   constructor(renderer, scene, camera) {
@@ -36,9 +36,15 @@ export class PostFX {
     this.scenePass = pass(scene, camera);
     const scol = this.scenePass.getTextureNode();
 
-    // 2. bloom mip chain (threshold matches the old bright pass; strength
-    // tuned to the old 0.55/0.35 two-mip composite weights)
-    this.bloomNode = bloom(scol, 0.75, 0.28, 0.85);
+    // 2. bloom — TWO mips (half + quarter input res), matching the old
+    // hand-rolled chain's shape and cost, not the stock five-mip ladder
+    // (review swarm: 5 mips = 12 passes and 3.3x the integrated energy).
+    // Weights at radius 0.1 are [0.92, 0.76]; strength 0.54 puts the total
+    // composite gain at ~0.9x of bright-pass energy — the old 0.55+0.35.
+    this.bloomNode = bloom(scol, 0.54, 0.1, 0.85, 2);
+    // the old bright pass had a 0.6-wide soft knee (smoothstep 0.85..1.45);
+    // BloomNode defaults to a hard 0.01 knee — restore the ramp
+    this.bloomNode.smoothWidth.value = 0.6;
 
     // 3. grade: CA -> +bloom -> ACES -> vignette -> grain -> sRGB.
     // Same math as the old GLSL, term for term.
@@ -72,11 +78,42 @@ export class PostFX {
       return vec4(pow(max(c, 0.0), vec3(1.0 / 2.2)), 1.0);
     })();
 
-    // 4. FXAA on the graded LDR image, straight to the canvas. The manual
-    // sRGB above is the output transform — disable the built-in one.
+    // 4. FXAA on the graded LDR image, straight to the canvas — the compact
+    // Lottes console preset ported from the old GLSL, running on an 8-bit
+    // RTT (the grade output is [0,1] sRGB; the default half-float target
+    // would double the bandwidth of the most expensive link in the chain).
+    const ldr = rtt(grade, null, null, { type: THREE.UnsignedByteType, depthBuffer: false });
+    const lum = (c) => dot(c, vec3(0.299, 0.587, 0.114));
+    const fxaaFn = Fn(() => {
+      const invRes = vec2(1.0).div(vec2(textureSize(ldr))).toVar();
+      const uvN = uv();
+      const s = (dx, dy) => ldr.sample(uvN.add(vec2(dx, dy).mul(invRes))).rgb;
+      const rgbNW = s(-1, -1).toVar(), rgbNE = s(1, -1).toVar();
+      const rgbSW = s(-1, 1).toVar(), rgbSE = s(1, 1).toVar();
+      const rgbM = ldr.sample(uvN).rgb.toVar();
+      const lNW = lum(rgbNW).toVar(), lNE = lum(rgbNE).toVar();
+      const lSW = lum(rgbSW).toVar(), lSE = lum(rgbSE).toVar(), lM = lum(rgbM).toVar();
+      const lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+      const lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+      const dir = vec2(
+        lNW.add(lNE).sub(lSW.add(lSE)).negate(),
+        lNW.add(lSW).sub(lNE.add(lSE))).toVar();
+      const dirReduce = max(lNW.add(lNE).add(lSW).add(lSE).mul(0.25 * 0.125), 1.0 / 128.0);
+      const rcpDirMin = float(1.0).div(min(abs(dir.x), abs(dir.y)).add(dirReduce));
+      dir.assign(clamp(dir.mul(rcpDirMin), -8.0, 8.0).mul(invRes));
+      const rgbA = ldr.sample(uvN.add(dir.mul(1.0 / 3.0 - 0.5))).rgb
+        .add(ldr.sample(uvN.add(dir.mul(2.0 / 3.0 - 0.5))).rgb).mul(0.5).toVar();
+      const rgbB = rgbA.mul(0.5).add(
+        ldr.sample(uvN.add(dir.mul(-0.5))).rgb
+          .add(ldr.sample(uvN.add(dir.mul(0.5))).rgb).mul(0.25)).toVar();
+      const lB = lum(rgbB);
+      return vec4(select(lB.lessThan(lMin).or(lB.greaterThan(lMax)), rgbA, rgbB), 1.0);
+    })();
+
+    // manual sRGB in the grade is the output transform — disable the built-in one
     this.post = new THREE.RenderPipeline(renderer);
     this.post.outputColorTransform = false;
-    this.post.outputNode = fxaa(grade);
+    this.post.outputNode = fxaaFn;
 
     this._scene = scene;
     this._camera = camera;
