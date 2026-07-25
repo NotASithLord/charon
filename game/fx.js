@@ -54,8 +54,9 @@ const FLAME_FRAG = /* glsl */`
 `;
 
 export class FireFX {
-  constructor(scene) {
+  constructor(scene, lightPool = null) {
     this.scene = scene;
+    this.pool = lightPool; // fire light goes through the global pool (perf)
     this.fires = new Map();
     this._quadGeo = new THREE.PlaneGeometry(1, 1);
     this._quadGeo.translate(0, 0.5, 0); // pivot at the base of the flame
@@ -147,14 +148,10 @@ export class FireFX {
     scorch.position.set(x, elev + 0.012, z);
     scorch.renderOrder = 1;
     group.add(scorch);
-    // guttering warm light (the glow in the dark is the point — user note)
-    const light = new THREE.PointLight(0xff7a28, 6 * scale, 10 + 6 * scale, 1.7);
-    light.position.set(x, elev + 0.9, z);
-    group.add(light);
     this.scene.add(group);
     this.fires.set(key, {
-      group, cards, embers, light, x, z, elev, scale,
-      t: (x * 7 + z * 3) % 10, seeds,
+      group, cards, embers, x, z, elev, scale,
+      t: (x * 7 + z * 3) % 10, seeds, lum: 5 * scale, // pooled guttering light
     });
   }
 
@@ -180,13 +177,15 @@ export class FireFX {
   update(dt, px, pz) {
     for (const f of this.fires.values()) {
       f.t += dt;
-      // gutter: incommensurate sines + a fast spit read as real fire-light
-      f.light.intensity = Math.max(0.5,
+      // gutter: incommensurate sines + a fast spit read as real fire-light —
+      // declared to the pool; only the fires near you burn real light slots
+      f.lum = Math.max(0.5,
         (5.2 + Math.sin(f.t * 11) * 1.7 + Math.sin(f.t * 23.7) * 1.2
           + Math.sin(f.t * 47.3) * 0.5) * f.scale);
+      this.pool?.add(f.x, f.elev + 0.9, f.z, 0xff7a28, f.lum, 10 + 6 * f.scale, 1.7);
       const dx = f.x - px, dz = f.z - pz;
       const d2 = dx * dx + dz * dz;
-      if (d2 > 55 * 55) continue; // far fires keep the light, skip the rest
+      if (d2 > 55 * 55) continue; // far fires: light declared, skip the rest
       // advance the flame shader + billboard the cards toward the player
       const face = Math.atan2(px - f.x, pz - f.z);
       for (let k = 0; k < f.cards.length; k++) {
@@ -216,8 +215,9 @@ export class FireFX {
 // points and a hard blue-white stab of light, then dark again. Sites are
 // seeded per run by the game. Render-only.
 export class SparkFX {
-  constructor(scene) {
+  constructor(scene, lightPool = null) {
     this.scene = scene;
+    this.pool = lightPool;
     this.sites = [];
     const N = 18;
     this._geo = new THREE.BufferGeometry();
@@ -234,11 +234,9 @@ export class SparkFX {
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     }));
     pts.frustumCulled = false;
-    const light = new THREE.PointLight(0x9fc8ff, 0, 7, 2.0);
-    light.position.set(x, y, z);
-    this.scene.add(pts, light);
+    this.scene.add(pts);
     this.sites.push({
-      x, y, z, pts, light,
+      x, y, z, pts,
       next: 2 + ((x * 13.7 + z * 7.3) % 9),  // staggered first burst
       burst: -1, seeds: Array.from({ length: this._n }, (_, i) => (i * 0.754877) % 1),
     });
@@ -256,9 +254,9 @@ export class SparkFX {
       }
       s.burst += dt;
       const p = s.burst / 0.45;
-      if (p >= 1) { s.burst = -1; s.pts.material.opacity = 0; s.light.intensity = 0; continue; }
+      if (p >= 1) { s.burst = -1; s.pts.material.opacity = 0; continue; }
       // hard stab of light with a fast flicker, sparks arcing down under gravity
-      s.light.intensity = (1 - p) * (7 + Math.sin(t * 90) * 4);
+      this.pool?.add(s.x, s.y, s.z, 0x9fc8ff, (1 - p) * (7 + Math.sin(t * 90) * 4), 7, 2.0);
       s.pts.material.opacity = 1 - p;
       const pos = s.pts.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {

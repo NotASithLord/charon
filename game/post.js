@@ -85,6 +85,36 @@ const GRADE_FRAG = /* glsl */`
   }
 `;
 
+const FXAA_FRAG = /* glsl */`
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D tSrc;
+  uniform vec2 uInvRes;
+  // compact FXAA (Lottes' recipe, console preset): edge-directed blur on the
+  // graded LDR image — replaces the MSAA the post chain made useless
+  float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+  void main() {
+    vec3 rgbNW = texture2D(tSrc, vUv + vec2(-1.0, -1.0) * uInvRes).rgb;
+    vec3 rgbNE = texture2D(tSrc, vUv + vec2(1.0, -1.0) * uInvRes).rgb;
+    vec3 rgbSW = texture2D(tSrc, vUv + vec2(-1.0, 1.0) * uInvRes).rgb;
+    vec3 rgbSE = texture2D(tSrc, vUv + vec2(1.0, 1.0) * uInvRes).rgb;
+    vec3 rgbM = texture2D(tSrc, vUv).rgb;
+    float lNW = lum(rgbNW), lNE = lum(rgbNE), lSW = lum(rgbSW), lSE = lum(rgbSE), lM = lum(rgbM);
+    float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), ((lNW + lSW) - (lNE + lSE)));
+    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * 0.125, 1.0 / 128.0);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, -8.0, 8.0) * uInvRes;
+    vec3 rgbA = 0.5 * (texture2D(tSrc, vUv + dir * (1.0 / 3.0 - 0.5)).rgb
+                     + texture2D(tSrc, vUv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (texture2D(tSrc, vUv + dir * -0.5).rgb
+                                   + texture2D(tSrc, vUv + dir * 0.5).rgb);
+    float lB = lum(rgbB);
+    gl_FragColor = vec4((lB < lMin || lB > lMax) ? rgbA : rgbB, 1.0);
+  }
+`;
+
 export class PostFX {
   constructor(renderer) {
     this.renderer = renderer;
@@ -101,6 +131,9 @@ export class PostFX {
     this.rtScene.depthBuffer = true; // the scene pass needs depth
     this.rtA = mkRT(2, 2); this.rtA2 = mkRT(2, 2);   // half-res blur ping-pong
     this.rtB = mkRT(2, 2); this.rtB2 = mkRT(2, 2);   // quarter-res blur ping-pong
+    this.rtLDR = new THREE.WebGLRenderTarget(2, 2, {  // graded LDR, FXAA input
+      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false,
+    });
 
     this._scene = new THREE.Scene();
     this._cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -123,6 +156,10 @@ export class PostFX {
         uExposure: { value: this.exposure }, uTime: { value: 0 }, uGrain: { value: 0.045 },
       },
     });
+    this.matFxaa = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT, fragmentShader: FXAA_FRAG, depthTest: false, depthWrite: false,
+      uniforms: { tSrc: { value: null }, uInvRes: { value: new THREE.Vector2() } },
+    });
   }
 
   setSize(w, h) {
@@ -131,6 +168,8 @@ export class PostFX {
     this.rtScene.setSize(W, H);
     this.rtA.setSize(W >> 1, H >> 1); this.rtA2.setSize(W >> 1, H >> 1);
     this.rtB.setSize(W >> 2, H >> 2); this.rtB2.setSize(W >> 2, H >> 2);
+    this.rtLDR.setSize(W, H);
+    this.matFxaa.uniforms.uInvRes.value.set(1 / W, 1 / H);
   }
 
   _pass(mat, target) {
@@ -165,14 +204,17 @@ export class PostFX {
     this.matBlur.uniforms.tSrc.value = this.rtB.texture;
     this.matBlur.uniforms.uDir.value.set(0, 1 / this.rtB.height);
     this._pass(this.matBlur, this.rtB2);
-    // 5. grade to screen
+    // 5. grade into LDR
     const g = this.matGrade.uniforms;
     g.tScene.value = this.rtScene.texture;
     g.tBloomA.value = this.rtA.texture;
     g.tBloomB.value = this.rtB2.texture;
     g.uExposure.value = this.exposure;
     g.uTime.value = timeSec % 100;
-    this._quad.material = this.matGrade;
+    this._pass(this.matGrade, this.rtLDR);
+    // 6. FXAA to screen (MSAA is off — this is the edge treatment)
+    this.matFxaa.uniforms.tSrc.value = this.rtLDR.texture;
+    this._quad.material = this.matFxaa;
     r.setRenderTarget(null);
     r.render(this._scene, this._cam);
   }

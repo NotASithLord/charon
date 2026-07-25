@@ -18,10 +18,19 @@ import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
 import { PhysicsWorld, initRapier, PHYS_DT } from '../physics/physics-world.js';
 import { PostFX } from './post.js';
+import { LightPool } from './lights.js';
 
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+// PERF (user: unusable frame rate on an M4 Air): MSAA off — the post chain
+// makes canvas MSAA pure waste (FXAA in the grade handles edges) — and the
+// pixel ratio caps at 1.25 instead of 2. Retina pr2 was rendering ~4M px
+// through the 5-pass HDR pipeline × every light × PCFSoft; at 1.25 + FXAA +
+// grain + bloom the difference on a laptop panel is imperceptible and the
+// fragment bill drops ~2.6x. `?hd=1` opts back into full resolution.
+const HD = new URLSearchParams(location.search).has('hd');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25));
+renderer.info.autoReset = false; // accumulated per-frame in the main loop (__perf)
 // tone mapping moved into the HDR post pipeline (game/post.js) — the scene
 // renders LINEAR into a half-float target so fires/lamps/tracers can stack
 // past 1.0 and bloom; ACES + exposure happen in the final grade pass.
@@ -38,6 +47,11 @@ scene.fog = new THREE.Fog(0x05070a, 18, 60);
 
 const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 220);
 const post = new PostFX(renderer);
+// ONE fixed pool serves every dynamic light source (fires, sparks, room
+// fixtures, door spill, NPC muzzles, your muzzle/impacts/grenades) — see
+// game/lights.js. Constant light count = bounded fragment cost and ZERO
+// shader recompiles (adding/removing real lights recompiled every program).
+const lightPool = new LightPool(scene, 10);
 
 // IMAGE-BASED LIGHTING (the RoomEnvironment recipe, compacted): a tiny
 // procedural interior baked through PMREM gives every PBR material real
@@ -126,7 +140,7 @@ canvas.addEventListener('click', () => audio.ensure());
 // ship's broken (jammed) doors, all seeded in the sim itself so the flames
 // that hurt you are exactly the flames you see. The sim's flamethrower
 // burns still light up live below.
-const fire = new FireFX(scene);
+const fire = new FireFX(scene, lightPool);
 for (let i = 0; i < sim.fires.length; i++) {
   const f = sim.fires[i];
   const [fx2, fz2] = world.simToWorld(f.x, f.y, f.deck);
@@ -144,7 +158,7 @@ for (const d of world.doors) {
 // dark, sparking junctions): render-only sites seeded per run — the portal
 // event rattled the whole hull, so every deck carries a few small smolders
 // and shorted panels. Never on the player's spawn room.
-const sparks = new SparkFX(scene);
+const sparks = new SparkFX(scene, lightPool);
 {
   const dmgRng = new RNG(seed + ':damage');
   const byDeck = new Map();
@@ -169,7 +183,7 @@ const sparks = new SparkFX(scene);
 // with the player — visible where light crosses it, invisible in the black.
 // Motes wrap around a 9m cube centered on you so the cloud never runs out.
 const motes = (() => {
-  const N = 140, HALF = 4.5;
+  const N = 36, HALF = 4.5; // cut hard from 140 (user: fewer, smaller — gladly)
   const geo = new THREE.BufferGeometry();
   const p = new Float32Array(N * 3);
   const seeds = new Float32Array(N);
@@ -186,7 +200,7 @@ const motes = (() => {
   g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
   x.fillStyle = g; x.fillRect(0, 0, 16, 16);
   const pts = new THREE.Points(geo, new THREE.PointsMaterial({
-    color: 0x9daabb, size: 0.014, transparent: true, opacity: 0.13,
+    color: 0x9daabb, size: 0.01, transparent: true, opacity: 0.1,
     map: new THREE.CanvasTexture(c), alphaMap: new THREE.CanvasTexture(c),
     depthWrite: false, sizeAttenuation: true,
   }));
@@ -232,42 +246,25 @@ agents.rifle.castShadow = true;
 // invisible on the room. A small pool of pooled point lights now rides the
 // nearest unsteady fixtures on your deck, so a guttering room actually
 // throws guttering light on its walls, floor and occupants.
-const roomLightPool = Array.from({ length: 8 }, () => {
-  const L = new THREE.PointLight(0xbfd4f2, 0, 16, 1.9);
-  scene.add(L);
-  return L;
-});
 function updateRoomLightPool() {
-  const cands = [];
+  // every powered fixture and every dead-room red lamp declares a VIRTUAL
+  // light — the global pool picks the winners near you (dead ship, discrete
+  // sources instead of an ambient wash)
   for (let n = 0; n < sim.graph.n; n++) {
     const L = world.roomLights[n];
     if (!L || L.x === undefined) continue;
     if (sim.darkAt(n)) continue; // flood-held rooms are DARK — nothing burns there
     const nd = sim.graph.node(n);
     if (nd.deck !== player.deck) continue;
-    const isEm = L.mode === 'dead' && L.emergency;
     const d2 = (L.x - player.x) * (L.x - player.x) + (L.z - player.z) * (L.z - player.z);
     if (d2 > 40 * 40) continue;
-    // every powered fixture is a real light now (dead ship, secondary power —
-    // discrete sources instead of an ambient wash); dead rooms get their red
-    cands.push({ L, d2, isEm });
-  }
-  cands.sort((a, b) => a.d2 - b.d2);
-  for (let i = 0; i < roomLightPool.length; i++) {
-    const P = roomLightPool[i];
-    const c = cands[i];
-    if (!c) { P.intensity = 0; continue; }
-    if (c.isEm) {
+    if (L.mode === 'dead' && L.emergency) {
       // red battery lamp over the hatch — dim, warm, with a slow breathe
-      P.color.setHex(0xff4030);
-      P.position.set(c.L.em.x, c.L.em.y, c.L.em.z);
-      P.intensity = 2.6 + Math.sin(performance.now() * 0.0011 + c.L.phase) * 0.5;
-      P.distance = 11;
+      lightPool.add(L.em.x, L.em.y, L.em.z, 0xff4030,
+        2.6 + Math.sin(performance.now() * 0.0011 + L.phase) * 0.5, 11, 1.9);
     } else {
-      P.color.setHex(0xbfd4f2);
-      P.position.set(c.L.x, c.L.y - 0.25, c.L.z);
-      P.intensity = (c.L.mode === 'steady' ? 6.5 : 7 * c.L.lvl);
-      P.distance = 16;
+      lightPool.add(L.x, L.y - 0.25, L.z, 0xbfd4f2,
+        L.mode === 'steady' ? 6.5 : 7 * L.lvl, 16, 1.9);
     }
   }
 }
@@ -276,18 +273,12 @@ function updateRoomLightPool() {
 // doesn't end at a flat black doorway — its fixtures push a pool of light a
 // little way into the dark side. A small pool of spill lights sits just
 // inside the dark room at each lit->dark doorway near the player.
-const doorSpillPool = Array.from({ length: 3 }, () => {
-  const L = new THREE.PointLight(0xaec6e8, 0, 7, 2.0);
-  scene.add(L);
-  return L;
-});
 function updateDoorSpill() {
-  const cands = [];
   for (const d of world.doors) {
     if (d.deck !== player.deck) continue;
     const dx = d.x - player.x, dz = d.z - player.z;
-    const d2 = dx * dx + dz * dz;
-    if (d2 > 30 * 30) continue;
+    if (dx * dx + dz * dz > 30 * 30) continue;
+    if (d.open01 < 0.05) continue; // a shut door spills nothing
     const a = d.edge.a, b = d.edge.b;
     const litA = world.lightLevel(a) > 0.1 && !sim.darkAt(a);
     const litB = world.lightLevel(b) > 0.1 && !sim.darkAt(b);
@@ -297,38 +288,21 @@ function updateDoorSpill() {
     const nd = sim.graph.node(darkN);
     const [cx2, cz2] = world.simToWorld(nd.x, nd.y, nd.deck);
     const ox = cx2 - d.x, oz = cz2 - d.z, ol = Math.hypot(ox, oz) || 1;
-    cands.push({
-      x: d.x + (ox / ol) * 1.4, z: d.z + (oz / ol) * 1.4,
-      y: elevOf(d.deck) + 1.7, d2,
-      open: d.open01, // a shut door spills nothing
-    });
-  }
-  cands.sort((a, b) => a.d2 - b.d2);
-  for (let i = 0; i < doorSpillPool.length; i++) {
-    const P = doorSpillPool[i];
-    const c = cands[i];
-    if (!c || c.open < 0.05) { P.intensity = 0; continue; }
-    P.position.set(c.x, c.y, c.z);
-    P.intensity = 2.2 * c.open; // swells as the door slides up
+    lightPool.add(d.x + (ox / ol) * 1.4, elevOf(d.deck) + 1.7, d.z + (oz / ol) * 1.4,
+      0xaec6e8, 2.2 * d.open01, 7, 2.0); // swells as the door slides up
   }
 }
 
-// GUNFIRE IS A LIGHT SOURCE (user rule): pooled muzzle lights ride the
-// nearest NPC flashes each frame — a dark room in a firefight strobes.
-const muzzleLightPool = Array.from({ length: 3 }, () => {
-  const L = new THREE.PointLight(0xffd9a0, 0, 9, 2.0);
-  scene.add(L);
-  return L;
-});
+// GUNFIRE IS A LIGHT SOURCE (user rule): NPC muzzle flashes declare virtual
+// lights — a dark room in a firefight strobes, through the global pool.
 function updateMuzzleLights() {
-  const pts = agents.flashPoints ?? [];
-  for (let i = 0; i < muzzleLightPool.length; i++) {
-    const P = muzzleLightPool[i];
-    const p = pts[i];
-    if (!p) { P.intensity = 0; continue; }
-    P.position.set(p.x, p.y, p.z);
-    P.intensity = 22;
+  for (const p of agents.flashPoints ?? []) {
+    lightPool.add(p.x, p.y, p.z, 0xffd9a0, 22, 9, 2.0);
   }
+  // the player's own transients ride the pool too (they always win a slot)
+  if (muzzleFlash.intensity > 0.02) lightPool.add(muzzleFlash.position.x, muzzleFlash.position.y, muzzleFlash.position.z, 0xffd9a0, muzzleFlash.intensity, 7, 2);
+  if (wallSpark.intensity > 0.02) lightPool.add(wallSpark.position.x, wallSpark.position.y, wallSpark.position.z, 0xffb060, wallSpark.intensity, 4, 2.4);
+  if (boomLight.intensity > 0.02) lightPool.add(boomLight.position.x, boomLight.position.y, boomLight.position.z, 0xffc890, boomLight.intensity, 22, 1.6);
 }
 
 // live flamethrower burns from the sim
@@ -362,10 +336,10 @@ viewmodel.rotation.set(GUN_TUNE.rx, GUN_TUNE.ry, GUN_TUNE.rz);
 viewmodel.scale.setScalar(GUN_TUNE.s);
 camera.add(viewmodel);
 scene.add(camera);
-const muzzleFlash = new THREE.PointLight(0xffd9a0, 0, 7, 2);
-scene.add(muzzleFlash);
-const wallSpark = new THREE.PointLight(0xffb060, 0, 4, 2.4);
-scene.add(wallSpark);
+// transient combat lights are VIRTUAL now — they ride the global pool
+// (near the player they always win a slot, so the look is unchanged)
+const muzzleFlash = { position: new THREE.Vector3(), intensity: 0 };
+const wallSpark = { position: new THREE.Vector3(), intensity: 0 };
 const wallRay = new THREE.Raycaster();
 
 // --- HUD ---
@@ -522,6 +496,19 @@ function renderLog() {
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
 }
+
+// perf instrumentation (headless harness + on-device debugging)
+window.__perf = () => {
+  let meshes = 0, lights = 0;
+  scene.traverse((o) => {
+    if (o.isMesh || o.isInstancedMesh) meshes++;
+    if (o.isLight && (o.intensity ?? 0) > 0.01) lights++;
+  });
+  return {
+    calls: renderer.info.render.calls, tris: renderer.info.render.triangles,
+    meshes, lights, pr: renderer.getPixelRatio(),
+  };
+};
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -680,8 +667,7 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
 const liveFrags = [];
 const fragGeo = new THREE.SphereGeometry(0.09, 8, 6);
 const fragMat = new THREE.MeshStandardMaterial({ color: 0x39443a, roughness: 0.5, metalness: 0.6 });
-const boomLight = new THREE.PointLight(0xffc890, 0, 22, 1.6);
-scene.add(boomLight);
+const boomLight = { position: new THREE.Vector3(), intensity: 0 }; // virtual — global pool
 let shake = 0;
 let hitFlash = 0;
 let dmgFlash = 0, dmgAngle = 0, lastSinceHit = 99;
@@ -1086,6 +1072,7 @@ function frame(now) {
   scene.fog.near = inFog ? 1.5 : 18;
   scene.fog.color.setHex(inFog ? 0x1c2410 : 0x05070a);
   scene.background.setHex(inFog ? 0x151b0a : 0x05070a);
+  lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
   sparks.update(dtReal, now / 1000, player.x, player.z);
@@ -1093,6 +1080,7 @@ function frame(now) {
   updateRoomLightPool();
   updateDoorSpill();
   updateMuzzleLights();
+  lightPool.commit(player.x, player.z);
   // EXPOSURE GRADE (user: the fog dimming should be very good): the camera
   // itself stops down in murk — fog crushes the frame, plain darkness dims
   // it, clean compartments read bright. Slow lerp so it feels like eyes
@@ -1218,6 +1206,7 @@ function frame(now) {
     }
   }
 
+  renderer.info.reset(); // per-frame accumulation across all post passes
   post.render(scene, camera, now / 1000);
   requestAnimationFrame(frame);
 }

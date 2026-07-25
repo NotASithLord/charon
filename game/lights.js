@@ -1,0 +1,55 @@
+// GLOBAL DYNAMIC LIGHT POOL (perf pass — user: frame rate unusable, cut
+// nothing). three's forward renderer compiles EVERY light in the scene into
+// EVERY material's shader and evaluates all of them per fragment — and it
+// RECOMPILES every program whenever the light count changes. Before this,
+// fires, spark sites, room fixtures, door spill and muzzle strobes each
+// owned real PointLights: 30-40 lights, all paid for everywhere, with
+// compile hitches every time a fire started or died.
+//
+// Now every dynamic source is VIRTUAL: systems declare {position, color,
+// intensity, distance} each frame, and a fixed pool of N real lights is
+// assigned to the highest-scoring sources near the player. Fragment cost is
+// bounded and constant, the shader never recompiles, and since a light 40m
+// away through three walls contributed nothing visible, the screen looks
+// IDENTICAL — the far sources were pure waste.
+
+import * as THREE from './vendor/three.module.js';
+
+export class LightPool {
+  constructor(scene, n = 10) {
+    this.lights = Array.from({ length: n }, () => {
+      const L = new THREE.PointLight(0xffffff, 0, 10, 1.8);
+      scene.add(L);
+      return L;
+    });
+    this.virtual = [];
+  }
+
+  // start a frame: forget last frame's declarations
+  frame() { this.virtual.length = 0; }
+
+  // declare a virtual light for this frame
+  add(x, y, z, color, intensity, distance, decay = 1.8) {
+    if (intensity <= 0.02) return;
+    this.virtual.push({ x, y, z, color, intensity, distance, decay, score: 0 });
+  }
+
+  // assign the pool: brightest-and-nearest win
+  commit(px, pz) {
+    for (const v of this.virtual) {
+      const d = Math.hypot(v.x - px, v.z - pz);
+      v.score = d > 55 ? 0 : v.intensity * v.distance / (1 + d * d * 0.015);
+    }
+    this.virtual.sort((a, b) => b.score - a.score);
+    for (let i = 0; i < this.lights.length; i++) {
+      const L = this.lights[i];
+      const v = this.virtual[i];
+      if (!v || v.score <= 0) { L.intensity = 0; continue; }
+      L.position.set(v.x, v.y, v.z);
+      L.color.set(v.color);
+      L.intensity = v.intensity;
+      L.distance = v.distance;
+      L.decay = v.decay;
+    }
+  }
+}

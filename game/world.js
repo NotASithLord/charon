@@ -86,17 +86,91 @@ export class World {
   // horizontal swept-capsule needs. why: sourcing the colliders from the SAME
   // meshes the player sees means physics can never drift from the render.
   collisionBoxes() {
-    const box = (m) => {
-      const p = m.geometry.parameters;
-      return {
-        cx: m.position.x, cy: m.position.y, cz: m.position.z,
+    // boxes were cached from the pristine per-mesh geometry BEFORE the
+    // static merge collapsed it (the merged buffers have no box params)
+    const out = [...(this._collBoxCache ?? [])];
+    for (const d of this.doors) {
+      if (!d.edge.locked) continue;
+      const p = d.mesh.geometry.parameters;
+      out.push({
+        cx: d.mesh.position.x, cy: d.mesh.position.y, cz: d.mesh.position.z,
         hx: p.width / 2, hy: p.height / 2, hz: p.depth / 2,
-        ry: m.rotation.y || 0,
-      };
-    };
-    const out = this.wallMeshes.map(box);
-    for (const d of this.doors) if (d.edge.locked) out.push(box(d.mesh));
+        ry: d.mesh.rotation.y || 0,
+      });
+    }
     return out;
+  }
+
+  // STATIC MERGE (perf): group every plain static Mesh in the scene by
+  // material; any material carried by >= 8 meshes gets its meshes baked
+  // (world transform applied) into ONE BufferGeometry and ONE draw call.
+  // Auto-excluded by construction: door panels (they move), per-room
+  // materials like floors/strips/lamps/veils (each material has < 8 meshes
+  // or is skipped explicitly), and all Instanced/Points/Sprite objects.
+  // wallMeshes members that merge are replaced by their merged mesh so the
+  // bullet raycast still hits everything.
+  _mergeStaticPass() {
+    const moving = new Set(this.doors.map((d) => d.mesh));
+    const byMat = new Map();
+    for (const o of this.scene.children) {
+      if (!o.isMesh || o.isInstancedMesh || moving.has(o)) continue;
+      if (!o.geometry?.attributes?.position || !o.geometry.attributes.normal) continue;
+      if (o.geometry.attributes.position.count > 5000) continue; // already big
+      (byMat.get(o.material) ?? byMat.set(o.material, []).get(o.material)).push(o);
+    }
+    const wallSet = new Set(this.wallMeshes);
+    const v = new THREE.Vector3();
+    const nm = new THREE.Matrix3();
+    for (const [mat, list] of byMat) {
+      if (list.length < 8) continue;
+      let vtot = 0, itot = 0;
+      for (const m of list) {
+        m.updateMatrixWorld(true);
+        const g2 = m.geometry;
+        vtot += g2.attributes.position.count;
+        itot += g2.index ? g2.index.count : g2.attributes.position.count;
+      }
+      const pos = new Float32Array(vtot * 3);
+      const nrm = new Float32Array(vtot * 3);
+      const uv = new Float32Array(vtot * 2);
+      const idx = new Uint32Array(itot);
+      let vo = 0, io = 0, anyWall = false, anyShadow = false;
+      for (const m of list) {
+        const g2 = m.geometry;
+        const p = g2.attributes.position, n2 = g2.attributes.normal, u = g2.attributes.uv;
+        nm.getNormalMatrix(m.matrixWorld);
+        for (let i = 0; i < p.count; i++) {
+          v.fromBufferAttribute(p, i).applyMatrix4(m.matrixWorld);
+          pos[(vo + i) * 3] = v.x; pos[(vo + i) * 3 + 1] = v.y; pos[(vo + i) * 3 + 2] = v.z;
+          v.fromBufferAttribute(n2, i).applyMatrix3(nm).normalize();
+          nrm[(vo + i) * 3] = v.x; nrm[(vo + i) * 3 + 1] = v.y; nrm[(vo + i) * 3 + 2] = v.z;
+          if (u) { uv[(vo + i) * 2] = u.getX(i); uv[(vo + i) * 2 + 1] = u.getY(i); }
+        }
+        if (g2.index) {
+          for (let i = 0; i < g2.index.count; i++) idx[io + i] = g2.index.array[i] + vo;
+          io += g2.index.count;
+        } else {
+          for (let i = 0; i < p.count; i++) idx[io + i] = i + vo;
+          io += p.count;
+        }
+        vo += p.count;
+        if (wallSet.has(m)) { anyWall = true; wallSet.delete(m); }
+        if (m.castShadow) anyShadow = true;
+        this.scene.remove(m);
+      }
+      const merged = new THREE.BufferGeometry();
+      merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+      merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      merged.setIndex(new THREE.BufferAttribute(idx, 1));
+      merged.computeBoundingSphere();
+      const mesh = new THREE.Mesh(merged, mat);
+      mesh.castShadow = anyShadow;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      if (anyWall) wallSet.add(mesh);
+    }
+    this.wallMeshes = [...wallSet];
   }
 
   // DECK PLATING (texture pass): worn steel plates — per-plate value drift,
@@ -504,6 +578,22 @@ export class World {
     this._buildVentGrates();
     this._buildProps();
     this._buildArmoryInterior();
+    // PERF (user: unusable frame rate — cut nothing): the ship was ~2000
+    // individual meshes, each a draw call in the main pass AND AGAIN in the
+    // flashlight's shadow pass. Cache the physics boxes from the pristine
+    // meshes, then merge everything static that shares a material into a
+    // handful of big buffers. Same pixels, ~10x fewer draw calls.
+    this._collBoxCache = this.wallMeshes.map((m) => {
+      const p = m.geometry.parameters;
+      return {
+        cx: m.position.x, cy: m.position.y, cz: m.position.z,
+        hx: (p.width ?? (p.radiusTop ? p.radiusTop * 2 : 1)) / 2,
+        hy: (p.height ?? 1) / 2,
+        hz: (p.depth ?? (p.radiusTop ? p.radiusTop * 2 : 1)) / 2,
+        ry: m.rotation.y || 0,
+      };
+    });
+    this._mergeStaticPass();
   }
 
   // ---- REAL SHAFTS (user note: the portal mechanisms end here) ----
