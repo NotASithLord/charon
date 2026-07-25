@@ -328,11 +328,14 @@ function updateMarineTick(sim, a, dt) {
         const off = 1.5 + (mi >= 3 ? 1.0 : 0);
         const tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
+        a.followSpeed = 0; // drives the render clip (walk/run) — see _clipFor
         if (d > 0.5) {
-          const mps = d > 7 ? 8 : d > 3 ? 6 : 2.6; // catch up hard, ease in close
+          // human speeds (user: they moved too fast): jog to catch up, walk in
+          const mps = d > 6 ? 5.4 : d > 2.5 ? 4 : 2.0;
           const step = Math.min(d, mps * dt);
           a.x += (dx / d) * step; a.y += (dy / d) * step;
           sim._clampToRoom(a, sim.graph.node(a.node));
+          a.followSpeed = step / dt;
         }
         a.heading = d > 0.8 ? Math.atan2(dy, dx) : lead.heading;
         a.animTime += dt;

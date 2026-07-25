@@ -500,6 +500,16 @@ function renderLog() {
   }
 }
 
+// debug: raycast from the camera in a direction, report what's hit
+window.__probe = (dx, dy, dz) => {
+  const rc = new THREE.Raycaster(camera.position.clone(), new THREE.Vector3(dx, dy, dz).normalize());
+  rc.far = 40;
+  const solids = scene.children.filter((o) => o.isMesh && !o.isInstancedMesh);
+  return rc.intersectObjects(solids, false).slice(0, 5).map((h) => ({
+    d: +h.distance.toFixed(2), type: h.object.type,
+    col: h.object.material?.color?.getHexString?.(), vis: h.object.visible,
+  }));
+};
 // perf instrumentation (headless harness + on-device debugging)
 window.__perf = () => {
   let meshes = 0, lights = 0;
@@ -782,15 +792,38 @@ function drawTracker(now) {
   trk.clearRect(0, 0, 150, 150);
   trk.fillStyle = 'rgba(10,16,22,0.75)';
   trk.beginPath(); trk.arc(R, R, 74, 0, Math.PI * 2); trk.fill();
-  trk.strokeStyle = 'rgba(110,160,210,0.35)';
-  for (const rr of [25, 50, 74]) { trk.beginPath(); trk.arc(R, R, rr, 0, Math.PI * 2); trk.stroke(); }
+  if (!trkState.static) {
+    trk.strokeStyle = 'rgba(110,160,210,0.35)';
+    for (const rr of [25, 50, 74]) { trk.beginPath(); trk.arc(R, R, rr, 0, Math.PI * 2); trk.stroke(); }
+  }
   if (trkState.static) {
-    // the sweep is snow — no contacts paint through it at all
-    for (let i = 0; i < 110; i++) {
-      const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * 72;
+    // the sweep is snow to the ENCLOSURE edge — and the rings themselves
+    // glitch: jittered, broken arcs instead of clean circles (user rule)
+    for (let i = 0; i < 150; i++) {
+      const a = Math.random() * Math.PI * 2, rr = Math.sqrt(Math.random()) * 75;
       const v = 120 + (Math.random() * 110) | 0;
       trk.fillStyle = `rgba(${v},${v + 15},${v + 25},${0.12 + Math.random() * 0.3})`;
       trk.fillRect(R + Math.cos(a) * rr, R + Math.sin(a) * rr, 1 + Math.random() * 2.4, 1 + Math.random() * 1.6);
+    }
+    trk.strokeStyle = 'rgba(110,160,210,0.3)';
+    for (const rr of [25, 50, 74]) {
+      // each ring becomes 5-8 broken arcs at slightly wrong radii
+      const segs = 5 + (Math.random() * 4) | 0;
+      for (let s = 0; s < segs; s++) {
+        if (Math.random() < 0.35) continue; // dropout
+        const a0 = Math.random() * Math.PI * 2;
+        const jr = rr + (Math.random() - 0.5) * 5;
+        trk.beginPath();
+        trk.arc(R + (Math.random() - 0.5) * 2, R + (Math.random() - 0.5) * 2,
+          Math.max(4, jr), a0, a0 + 0.3 + Math.random() * 0.9);
+        trk.stroke();
+      }
+    }
+    // occasional horizontal tear across the whole face
+    if (Math.random() < 0.3) {
+      const ty = Math.random() * 150;
+      trk.fillStyle = 'rgba(160,190,220,0.18)';
+      trk.fillRect(0, ty, 150, 1 + Math.random() * 2);
     }
     trk.fillStyle = '#cfe0ff';
     trk.beginPath(); trk.moveTo(R, R - 5); trk.lineTo(R - 4, R + 4); trk.lineTo(R + 4, R + 4); trk.fill();
@@ -887,7 +920,7 @@ function soundSweep(now) {
   firing.sort((a, b) => a.d - b.d);
   for (const f of firing.slice(0, 3)) audio.play('shotFar', { x: f.wx, z: f.wz }, 0.7, `gun${f.n}`, 220);
   // a battle on another deck is ONE muffled roll through the deckplates
-  if (offDeckFire) audio.play('rumble', null, 0.16, 'offdeck', 1400);
+  if (offDeckFire) audio.play('rumble', null, 0.09, 'offdeck', 2600);
   for (let n = 0; n < g.n; n++) {
     if (sim.tickCount - sim.screamTick[n] > 1 || sim.screamTick[n] < 5) continue;
     const nd = g.node(n);
@@ -940,9 +973,13 @@ function soundSweep(now) {
   // fire crackle from the nearest burning site
   const nf = fire.nearest(player.x, player.z, elevOf(player.deck));
   if (nf && nf.d < 17) audio.play('crackle', { x: nf.x, z: nf.z }, 0.85, 'crackle', 420);
-  // door hisses
+  // door hisses — ONLY nearby doors, and sparsely (user: random bumping
+  // around NPC clusters — this was every door any NPC tripped, ship-wide on
+  // your deck, on a 120ms global throttle = constant knocking)
   for (const ev of world.doorEvents) {
-    if (ev.deck === player.deck) audio.play('door', { x: ev.x, z: ev.z }, 0.7, 'door', 120);
+    if (ev.deck !== player.deck) continue;
+    if (Math.hypot(ev.x - player.x, ev.z - player.z) > 18) continue;
+    audio.play('door', { x: ev.x, z: ev.z }, 0.5, 'door', 600);
   }
   world.doorEvents.length = 0;
 }

@@ -1844,12 +1844,14 @@ function updateMarineTick(sim2, a, dt) {
         const off = 1.5 + (mi >= 3 ? 1 : 0);
         const tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
+        a.followSpeed = 0;
         if (d > 0.5) {
-          const mps = d > 7 ? 8 : d > 3 ? 6 : 2.6;
+          const mps = d > 6 ? 5.4 : d > 2.5 ? 4 : 2;
           const step = Math.min(d, mps * dt);
           a.x += dx / d * step;
           a.y += dy / d * step;
           sim2._clampToRoom(a, sim2.graph.node(a.node));
+          a.followSpeed = step / dt;
         }
         a.heading = d > 0.8 ? Math.atan2(dy, dx) : lead.heading;
         a.animTime += dt;
@@ -4642,11 +4644,11 @@ var Sim = class {
         return a.state === STATE.FLEE || a.panicked ? S.civilianFlee : S.civilian;
       case FACTION.ARMED:
         return a.state === STATE.FLEE ? S.civilianFlee : S.armed;
-      // your fireteam keeps YOUR pace (user: they were terrible at following) —
-      // sim marines walk at 1.4 m/s but you move 5.6-7.6, so an escort marine
-      // moves ~4x to stay on you; a posted/patrol marine walks normally.
+      // your fireteam keeps YOUR pace (user: they were terrible at following;
+      // then 5.4x read as rocketing) — a brisk 3.2x tactical jog holds your
+      // walk and only trails a hard sprint; a posted marine walks normally.
       case FACTION.MARINE:
-        return a.escort ? 5.4 : S.marine;
+        return a.escort ? 3.2 : S.marine;
       case FACTION.INFECTION:
         return S.infection;
       case FACTION.COMBAT:
@@ -5540,6 +5542,7 @@ var Sim = class {
     if (a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) return CLIP.DEATH;
     if (a.state === STATE.GRABBING || a.state === STATE.FIGHT) return CLIP.ATTACK;
     if (a.faction === FACTION.INFECTION) return a.move ? CLIP.RUN : CLIP.WRITHE;
+    if (a.closeFollow) return (a.followSpeed ?? 0) > 3.2 ? CLIP.RUN : (a.followSpeed ?? 0) > 0.4 ? CLIP.WALK : CLIP.IDLE;
     if (a.move) return this._speedMult(a) > 1.2 ? CLIP.RUN : CLIP.WALK;
     return CLIP.IDLE;
   }

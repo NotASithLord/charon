@@ -595,10 +595,10 @@ export class Sim {
     switch (a.faction) {
       case FACTION.CIVILIAN: return a.state === STATE.FLEE || a.panicked ? S.civilianFlee : S.civilian;
       case FACTION.ARMED: return a.state === STATE.FLEE ? S.civilianFlee : S.armed;
-      // your fireteam keeps YOUR pace (user: they were terrible at following) —
-      // sim marines walk at 1.4 m/s but you move 5.6-7.6, so an escort marine
-      // moves ~4x to stay on you; a posted/patrol marine walks normally.
-      case FACTION.MARINE: return a.escort ? 5.4 : S.marine;
+      // your fireteam keeps YOUR pace (user: they were terrible at following;
+      // then 5.4x read as rocketing) — a brisk 3.2x tactical jog holds your
+      // walk and only trails a hard sprint; a posted marine walks normally.
+      case FACTION.MARINE: return a.escort ? 3.2 : S.marine;
       case FACTION.INFECTION: return S.infection;
       case FACTION.COMBAT: return a.dragging !== -1 ? S.drag : S.combatForm;
       case FACTION.CARRIER: return S.carrier;
@@ -1614,6 +1614,10 @@ export class Sim {
     if (a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) return CLIP.DEATH;
     if (a.state === STATE.GRABBING || a.state === STATE.FIGHT) return CLIP.ATTACK;
     if (a.faction === FACTION.INFECTION) return a.move ? CLIP.RUN : CLIP.WRITHE;
+    // close-follow escorts move in real space with NO a.move — they were
+    // rendering IDLE while sliding (user: no walking animation). Their real
+    // speed this tick picks the cycle.
+    if (a.closeFollow) return (a.followSpeed ?? 0) > 3.2 ? CLIP.RUN : (a.followSpeed ?? 0) > 0.4 ? CLIP.WALK : CLIP.IDLE;
     if (a.move) return this._speedMult(a) > 1.2 ? CLIP.RUN : CLIP.WALK;
     return CLIP.IDLE;
   }

@@ -116,7 +116,12 @@ export class World {
     // per material AND per deck, so whole decks can be hidden when the
     // player can't possibly see them (decks are opaque; only hatches and
     // the stairwell pierce ADJACENT decks — ±1 is always kept visible).
-    const deckOf = (y) => Math.max(1, Math.min(5, 5 - Math.round(y / DECK_H)));
+    // FLOOR-BAND attribution (bugfix: user saw straight through tall rooms'
+    // ceilings): Math.round sent a ceiling at elev + tallRoomH TWO decks up,
+    // where the ±1 rule culled it. Attribute by which deck's floor band the
+    // object sits above instead — a tall ceiling lands at most one deck up,
+    // which ±1 always keeps.
+    const deckOf = (y) => Math.max(1, Math.min(5, 5 - Math.floor((y + 0.15) / DECK_H)));
     // FORE/AFT THIRDS (fog-exact culling): scene.fog.far never exceeds 60m
     // and three's fog is FULLY opaque at far — geometry beyond ~70m is
     // pixel-for-pixel invisible. The ship is ~220m long, so each deck merges
