@@ -15,9 +15,34 @@
   #vitals { top: 12px; right: 14px; text-align: right; }
   #hp { font-size: 16px; font-weight: 700; color: #7fd1a0; }
   #hp.low { color: #ff6a4d; }
+  /* CE AR reticle (ported from first-strike): circle of 4 arcs + dot,
+     blooming with weapon spread via --sp (set per frame from spreadDeg) */
   #crosshair {
-    top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
-    border: 1px solid rgba(255,255,255,0.65); border-radius: 50%;
+    --sp: 14px;
+    top: 50%; left: 50%; width: 0; height: 0;
+    filter: drop-shadow(0 0 2px rgba(10,30,70,0.9));
+  }
+  #crosshair .ring {
+    position: absolute;
+    width: calc(26px + 2 * var(--sp)); height: calc(26px + 2 * var(--sp));
+    left: calc(-13px - var(--sp)); top: calc(-13px - var(--sp));
+    border: 1.5px solid rgba(140,215,255,0.95);
+    border-radius: 50%;
+    -webkit-mask: conic-gradient(from 20deg,
+      #000 0 50deg, transparent 50deg 90deg,
+      #000 90deg 140deg, transparent 140deg 180deg,
+      #000 180deg 230deg, transparent 230deg 270deg,
+      #000 270deg 320deg, transparent 320deg 360deg);
+    mask: conic-gradient(from 20deg,
+      #000 0 50deg, transparent 50deg 90deg,
+      #000 90deg 140deg, transparent 140deg 180deg,
+      #000 180deg 230deg, transparent 230deg 270deg,
+      #000 270deg 320deg, transparent 320deg 360deg);
+  }
+  #crosshair .dot {
+    position: absolute; width: 2.4px; height: 2.4px;
+    left: -1.2px; top: -1.2px; border-radius: 50%;
+    background: rgba(140,215,255,0.95);
   }
   /* the radio log: bottom half of the right edge only — the top half stays
      clear glass so the panel costs less field of view (user note) */
@@ -188,7 +213,7 @@
     <div id="ammo">60 / 240</div>
     <div id="roomState">—</div>
   </div>
-  <div class="hud" id="crosshair"></div>
+  <div class="hud" id="crosshair"><span class="ring"></span><span class="dot"></span></div>
   <div id="nameplate"></div>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>

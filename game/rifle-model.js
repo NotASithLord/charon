@@ -52,7 +52,12 @@ function tex(name) {
 // viewmodel — one instance on screen, so the extra draw calls are free.
 export function buildRifleViewmodel() {
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ map: tex('body'), roughness: 0.45, metalness: 0.55 });
+  // cool steel tint over the body texture (first-strike's viewmodel look —
+  // the untinted map read too warm/bright under the torch)
+  const bodyMat = new THREE.MeshStandardMaterial({
+    map: tex('body'), color: new THREE.Color(0.68, 0.71, 0.82),
+    roughness: 0.5, metalness: 0.35,
+  });
   const dispMat = new THREE.MeshStandardMaterial({ map: tex('display'), emissive: 0xffffff, emissiveMap: tex('display'), emissiveIntensity: 0.8, roughness: 0.6 });
   const compassMat = new THREE.MeshStandardMaterial({ map: tex('compass'), emissive: 0xffffff, emissiveMap: tex('compass'), emissiveIntensity: 0.8 });
   const numberMat = (d) => new THREE.MeshStandardMaterial({ map: tex(`number-${d}`), emissive: 0xffffff, emissiveMap: tex(`number-${d}`), emissiveIntensity: 1.1, transparent: true });

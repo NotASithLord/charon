@@ -10,7 +10,7 @@ import { World, elevOf } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
-import { MA5, FRAG } from './fps-data.js';
+import { MA5, FRAG, ODST } from './fps-data.js';
 import { GameAudio } from './audio.js';
 import { FireFX, SparkFX, BloodFX } from '../engine/fx.js';
 import { MarineMap } from './map.js';
@@ -1599,6 +1599,7 @@ function playerObstacles() {
 let frameNo = 0;
 let physAcc = 0;
 let _trackerAt = 0, _observeAt = 0; // subsystem throttle clocks (perf pass 2)
+let _smYaw = 0, _smPitch = 0, _bobPhase = 0, _bobAmp = 0; // viewmodel sway/bob (first-strike feel)
 // sim ticks run OUTSIDE the rAF task (engine/runtime.js TickScheduler):
 // the browser executes them in the idle gap between vsyncs
 const ticker = new TickScheduler({ stepSec: sim.dt, run: () => sim.tick() });
@@ -1646,10 +1647,45 @@ function frame(now) {
   boomLight.intensity *= Math.exp(-7 * dtReal);
   muzzleFlash.intensity *= Math.exp(-14 * dtReal);
   wallSpark.intensity *= Math.exp(-10 * dtReal);
-  // viewmodel kick + reload dip
-  viewmodel.position.z = -GUN_TUNE.z + weapon.recoil * 1.6;
-  viewmodel.position.y = GUN_TUNE.y - (weapon.reloading ? 0.16 : 0) - (weapon.meleeT > 0 ? 0.1 : 0);
-  viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + (weapon.meleeT > 0 ? -0.5 : 0);
+  // VIEWMODEL KINEMATICS (ported from first-strike — user: the gun reads
+  // better there): aim-lag sway from smoothed yaw/pitch, walk bob sharing
+  // the head-bob phase, a real reload TILT (the barrel dips through an
+  // arc instead of the whole gun sinking), and the melee swing composed
+  // into translation + rotation.
+  {
+    const sBlend = 1 - Math.exp(-14 * dtReal);
+    _smYaw += (player.yaw - _smYaw) * sBlend;
+    _smPitch += (player.pitch - _smPitch) * sBlend;
+    const swayX = Math.max(-0.06, Math.min(0.06, (_smYaw - player.yaw) * 0.35));
+    const swayY = Math.max(-0.05, Math.min(0.05, (_smPitch - player.pitch) * 0.3));
+    const groundSpeed = Math.hypot(player.vx, player.vz);
+    const speed01 = Math.max(0, Math.min(1, groundSpeed / ODST.sprintSpeed));
+    _bobAmp += ((player.onGround ? speed01 : 0) - _bobAmp) * (1 - Math.exp(-8 * dtReal));
+    _bobPhase += dtReal * 9 * speed01 * (player.onGround ? 1 : 0);
+    const gunBobY = Math.sin(_bobPhase * 2) * 0.012 * _bobAmp;
+    let tilt = 0;
+    if (weapon.reloading) {
+      const ph = 1 - weapon.reloadT / weapon.def.reloadS;
+      tilt = -0.85 * Math.sin(Math.min(ph * Math.PI, Math.PI));
+    }
+    const meleeSwing = weapon.meleeT > 0 ? Math.sin((1 - weapon.meleeT / weapon.meleeDuration) * Math.PI) : 0;
+    viewmodel.position.x = GUN_TUNE.x + swayX - meleeSwing * 0.07;
+    viewmodel.position.y = GUN_TUNE.y + swayY + gunBobY + meleeSwing * 0.3;
+    viewmodel.position.z = -GUN_TUNE.z + weapon.recoil * 1.6;
+    viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + meleeSwing * 0.95 - tilt;
+    viewmodel.rotation.y = GUN_TUNE.ry + meleeSwing * 0.08;
+    viewmodel.rotation.z = GUN_TUNE.rz - meleeSwing * 0.08;
+  }
+  // reticle bloom (first-strike CE reticle): arc radius tracks true spread
+  {
+    const spreadRad = weapon.spreadDeg * Math.PI / 180;
+    const focal = 0.5 * (canvas.clientHeight || 720) / Math.tan((72 * Math.PI / 180) / 2);
+    const sp = `${(Math.tan(spreadRad) * focal).toFixed(1)}px`;
+    if (_hudCache['xh:sp'] !== sp) {
+      _hudCache['xh:sp'] = sp;
+      el('crosshair').style.setProperty('--sp', sp);
+    }
+  }
 
   ticker.add(dtReal); // due sim ticks run between vsyncs, never on the frame
 
@@ -1789,7 +1825,8 @@ function frame(now) {
     viewmodel.visible = false;
   } else {
     const pose = player.renderPose(alpha);
-    camera.position.set(pose.x, pose.y, pose.z);
+    // head bob (first-strike feel): shares the viewmodel's bob phase
+    camera.position.set(pose.x, pose.y + Math.sin(_bobPhase * 2) * 0.02 * _bobAmp, pose.z);
     camera.rotation.set(0, 0, 0);
     camera.rotateY(pose.yaw + (shake > 0 ? Math.sin(now * 0.09) * 0.02 * shake : 0));
     camera.rotateX(pose.pitch + (shake > 0 ? Math.sin(now * 0.11) * 0.018 * shake : 0));
