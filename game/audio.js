@@ -1,45 +1,21 @@
-// Synthesized positional audio (review P0: the horror runs on sound).
-// Everything is generated WebAudio — no assets. One-shots are panned and
-// attenuated relative to the listener (camera); the alarm is a loop that
-// runs only during the last stand. AudioContext resumes on the first
-// pointer-lock click (browser gesture requirement).
+// Charon's sample bank on the FTL engine's positional synth (engine/
+// audio.js owns the harness: context, master bus, pan/attenuation,
+// through-hull far layer, ambience bed, klaxon). Everything here is the
+// GAME's sound: the procedural definitions of every one-shot the horror
+// runs on. No assets — all baked at first user gesture.
 
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+import { PositionalSynth } from '../engine/audio.js';
 
-export class GameAudio {
+export class GameAudio extends PositionalSynth {
   constructor() {
-    this.ctx = null;
-    this.master = null;
-    this.buffers = {};
-    this.lastPlay = {};   // throttle key -> time
-    this.listener = { x: 0, z: 0, yaw: 0 };
-    this.alarmNodes = null;
-    this.ambNodes = null;
-    this._nextGroan = 0;
-  }
-
-  ensure() {
-    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    this.ctx = new AC();
-    this.master = this.ctx.createGain();
-    this.master.gain.value = 0.5;
-    this.master.connect(this.ctx.destination);
-    this._bake();
+    super();
+    this.ambientOneShot = 'groan'; // hull groans ride the ambience bed
   }
 
   // --- procedural sample bank -----------------------------------------------
   _bake() {
-    const sr = this.ctx.sampleRate;
-    const mk = (sec, fn) => {
-      const buf = this.ctx.createBuffer(1, Math.ceil(sec * sr), sr);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = fn(i / sr, i);
-      return buf;
-    };
-    let seed = 1234;
-    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+    const mk = (sec, fn) => this._mk(sec, fn);
+    const rnd = this._rand(1234);
 
     // rifle crack: noise burst with a fast decaying envelope + low thump
     this.buffers.shot = mk(0.16, (t) => {
@@ -173,139 +149,5 @@ export class GameAudio {
       }
       return v * 0.7;
     });
-  }
-
-  // Far one-shot heard THROUGH the ship: bearing-panned like play(), but no
-  // 48m cutoff — instead a lowpass does the physical muffling, closing down
-  // with every deck of steel in the way. (user: distant fights should be
-  // hearable and trackable even when no radio report gets through)
-  playFar(name, at, deckDelta, vol = 1, key = null, minGapMs = 2500) {
-    if (!this.ctx || this.ctx.state !== 'running') return;
-    const buf = this.buffers[name];
-    if (!buf) return;
-    const now = performance.now();
-    if (key) {
-      if (now - (this.lastPlay[key] ?? 0) < minGapMs) return;
-      this.lastPlay[key] = now;
-    }
-    const dx = at.x - this.listener.x, dz = at.z - this.listener.z;
-    const d = Math.hypot(dx, dz);
-    const gain = clamp(vol / (1 + d / 30 + deckDelta * 0.7), 0, 0.5);
-    if (gain < 0.02) return;
-    const rightX = Math.cos(this.listener.yaw), rightZ = -Math.sin(this.listener.yaw);
-    const pan = d > 0.5 ? clamp((dx * rightX + dz * rightZ) / d, -1, 1) * 0.6 : 0;
-    if (!Number.isFinite(gain) || !Number.isFinite(pan)) return;
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    src.playbackRate.value = 0.9 + ((now * 7919) % 100) / 500;
-    const lp = this.ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = deckDelta === 0 ? 900 : deckDelta === 1 ? 380 : 220;
-    lp.Q.value = 0.5;
-    const g = this.ctx.createGain();
-    g.gain.value = gain;
-    const p = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
-    if (p) { src.connect(lp).connect(g).connect(p).connect(this.master); p.pan.value = pan; }
-    else src.connect(lp).connect(g).connect(this.master);
-    src.start();
-  }
-
-  // continuous ship-tone bed: engine drone + air handlers. Subtle — it exists
-  // so the ship never falls dead silent, and so the horror one-shots land on
-  // something. (user: "we need to also add sound atmosphere")
-  startAmbience() {
-    if (!this.ctx || this.ambNodes) return;
-    const g = this.ctx.createGain();
-    g.gain.value = 0.0;
-    g.gain.linearRampToValueAtTime(0.05, this.ctx.currentTime + 3); // fade in
-    // twin detuned drones — a slow beat frequency reads as "engines somewhere below"
-    const o1 = this.ctx.createOscillator(); o1.type = 'triangle'; o1.frequency.value = 48;
-    const o2 = this.ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 48.7;
-    const og = this.ctx.createGain(); og.gain.value = 0.5;
-    // air handling: filtered noise loop
-    const sr = this.ctx.sampleRate;
-    const nb = this.ctx.createBuffer(1, sr * 2, sr);
-    const nd = nb.getChannelData(0);
-    let s = 0;
-    for (let i = 0; i < nd.length; i++) { s = s * 0.985 + (Math.random() - 0.5) * 0.03; nd[i] = s; }
-    const noise = this.ctx.createBufferSource(); noise.buffer = nb; noise.loop = true;
-    const nf = this.ctx.createBiquadFilter(); nf.type = 'lowpass'; nf.frequency.value = 420; nf.Q.value = 0.4;
-    const ng = this.ctx.createGain(); ng.gain.value = 0.9;
-    o1.connect(og); o2.connect(og); og.connect(g);
-    noise.connect(nf).connect(ng).connect(g);
-    g.connect(this.master);
-    o1.start(); o2.start(); noise.start();
-    this.ambNodes = { g, o1, o2, noise };
-    this._nextGroan = performance.now() + 15000 + Math.random() * 20000;
-  }
-
-  // called each frame: schedules the occasional hull groan from a random bearing
-  ambienceTick() {
-    if (!this.ambNodes || !this.ctx || this.ctx.state !== 'running') return;
-    const now = performance.now();
-    if (now >= this._nextGroan) {
-      this._nextGroan = now + 22000 + Math.random() * 40000;
-      const ang = Math.random() * Math.PI * 2;
-      this.play('groan', { x: this.listener.x + Math.cos(ang) * 25, z: this.listener.z + Math.sin(ang) * 25 }, 0.8);
-    }
-  }
-
-  setListener(x, z, yaw) { this.listener.x = x; this.listener.z = z; this.listener.yaw = yaw; }
-
-  // Play a one-shot. `at` = {x, z} world coords (null = in your ear).
-  // `key` throttles repeats (per key, minimum interval).
-  play(name, at = null, vol = 1, key = null, minGapMs = 90) {
-    if (!this.ctx || this.ctx.state !== 'running') return;
-    const buf = this.buffers[name];
-    if (!buf) return;
-    const now = performance.now();
-    if (key) {
-      if (now - (this.lastPlay[key] ?? 0) < minGapMs) return;
-      this.lastPlay[key] = now;
-    }
-    let gain = vol, pan = 0;
-    if (at) {
-      const dx = at.x - this.listener.x, dz = at.z - this.listener.z;
-      const d = Math.hypot(dx, dz);
-      if (d > 48) return;
-      gain = vol / (1 + d / 7);
-      // pan by the source's bearing relative to the camera
-      const rightX = Math.cos(this.listener.yaw), rightZ = -Math.sin(this.listener.yaw);
-      pan = d > 0.5 ? clamp((dx * rightX + dz * rightZ) / d, -1, 1) * 0.8 : 0;
-    }
-    if (!Number.isFinite(gain) || !Number.isFinite(pan)) return; // never feed NaN to an AudioParam
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    src.playbackRate.value = 0.94 + ((now * 7919) % 100) / 830; // tiny human variation
-    const g = this.ctx.createGain();
-    g.gain.value = clamp(gain, 0, 1.2);
-    const p = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
-    if (p) { p.pan.value = pan; src.connect(g).connect(p).connect(this.master); }
-    else src.connect(g).connect(this.master);
-    src.start();
-  }
-
-  // klaxon loop for the last stand
-  alarm(on) {
-    if (!this.ctx || this.ctx.state !== 'running') return;
-    if (on && !this.alarmNodes) {
-      const osc = this.ctx.createOscillator();
-      const lfo = this.ctx.createOscillator();
-      const lfoG = this.ctx.createGain();
-      const g = this.ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.value = 300;
-      lfo.type = 'square';
-      lfo.frequency.value = 1.2;
-      lfoG.gain.value = 90;
-      lfo.connect(lfoG).connect(osc.frequency);
-      g.gain.value = 0.028;
-      osc.connect(g).connect(this.master);
-      osc.start(); lfo.start();
-      this.alarmNodes = { osc, lfo, g };
-    } else if (!on && this.alarmNodes) {
-      this.alarmNodes.osc.stop(); this.alarmNodes.lfo.stop();
-      this.alarmNodes = null;
-    }
   }
 }

@@ -1,46 +1,36 @@
-// The ODST — first-person controller with the first-strike movement feel
-// (exponential accel, gravity, jump) and ballistic-armor-over-health. The
-// player is a live sim agent: the flood hunts them, grabs pin them, conversion
-// takes them.
-//
-// Collision moved to Rapier (physics/physics-world.js): HORIZONTAL motion is a
-// swept capsule resolved by the character controller — sliding along walls and
-// cover, blocked by other bodies — replacing the old grid `isWalkable` slide
-// and the manual sphere-separation pass. VERTICAL stays analytic here (gravity,
-// resting on the floor, the stairwell ramp) because full-height wall boxes are
-// all the horizontal sweep needs, so the two layers stay cleanly split. The
-// capsule is the authoritative X/Z; walking asks the controller to move it and
-// climbs/stair-portals teleport it. why fixed-step: the controller is stepped
-// at a fixed PHYS_DT from main.js's accumulator, so player physics is
-// deterministic (replay + lockstep depend on it) and the camera interpolates
-// between the last two steps for smoothness.
+// The ODST — Charon's player on the FTL engine's FpsController (engine/
+// fps-controller.js owns pointer-lock look, exponential-accel walking,
+// the Rapier capsule sweep, ground/step-down/ceiling vertical, and render
+// interpolation). This subclass adds everything that makes the player a
+// LIVE SIM AGENT on this ship: the flood hunts them, grabs pin them,
+// conversion takes them — plus ballistic armor over health, ladder/shaft
+// climbing with the sim's one-body-per-ladder reservations, the grand
+// stairwell's deck portals, and ammo scavenging.
 //
 // L (not W) climbs a ladder/stairwell you're standing at — walking past a
 // ladder shouldn't yank you up it, and a shaft only ever has ONE other end
 // from where you stand, so the direction is never a guess.
 
+import { FpsController } from '../engine/fps-controller.js';
 import { elevOf } from './world.js';
 import { ODST } from './fps-data.js';
 
-export class Player {
+export class Player extends FpsController {
   constructor(canvas, world, sim, startNode, physics) {
+    const n = sim.graph.node(startNode);
+    const [wx, wz] = world.simToWorld(n.x, n.y, n.deck);
+    super({
+      canvas, tune: ODST, deck: n.deck, x: wx, z: wz,
+      elevOf,
+      groundHeightAt: (deck, x, z, feetY) => world.groundHeightAt(deck, x, z, feetY),
+      ceilHeightAt: (deck, x, z) => world.ceilHeightAt(deck, x, z),
+      physics: physics ?? null,
+    });
     this.world = world;
     this.sim = sim;
-    this.physics = physics ?? null;
-    this.canvas = canvas;
-    const n = sim.graph.node(startNode);
-    this.deck = n.deck;
-    const [wx, wz] = world.simToWorld(n.x, n.y, n.deck);
-    this.x = wx; this.z = wz;
-    this.h = 0; // feet height above current deck floor
-    this.vx = 0; this.vz = 0; this.vy = 0;
-    this.onGround = true;
     this.climbing = false;
     this.climb = null; // active climb transition, see _startClimb
     this.queuedTrunk = null; // waiting in line for a busy ladder
-    this.yaw = -Math.PI / 2; this.pitch = 0;
-    this.keys = new Set();
-    this.locked = false;
     this.armed = true; // ODST loadout: you board with the MA5
     this._eLatch = false;
     this._wLatch = false;
@@ -53,61 +43,21 @@ export class Player {
     this.agent = sim.attachPlayer(startNode, { odst: true });
     this._lastHp = this.agent.hp;
 
-    // the Rapier capsule holds the authoritative X/Z. Physics may not be ready
-    // yet — attachPhysics() wires it when the wasm finishes loading; until then
-    // the player just holds still, so the intro/UI never block on the load.
-    if (this.physics) this.physics.spawnPlayer(this.x, elevOf(this.deck) + this.h, this.z);
-
-    // render interpolation between the last two fixed physics steps
-    this._prev = this._worldPose();
-    this._cur = this._worldPose();
-
     this._syncAgent();
-
-    canvas.addEventListener('click', () => { if (!this.locked) canvas.requestPointerLock(); });
-    document.addEventListener('pointerlockchange', () => {
-      this.locked = document.pointerLockElement === canvas;
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!this.locked) return;
-      this.yaw -= e.movementX * 0.0022;
-      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * 0.0022));
-    });
-    window.addEventListener('keydown', (e) => this.keys.add(e.code));
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-  }
-
-  // Wire the Rapier world once its wasm is ready (main.js calls this from the
-  // initRapier().then()). why deferred: a slow or failed physics load must
-  // never wedge the game on the loading screen, so the player boots without it.
-  attachPhysics(physics) {
-    this.physics = physics;
-    physics.spawnPlayer(this.x, elevOf(this.deck) + this.h, this.z);
-    this._prev = this._worldPose();
-    this._cur = this._worldPose();
   }
 
   get dead() { return this.agent.dead || this.agent.hp <= 0; }
   get pinned() { return this.agent.held === this.sim.tickCount; }
 
-  // feet world position (Y follows the climb transition or the deck floor)
-  _worldPose() {
-    const y = this.climb ? this.climb.worldY : elevOf(this.deck) + this.h;
-    return { x: this.x, y, z: this.z };
-  }
+  // feet world Y follows the climb transition when one is running
+  poseY() { return this.climb ? this.climb.worldY : elevOf(this.deck) + this.h; }
 
   // ONE fixed-timestep step (dt === PHYS_DT), driven by main.js's accumulator.
   step(dt) {
     if (!this.physics) return; // physics not attached yet — hold still
     this._prev = this._cur;
 
-    // adopt the X/Z the physics world committed last step (walking moves the
-    // capsule through the controller; teleports set it directly — both are
-    // already reflected in the capsule, so this re-syncs us to the truth)
-    if (!this.dead) {
-      const c = this.physics.playerCenter();
-      this.x = c.x; this.z = c.z;
-    }
+    if (!this.dead) this.adoptCapsule();
     if (this.dead) { this._cur = this._worldPose(); return; }
 
     // --- armor layer: intercept sim damage; armor soaks, then recovers ---
@@ -132,7 +82,6 @@ export class Player {
       if (src && this.onAmmoTaken) this.onAmmoTaken(src);
     } else if (!this.keys.has('KeyE')) this._eLatch = false;
 
-    const wantFwd = this.keys.has('KeyW');
     const wantClimb = this.keys.has('KeyL');
 
     // --- climbing: press L at a shaft, arrive at its only other end ---
@@ -157,68 +106,11 @@ export class Player {
     }
     if (!wantClimb) this._wLatch = false;
 
-    // --- walking (first-strike accel model, Rapier-resolved horizontal) ---
+    // --- walking (engine stepMove) or holding in place ---
     if (!this.climbing && this.locked && !this.pinned) {
-      let fx = 0, fz = 0;
-      if (wantFwd) fz += 1;
-      if (this.keys.has('KeyS')) fz -= 1;
-      if (this.keys.has('KeyA')) fx -= 1;
-      if (this.keys.has('KeyD')) fx += 1;
-      const sprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
-      const speed = sprint ? ODST.sprintSpeed : ODST.walkSpeed;
-      let wx = 0, wz = 0;
-      if (fx || fz) {
-        const len = Math.hypot(fx, fz);
-        const fwdX = -Math.sin(this.yaw), fwdZ = -Math.cos(this.yaw);
-        const rightX = Math.cos(this.yaw), rightZ = -Math.sin(this.yaw);
-        wx = (fwdX * fz + rightX * fx) / len * speed;
-        wz = (fwdZ * fz + rightZ * fx) / len * speed;
-      }
-      const k = this.onGround ? ODST.accel : ODST.accel * ODST.airControl;
-      const blend = 1 - Math.exp(-k * dt);
-      this.vx += (wx - this.vx) * blend;
-      this.vz += (wz - this.vz) * blend;
-
-      if (this.keys.has('Space') && this.onGround) {
-        this.vy = ODST.jumpVel;
-        this.onGround = false;
-      }
-      this.vy -= ODST.gravity * dt;
-
-      // horizontal: the character controller sweeps the capsule and slides it
-      // along whatever it hits (walls, cover, bodies)
-      const wantX = this.vx * dt, wantZ = this.vz * dt;
-      const moved = this.physics.movePlayer(wantX, wantZ, elevOf(this.deck) + this.h);
-      this.x += moved.dx;
-      this.z += moved.dz;
-      // bleed the velocity we couldn't spend into whatever we hit, so we don't
-      // keep ramming a wall at full tilt
-      if (Math.abs(moved.dx) < Math.abs(wantX) - 1e-4) this.vx *= 0.2;
-      if (Math.abs(moved.dz) < Math.abs(wantZ) - 1e-4) this.vz *= 0.2;
-
-      // vertical: feet rest on the ground surface, which in a stairwell room
-      // follows the switchback ramp (world.groundHeightAt)
-      const base = elevOf(this.deck);
-      const groundY = this.world.groundHeightAt(this.deck, this.x, this.z, base + this.h);
-      const wasGrounded = this.onGround;
-      let footY = base + this.h + this.vy * dt;
-      if (footY <= groundY) { footY = groundY; this.vy = 0; this.onGround = true; }
-      else if (wasGrounded && this.vy <= 0 && footY - groundY < 0.55) {
-        // STEP-DOWN SNAP (stairwell UX): walking down a ramp, gravity alone
-        // can't keep pace with the surface dropping away — without this the
-        // player goes micro-airborne every step, loses ground control, and
-        // crawls down the flights. Grounded + not jumping + surface within a
-        // step below = stay glued.
-        footY = groundY; this.vy = 0; this.onGround = true;
-      } else this.onGround = false;
-      this.h = footY - base;
-      const ceilH = this.world.ceilHeightAt(this.deck, this.x, this.z);
-      if (this.h > ceilH - 1.85) { this.h = ceilH - 1.85; this.vy = Math.min(0, this.vy); }
+      this.stepMove(dt);
     } else if (!this.climb) {
-      // pinned or unlocked: hold position, but keep the capsule's Y tracking
-      // the floor and its next-translation set every step (kinematic bodies
-      // want a fresh target each tick)
-      this.physics.movePlayer(0, 0, elevOf(this.deck) + this.h);
+      this.holdStill();
     }
 
     this._stairPortal();
@@ -350,26 +242,5 @@ export class Player {
       if (dx * dx + dy * dy < 2.2 * 2.2) return c;
     }
     return null;
-  }
-
-  // CURRENT (non-interpolated) eye pose — for the flashlight, the thrown-frag
-  // spawn point, and anything that wants "where the player is right now".
-  cameraPose() {
-    const y = this.climb ? this.climb.worldY : elevOf(this.deck) + this.h;
-    return { x: this.x, y: y + ODST.eyeHeight, z: this.z, yaw: this.yaw, pitch: this.pitch };
-  }
-
-  // Interpolated eye pose for rendering — blends the last two fixed physics
-  // steps by `alpha` (the accumulator remainder) so the camera stays smooth
-  // between 60 Hz physics ticks and whatever the display refresh is.
-  renderPose(alpha) {
-    const a = alpha < 0 ? 0 : alpha > 1 ? 1 : alpha;
-    const p = this._prev, c = this._cur;
-    return {
-      x: p.x + (c.x - p.x) * a,
-      y: p.y + (c.y - p.y) * a + ODST.eyeHeight,
-      z: p.z + (c.z - p.z) * a,
-      yaw: this.yaw, pitch: this.pitch,
-    };
   }
 }
