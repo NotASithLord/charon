@@ -6,7 +6,7 @@
 // (climb it, look up/down it, shoot through it); offset pairs become
 // enclosed stairwell trunks. No teleport pads.
 
-import * as THREE from './vendor/three.webgpu.module.js';
+import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { DOORS } from './fps-data.js';
 import { RNG } from '../shared/rng.js';
 import { DECK_H, CLEAR_H, elevOf, clearHeightOf } from '../shared/geometry.js';

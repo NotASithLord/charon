@@ -3,12 +3,12 @@
 // (charge stretch, swelling carrier, hosted weapon, tracers, muzzle flashes)
 // are all driven by sim flags, per the fidelity contract (ROADMAP-3D §4).
 
-import * as THREE from './vendor/three.webgpu.module.js';
+import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
 import { carryGeometry } from './rifle-model.js';
 import { characterParts } from './characters.js';
-import { RagdollSystem } from '../physics/ragdoll.js';
+import { RagdollSystem } from '../engine/physics/ragdoll.js';
 import { TASK } from '../sim/hive.js';
 
 const CAP = 512;

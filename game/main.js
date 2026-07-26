@@ -3,7 +3,7 @@
 // Mechanics layer ported from the first-strike vertical slice (MA5 loop,
 // armor-over-health, movement feel). The sim is untouched and authoritative.
 
-import * as THREE from './vendor/three.webgpu.module.js';
+import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
 import { hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf } from './world.js';
@@ -12,13 +12,14 @@ import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
 import { MA5, FRAG } from './fps-data.js';
 import { GameAudio } from './audio.js';
-import { FireFX, SparkFX, BloodFX } from './fx.js';
+import { FireFX, SparkFX, BloodFX } from '../engine/fx.js';
 import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
-import { PhysicsWorld, initRapier, PHYS_DT } from '../physics/physics-world.js';
-import { PostFX } from './post.js';
-import { LightPool } from './lights.js';
+import { PhysicsWorld, initRapier, PHYS_DT } from '../engine/physics/physics-world.js';
+import { PostFX } from '../engine/post.js';
+import { LightPool } from '../engine/lights.js';
+import { createRenderer, installDeviceLostReload, QualityGovernor, TickScheduler } from '../engine/runtime.js';
 
 const canvas = document.getElementById('c');
 // PERF (user: unusable frame rate on an M4 Air): MSAA off — the post chain
@@ -38,22 +39,12 @@ const QTIER = QP.get('q');
 // process sits on the integrated GPU. Falls back to WebGL2 automatically
 // (same node/TSL materials compile to GLSL there); ?gl=1 forces the
 // fallback for A/B testing.
-const renderer = new THREE.WebGPURenderer({
-  canvas, antialias: false, powerPreference: 'high-performance',
-  forceWebGL: QP.has('gl'),
+// Boot through the FTL engine runtime (engine/runtime.js): WebGPU with
+// automatic WebGL2 fallback, MSAA off (the post chain's FXAA handles
+// edges), linear HDR (ACES in the grade pass), PCFSoft shadows.
+const renderer = await createRenderer({
+  canvas, forceWebGL: QP.has('gl'), pixelRatioCap: HD ? 2 : 1.25,
 });
-await renderer.init();
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, HD ? 2 : 1.25));
-renderer.info.autoReset = false; // accumulated per-frame in the main loop (__perf)
-// tone mapping moved into the HDR post pipeline (game/post.js) — the scene
-// renders LINEAR into a half-float target so fires/lamps/tracers can stack
-// past 1.0 and bloom; ACES + exposure happen in the final grade pass.
-renderer.toneMapping = THREE.NoToneMapping;
-// REAL SHADOWS (user: lighting needs a vast improvement) — soft-filtered
-// shadow maps; the flashlight is the shadow caster, so cover and bodies
-// throw moving shadows down the corridors as your beam sweeps.
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070a);
@@ -121,28 +112,12 @@ torch.shadow.radius = 4; // soft edges on everything the beam throws
 const seedFromUrl = new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
 
-// SAFETY NET: either backend can lose its device mid-run — WebGPU by spec
-// at any time, WebGL2 by context loss (which the node renderer routes here
-// too, with the browser's auto-restore suppressed). Rather than a frozen
-// black canvas: WebGPU loss reloads once onto the WebGL2 fallback; a
-// WebGL2 loss reloads in place, capped by a session counter so a hopeless
-// driver doesn't reload-loop. Same seed either way — same ship.
-let _deviceLostHandled = false;
-renderer.onDeviceLost = (info) => {
-  if (_deviceLostHandled || info?.reason === 'destroyed') return;
-  _deviceLostHandled = true;
-  console.error('[charon] render device lost:', info?.message ?? info);
-  const u = new URL(location.href);
-  if (renderer.backend.isWebGPUBackend) {
-    u.searchParams.set('gl', '1');
-  } else {
-    const n = +(sessionStorage.getItem('charon-gl-lost') ?? 0);
-    if (n >= 2) return; // twice is a pattern — stop reloading into it
-    sessionStorage.setItem('charon-gl-lost', String(n + 1));
-  }
-  u.searchParams.set('seed', seed); // reboot into the same ship
-  location.replace(u);
-};
+// SAFETY NET (engine/runtime.js): device loss reloads onto the WebGL2
+// fallback (WebGPU) or in place with a session cap (WebGL2), rebooting
+// into the same seed — same ship.
+installDeviceLostReload(renderer, {
+  label: 'charon', storageKey: 'charon-gl-lost', params: { seed },
+});
 const sim = new Sim(seed);
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
@@ -318,27 +293,33 @@ const RUNGS = [
 // whole-frame pixel budget: huge windows can't buy retina supersampling on
 // an integrated GPU — the cap yields before the budget does (HD opts out)
 const PIXEL_BUDGET = 3.0e6;
-let rung = 0, rungPinned = false, _prewarming = false;
-function applyRung(i) {
-  const R = RUNGS[i];
-  rung = i;
-  renderer.shadowMap.enabled = R.shadows;
-  torch.castShadow = R.shadows;
-  if (R.shadows) {
-    if (torch.shadow.mapSize.x !== R.shadowMap) {
-      torch.shadow.mapSize.set(R.shadowMap, R.shadowMap);
-      torch.shadow.map?.dispose();
-      torch.shadow.map = null;
+let rung = 0;
+// the governor (engine/runtime.js) walks the ladder; the per-rung EFFECTS
+// stay here — they touch this game's torch, light pool, bloom and motes
+const governor = new QualityGovernor({
+  renderer, rungs: RUNGS, pixelBudget: PIXEL_BUDGET, hd: HD, label: 'charon',
+  apply: (R, i) => {
+    rung = i;
+    renderer.shadowMap.enabled = R.shadows;
+    torch.castShadow = R.shadows;
+    if (R.shadows) {
+      if (torch.shadow.mapSize.x !== R.shadowMap) {
+        torch.shadow.mapSize.set(R.shadowMap, R.shadowMap);
+        torch.shadow.map?.dispose();
+        torch.shadow.map = null;
+      }
+      torch.shadow.needsUpdate = true;
     }
-    torch.shadow.needsUpdate = true;
-  }
-  lightPool.setActive(R.lights);
-  post.setBloomScale(R.bloom);
-  motes.setCount(R.motes);
-}
-window.__quality = (i) => { rungPinned = false; applyRung(Math.max(0, Math.min(RUNGS.length - 1, i))); };
-if (QTIER === 'low') { applyRung(RUNGS.length - 1); rungPinned = true; }
-else if (QTIER === 'full' || HD) { applyRung(0); rungPinned = true; }
+    lightPool.setActive(R.lights);
+    post.setBloomScale(R.bloom);
+    motes.setCount(R.motes);
+  },
+  onResize: (w, h) => post.setSize(w, h),
+});
+const applyRung = (i) => governor.applyRung(i);
+window.__quality = (i) => { governor.pinned = false; applyRung(Math.max(0, Math.min(RUNGS.length - 1, i))); };
+if (QTIER === 'low') { applyRung(RUNGS.length - 1); governor.pinned = true; }
+else if (QTIER === 'full' || HD) { applyRung(0); governor.pinned = true; }
 else {
   try {
     // WebGPU exposes GPUAdapterInfo; the WebGL2 fallback still has the
@@ -361,39 +342,22 @@ else {
 }
 
 // PREWARM (perf): compile the recompile-heavy rung variants behind the
-// intro screen, so a mid-fight ladder step is a uniform change instead of
-// a shader storm. Best-effort — a failure just means the old hitch.
-(async () => {
-  if (rungPinned) return;
-  _prewarming = true;
-  const start = rung;
-  try {
-    // FORCE-WARM the late-appearing pipelines (user: still stuttering —
-    // every first-use compile is a mid-fight freeze): instanced sets sit at
-    // count 0 and veils/decals at visible=false until their moment, so
-    // compileAsync skips them and the FIRST muzzle flash / flood veil /
-    // blood mark compiles a fresh pipeline on the spot. Flip everything on
-    // for the warm passes, then restore exactly.
+// intro screen (engine governor). forceWarm flips the late-appearing
+// pipelines on — count-0 instanced sets, hidden flood veils — so the FIRST
+// muzzle flash / veil / decal of a run doesn't compile mid-fight; the
+// governor guarantees the restore runs even if a compile fails.
+governor.prewarm(scene, camera, {
+  forceWarm: (s) => {
     const warmed = [];
-    scene.traverse((o) => {
+    s.traverse((o) => {
       if (o.isInstancedMesh && o.count === 0) { warmed.push([o, 'count', 0]); o.count = 1; }
     });
     for (const v of world.darkVeils) {
       if (v && !v.visible) { warmed.push([v, 'visible', false]); v.visible = true; }
     }
-    try {
-      for (const i of [2, 3, RUNGS.length - 1, start]) {
-        applyRung(i);
-        await renderer.compileAsync(scene, camera);
-      }
-    } finally {
-      // ALWAYS restore — a compile failure that left every flood veil
-      // visible read as a pitch-black ship (user report)
-      for (const [o, k, val] of warmed) o[k] = val;
-    }
-  } catch { applyRung(start); }
-  _prewarming = false;
-})();
+    return () => { for (const [o, k, val] of warmed) o[k] = val; };
+  },
+});
 
 // REAL FLICKER SPILL (user: flickering lighting for real in each room): the
 // ceiling strips' flicker used to be emissive-only — visible on the fixture,
@@ -1632,24 +1596,12 @@ function playerObstacles() {
 }
 
 // --- main loop ---
-let _ftEMA = 16, _resAt = 0, frameNo = 0, _slowEvals = 0, _fastEvals = 0, _rungMovedAt = 0; // ladder governor state
-let acc = 0;
+let frameNo = 0;
 let physAcc = 0;
 let _trackerAt = 0, _observeAt = 0; // subsystem throttle clocks (perf pass 2)
-// tick scheduler: a MessageChannel macrotask runs due sim ticks OUTSIDE the
-// rAF callback (see the accumulator in frame()). At most 3 ticks per task —
-// a tab-restore backlog drains over a few tasks instead of freezing one.
-const _tickChan = new MessageChannel();
-const _tickPort = _tickChan.port2;
-_tickChan.port1.onmessage = () => {
-  let ran = 0;
-  while (acc >= sim.dt && ran++ < 3) {
-    sim.tick();
-    acc -= sim.dt;
-  }
-  if (acc > sim.dt * 40) acc = 0;       // deep backlog: drop, don't marathon
-  else if (acc >= sim.dt) _tickPort.postMessage(0);
-};
+// sim ticks run OUTSIDE the rAF task (engine/runtime.js TickScheduler):
+// the browser executes them in the idle gap between vsyncs
+const ticker = new TickScheduler({ stepSec: sim.dt, run: () => sim.tick() });
 let shownLost = false;
 let spectateShown = false;
 let last = performance.now();
@@ -1699,14 +1651,7 @@ function frame(now) {
   viewmodel.position.y = GUN_TUNE.y - (weapon.reloading ? 0.16 : 0) - (weapon.meleeT > 0 ? 0.1 : 0);
   viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + (weapon.meleeT > 0 ? -0.5 : 0);
 
-  // SIM TICKS OFF THE RENDER TASK (user: M2 stutter). Ticks used to run
-  // inside the rAF callback, so a 5-30ms strategic tick landed ON TOP of the
-  // frame's render cost and blew the vsync deadline — a visible 10Hz hitch.
-  // The accumulator still decides WHEN ticks are due, but they execute in a
-  // separate macrotask posted after the frame is presented: the browser runs
-  // them in the idle gap between vsyncs, where a normal tick is invisible.
-  acc += dtReal;
-  if (acc >= sim.dt) _tickPort.postMessage(0);
+  ticker.add(dtReal); // due sim ticks run between vsyncs, never on the frame
 
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
@@ -1934,48 +1879,10 @@ function frame(now) {
     }
   }
 
-  // LADDER GOVERNOR: frame-time EMA drives resolution WITHIN the rung
-  // (cheap, every 3s), then walks the rung ladder — down when pinned at the
-  // floor and still slow, back up after a long provably-stable stretch.
-  // Re-evaluated every ~3s so RT reallocation never hitches play.
-  _ftEMA = _ftEMA * 0.94 + Math.min(50, dtReal * 1000) * 0.06;
-  if (now - _resAt > 3000) {
-    _resAt = now;
-    const R = RUNGS[rung];
-    const cur = renderer.getPixelRatio();
-    const floor = R.res[0];
-    const budgetCap = HD ? 9 : Math.sqrt(PIXEL_BUDGET / ((window.innerWidth * window.innerHeight) || 1));
-    const cap = Math.max(floor, Math.min(window.devicePixelRatio || 1, HD ? 2 : R.res[1], budgetCap));
-    let next = cur;
-    if (_ftEMA > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
-    else if (_ftEMA < 13 && cur < cap) next = Math.min(cap, cur + 0.1);
-    if (Math.abs(next - cur) > 0.01) {
-      renderer.setPixelRatio(next);
-      renderer.setSize(window.innerWidth, window.innerHeight, false);
-      post.setSize(window.innerWidth, window.innerHeight);
-    }
-    if (!rungPinned && !_prewarming) {
-      // descend: pinned at the floor and still under ~42fps, twice running
-      if (_ftEMA > 24 && cur <= floor + 0.01 && rung < RUNGS.length - 1) {
-        if (++_slowEvals >= 2) {
-          applyRung(rung + 1);
-          _slowEvals = 0;
-          _rungMovedAt = now;
-          console.info(`[charon] quality rung -> ${rung} (frame ${_ftEMA.toFixed(1)}ms)`);
-        }
-      } else _slowEvals = 0;
-      // ascend: locked-vsync smooth at full rung resolution for ~24s, and no
-      // recent descent — climb one rung and let it prove itself
-      if (_ftEMA < 17.0 && cur >= cap - 0.01 && rung > 0 && now - _rungMovedAt > 90000) {
-        if (++_fastEvals >= 8) {
-          applyRung(rung - 1);
-          _fastEvals = 0;
-          _rungMovedAt = now;
-          console.info(`[charon] quality rung -> ${rung} (headroom)`);
-        }
-      } else _fastEvals = 0;
-    }
-  }
+  // quality ladder: resolution walk + rung descend/ascend live in the
+  // engine governor now (engine/runtime.js) — per-rung effects still land
+  // through this game's apply callback above
+  governor.frame(now, dtReal, window.innerWidth, window.innerHeight);
   if (renderer.shadowMap.enabled && (frameNo & 1) === 0) torch.shadow.needsUpdate = true; // 30Hz shadows
   frameNo++;
   renderer.info.reset(); // per-frame accumulation across all post passes

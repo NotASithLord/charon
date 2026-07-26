@@ -7,7 +7,7 @@
 // -Z-forward camera convention (the whole rig is built +Z-forward, then
 // rotated 180° about Y once — see buildRifleViewmodel/buildRifleCarry).
 
-import * as THREE from './vendor/three.webgpu.module.js';
+import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { RIFLE_MESHES } from './rifle-model-data.js';
 
 // muzzle tip in the rifle's authored local space (first-strike js/models.js)

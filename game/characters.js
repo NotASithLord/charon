@@ -4,7 +4,7 @@
 // combat forms; see assets/NOTICE.txt). Each model is a small set of
 // texture groups; the renderer draws one InstancedMesh per group.
 
-import * as THREE from './vendor/three.webgpu.module.js';
+import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { CHARACTERS } from './characters-data.js';
 
 const texLoader = new THREE.TextureLoader();
