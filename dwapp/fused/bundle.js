@@ -5796,14 +5796,19 @@ var Sim = class {
   // ONE BODY ON THE LADDER (user rule): is this cross-deck link held by a
   // live climber other than `selfId`? Stale claims (holder died, or was
   // yanked off the move by combat) self-heal — a claim only counts while
-  // the holder is genuinely in transit on this link.
+  // the holder is genuinely in transit on this link. APPROACH DOESN'T
+  // COUNT (user: the ladder "jams" with nobody visibly on it): a cross-deck
+  // leg claims at leg START, but the holder may still be walking across the
+  // room to the pad (move.appT marks where the approach ends) — the rungs
+  // only read busy once the holder is at the pad about to mount, or on them.
   vertBusy(link, selfId = -1) {
     const id = link.occupiedBy;
     if (id === void 0 || id === selfId) return false;
     const h = this.byId.get(id);
     if (!h || h.dead) return false;
     if (h.isPlayer) return h.climbingLink === link;
-    return !!(h.move && h.move.link === link);
+    if (!h.move || h.move.link !== link) return false;
+    return h.move.appT === void 0 || h.move.t >= h.move.appT * 0.85;
   }
   // next-in-line reservation (player queueing): while the reserver lives,
   // NPCs yield the next slot on this ladder. Self-heals if they die.
