@@ -506,11 +506,13 @@ function updateRoomLightPool() {
   // a blacked-out room; they compete in the same pool as everything else, and
   // in a dark room the fixtures are off, so there is little to compete with.
   // Nearest-first, budgeted per rung.
-  const rlCap = RUNGS[rung].rifleLights ?? 4;
+  // each armed body declares two: the pool where its beam lands on the wall
+  // it is facing, and a little spill at the weapon itself
+  const rlCap = (RUNGS[rung].rifleLights ?? 4) * 2;
   const n = Math.min(agents.rifleLightN, rlCap);
   for (let i = 0; i < n; i++) {
     const r = agents.rifleLights[i];
-    lightPool.add(r.x, r.y, r.z, 0xdCE6FF, 9, 13, 1.7);
+    lightPool.add(r.x, r.y, r.z, 0xdCE6FF, r.i, r.d, 1.7);
   }
 }
 

@@ -279,7 +279,12 @@ export class Agents3D {
       // the arms BACKWARD ~40° — the "awk stuff" in the user's screenshot;
       // verified by candidate-grid renders). Right hand to the grip, left
       // crossed further up the fore-stock — Halo low-ready.
-      const base = part === 'armR' ? 0.75 : 1.0;
+      // TIGHTER CARRY (user: "both hands outstretched, still looks silly").
+      // These arms are rigid single meshes with no elbow, so a big forward
+      // swing from the A-pose bind can only ever read as a straight reach.
+      // Keeping the swing small and leaning on adduction instead gives a
+      // compact low-ready that a jointless arm can actually sell.
+      const base = part === 'armR' ? 0.48 : 0.68;
       const aim = clip === CLIP.ATTACK ? 0.3 : clip === CLIP.RUN ? 0.12 : 0;
       const bob = clip === CLIP.WALK || clip === CLIP.RUN
         ? Math.sin(ph * 2) * 0.05
@@ -389,7 +394,7 @@ export class Agents3D {
       // centerline, closing the silhouette.
       if (hold && clip !== CLIP.DEATH && (part === 'armL' || part === 'armR')) {
         this._eHold ??= new THREE.Euler();
-        this._eHold.set(part === 'armR' ? 0.38 : -0.38, 0, ang);
+        this._eHold.set(part === 'armR' ? 0.52 : -0.52, 0, ang);
         this._mRot.makeRotationFromEuler(this._eHold);
       } else this._mRot.makeRotationZ(ang);
       this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
@@ -411,15 +416,41 @@ export class Agents3D {
   // and let the host drain it. Position is a couple of metres down the
   // barrel: a point source out in front throws like a torch without paying
   // for a second shadow-casting spot per marine.
-  _addRifleLight(wx, elev, wz, heading) {
-    // only bodies near enough to matter — the pool scores by distance anyway,
-    // but this keeps the declaration list (and the host's cap) meaningful
-    const ddx = wx - (this.viewX ?? 0), ddz = wz - (this.viewZ ?? 0);
-    if (ddx * ddx + ddz * ddz > 900) return; // 30 m
-    const fx = Math.cos(heading), fz = -Math.sin(heading); // matches _rifleAt
-    const r = this.rifleLights[this.rifleLightN]
-      ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0 });
-    r.x = wx + fx * 2.6; r.y = elev + 1.45; r.z = wz + fz * 2.6;
+  // WEAPON LIGHT THAT LANDS ON SOMETHING (user: "what is it reflecting off?
+  // what is it illuminating? i dont see the direction of the wall hes looking
+  // at illuminated. I want different illuminated spots coming from their
+  // heading"). A point source floating 2.6 m off the muzzle lit the air in
+  // front of the man and nothing else. Instead: march along his heading to
+  // the first wall of the room he is standing in — pure rect maths against
+  // the sim node, no raycast — and put the light just short of that surface.
+  // That is the bright pool on the wall he is facing, and because every
+  // marine faces somewhere different, a dark room fills with separate spots
+  // that move as they cover their arcs.
+  _addRifleLight(nodeIdx, sx, sy, deck, elev, hSim) {
+    const [mwx, mwz] = this.world.simToWorld(sx, sy, deck);
+    const ddx = mwx - (this.viewX ?? 0), ddz = mwz - (this.viewZ ?? 0);
+    if (ddx * ddx + ddz * ddz > 1600) return;   // 40 m — the pool scores the rest
+    const nd = this.sim.graph.node(nodeIdx);
+    const hx = Math.cos(hSim), hy = Math.sin(hSim);
+    let t = 16;                                  // throw limit
+    if (hx > 1e-4) t = Math.min(t, (nd.x + nd.w / 2 - sx) / hx);
+    else if (hx < -1e-4) t = Math.min(t, (nd.x - nd.w / 2 - sx) / hx);
+    if (hy > 1e-4) t = Math.min(t, (nd.y + nd.d / 2 - sy) / hy);
+    else if (hy < -1e-4) t = Math.min(t, (nd.y - nd.d / 2 - sy) / hy);
+    t = Math.max(1.4, t - 0.4);                  // stop just short of the plating
+    const [hxw, hzw] = this.world.simToWorld(sx + hx * t, sy + hy * t, deck);
+    const hit = this.rifleLights[this.rifleLightN]
+      ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0, i: 0, d: 0 });
+    // closer throws concentrate, long ones spread and dim — inverse-square by hand
+    const near = Math.min(1, 6 / Math.max(2, t));
+    hit.x = hxw; hit.y = elev + 1.25; hit.z = hzw;
+    hit.i = 5.5 + near * 6; hit.d = 7 + t * 0.35;
+    this.rifleLightN++;
+    // a little spill at the weapon itself so the man holding it is lit too
+    const [mxw, mzw] = this.world.simToWorld(sx + hx * 0.6, sy + hy * 0.6, deck);
+    const sp = this.rifleLights[this.rifleLightN]
+      ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0, i: 0, d: 0 });
+    sp.x = mxw; sp.y = elev + 1.15; sp.z = mzw; sp.i = 2.4; sp.d = 3.6;
     this.rifleLightN++;
   }
 
@@ -701,12 +732,14 @@ export class Agents3D {
         case FACTION.ARMED: {
           this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
           stampHold(this.armedSet, counts.armed++);
-          this._rifleAt(wx, elev + 1.15, wz, heading);
+          this._rifleAt(wx, elev + 1.05, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
-            this._beamAt(wx, elev + 1.42, wz, heading);
-            this.beams.setMatrixAt(counts.beam++, this._m);
-            this._addRifleLight(wx, elev, wz, heading);
+            if (sim.fogAt(buf.nodeId[i])) { // only fog gives the shaft something to scatter off
+              this._beamAt(wx, elev + 1.08, wz, heading);
+              this.beams.setMatrixAt(counts.beam++, this._m);
+            }
+            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading);
           }
           break;
         }
@@ -714,12 +747,14 @@ export class Agents3D {
           this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
           if (flags & FLAG.ODST) stampHold(this.odstSet, counts.odst++);
           else stampHold(this.marineSet, counts.marine++);
-          this._rifleAt(wx, elev + 1.25, wz, heading);
+          this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
-            this._beamAt(wx, elev + 1.48, wz, heading);
-            this.beams.setMatrixAt(counts.beam++, this._m);
-            this._addRifleLight(wx, elev, wz, heading);
+            if (sim.fogAt(buf.nodeId[i])) {
+              this._beamAt(wx, elev + 1.14, wz, heading);
+              this.beams.setMatrixAt(counts.beam++, this._m);
+            }
+            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading);
           }
           break;
         }
@@ -759,7 +794,12 @@ export class Agents3D {
             this._q.copy(this._q2);
           }
           this._m.compose(this._p.set(bx, by, bz), this._q,
-            this._s.set(1, leaping ? 1.15 : charging ? 1.1 : 1, leaping ? 1.5 : charging ? 1.35 : 1));
+            // MODEST STRETCH (user: "body clipping still looks silly"): the old
+            // 1.35-1.5x elongation threw limbs far outside the body radius the
+            // sim clamps to, so charging forms speared through walls and each
+            // other. Enough lean to read as a sprint, not enough to escape the
+            // collision the sim actually enforces.
+            this._s.set(1, leaping ? 1.08 : charging ? 1.05 : 1, leaping ? 1.18 : charging ? 1.12 : 1));
           if (flags & FLAG.ARMED_HOST) {
             stamp(this.combatOdstSet, counts.combatOdst++);
             // bx/bz (not wx/wz) so the rifle rides with the body while a
@@ -1016,10 +1056,10 @@ export class Agents3D {
     // body, sitting in the raised hands — candidate C of the pose grid
     const fx = Math.cos(rotY), fz = -Math.sin(rotY); // +X-forward after rotY
     const rx = -fz, rz = fx;                          // right-hand direction
-    this._e.set(0, rotY + 0.35, -0.35);
+    this._e.set(0, rotY + 0.28, -0.26);
     this._q.setFromEuler(this._e);
     this._m.compose(
-      this._p.set(x + fx * 0.30 + rx * 0.05, y - 0.09, z + fz * 0.30 + rz * 0.05),
+      this._p.set(x + fx * 0.20 + rx * 0.04, y - 0.09, z + fz * 0.20 + rz * 0.04),
       this._q, this._s.set(1, 1, 1));
   }
 
