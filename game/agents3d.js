@@ -455,7 +455,11 @@ export class Agents3D {
         const vdx = ax - this.viewX, vdz = az - this.viewZ;
         if (vdx * vdx + vdz * vdz > 62 * 62) continue;
       }
-      const [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
+      let [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
+      // a body whose sim transit crosses the enclosed stair housing at
+      // hangar level renders pushed out through the nearest face instead
+      // of walking through its walls (user report)
+      [wx, wz] = world.clampStairTower(deck, wx, wz);
       // feet on the ground surface — in a stairwell room that follows the
       // mezzanine/ramp/hall, so bodies walk the stairs instead of floating
       // at one deck level (user: navigable stairwell room)

@@ -111,11 +111,11 @@ export class World {
     const out = [...(this._collBoxCache ?? [])];
     for (const d of this.doors) {
       if (!d.edge.locked) continue;
-      const p = d.mesh.geometry.parameters;
+      // one box spanning the whole closed opening (locked doors never open)
       out.push({
-        cx: d.mesh.position.x, cy: d.mesh.position.y, cz: d.mesh.position.z,
-        hx: p.width / 2, hy: p.height / 2, hz: p.depth / 2,
-        ry: d.mesh.rotation.y || 0,
+        cx: d.x, cy: d.elev + this._doorPH / 2, cz: d.z,
+        hx: DOOR_W / 2 + 0.06, hy: this._doorPH / 2, hz: 0.08,
+        ry: -d.phi,
       });
     }
     return out;
@@ -594,6 +594,22 @@ export class World {
           cursor = Math.max(cursor, c.at + DOOR_W / 2);
         }
         if (run.to > cursor + 0.05) spans.push([cursor, run.to]);
+        // HEADER over every doorway (user: doors in tall hangar rooms were
+        // just open at the top): the wall used to be cut floor-to-ceiling
+        // around a door, leaving a full-height slot above the CLEAR_H panel.
+        // Fill the slot from the door head to this room's ceiling.
+        if (roomH > CLEAR_H + 0.1) {
+          for (const c of cuts) {
+            const hh = roomH - CLEAR_H;
+            const header = new THREE.Mesh(
+              run.horiz ? new THREE.BoxGeometry(DOOR_W, hh, WALL_T) : new THREE.BoxGeometry(WALL_T, hh, DOOR_W),
+              matWall);
+            if (run.horiz) header.position.set(c.at, elev + CLEAR_H + hh / 2, run.fixed);
+            else header.position.set(run.fixed, elev + CLEAR_H + hh / 2, c.at);
+            this.scene.add(header);
+            this.wallMeshes.push(header);
+          }
+        }
         for (const [a, b] of spans) {
           const len = b - a;
           const wall = new THREE.Mesh(
@@ -1022,6 +1038,65 @@ export class World {
     // hangar airspace under the entry ring — wall it off (also gives the
     // switchback a proper backdrop instead of a void)
     guard(wellCx, midElev + RAIL_H / 2, wellCz + wellHz - T / 2, 2 * wellHx, RAIL_H, T);
+
+    // STAIR TOWER ENCLOSURE (user: from the hangar the mid-landing read as
+    // a mysterious raised deck "a level up", unreachable, with NPCs
+    // clipping through its walls). The hangar-level volume under the
+    // stairs is now a proper enclosed stair housing: solid panel walls on
+    // all faces except the stair mouth at flight B's foot (front-right),
+    // which is the legitimate way in and out. Collision-true, so nothing
+    // walks through the sides anymore.
+    const TW = 0.12;
+    const wallV = (px, pz, w, h, d, yBase = loElev) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matPanel);
+      m.position.set(px, yBase + h / 2, pz);
+      this.scene.add(m);
+      this.wallMeshes.push(m);
+    };
+    // front-left face: under flight A's high end — full height to the ring
+    wallV(wellCx - wellHx / 2, wellCz - wellHz - TW / 2, wellHx, hiElev - loElev, TW);
+    // back face: under the landing, floor to the landing slab
+    wallV(wellCx, wellCz + wellHz + TW / 2, 2 * wellHx + 2 * TW, midElev - loElev, TW);
+    // left face: closes under flight A completely
+    wallV(wellCx - wellHx - TW / 2, wellCz, TW, hiElev - loElev, 2 * wellHz + 2 * TW);
+    // right face: stepped under flight B's soffit line (tall at the back,
+    // vanishing at the stair foot — the mouth stays open)
+    for (let s = 0; s < 3; s++) {
+      const z0 = (wellCz - wellHz) + (s / 3) * 2 * wellHz;
+      const z1 = (wellCz - wellHz) + ((s + 1) / 3) * 2 * wellHz;
+      const zc = (z0 + z1) / 2;
+      const top = loElev + (midElev - loElev) * ((zc - (wellCz - wellHz)) / (2 * wellHz)) - 0.12;
+      if (top - loElev < 0.4) continue;
+      wallV(wellCx + wellHx + TW / 2, zc, TW, top - loElev, z1 - z0);
+    }
+    // mouth header: a beam over the stair foot so the opening reads framed
+    {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(wellHx + 0.3, 0.3, 0.16), matStep);
+      beam.position.set(wellCx + wellHx / 2, loElev + CLEAR_H - 0.2, wellCz - wellHz - 0.08);
+      this.scene.add(beam);
+    }
+  }
+
+  // Render-side dodge for bodies whose SIM position crosses the enclosed
+  // stair-tower footprint at hangar level (the sim's straight-line transit
+  // knows nothing about the housing): slide the visible body out through
+  // the nearest face; the mouth strip at the stair foot stays legal.
+  clampStairTower(deck, wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (deck !== g.deck + 1) continue;
+      const m = 0.25;
+      if (wx < g.wellCx - g.wellHx - m || wx > g.wellCx + g.wellHx + m
+        || wz < g.wellCz - g.wellHz - m || wz > g.wellCz + g.wellHz + m) continue;
+      if (wx > g.wellCx - 0.2 && wz < g.wellCz - g.wellHz + 1.8) continue; // the mouth
+      const dW = wx - (g.wellCx - g.wellHx), dE = (g.wellCx + g.wellHx) - wx;
+      const dN = wz - (g.wellCz - g.wellHz), dS = (g.wellCz + g.wellHz) - wz;
+      const min = Math.min(dW, dE, dN, dS);
+      if (min === dN) wz = g.wellCz - g.wellHz - 0.45;
+      else if (min === dS) wz = g.wellCz + g.wellHz + 0.45;
+      else if (min === dW) wx = g.wellCx - g.wellHx - 0.45;
+      else wx = g.wellCx + g.wellHx + 0.45;
+    }
+    return [wx, wz];
   }
 
   // ---- sliding doors (user note): panels that open for ANY movement near
@@ -1152,20 +1227,84 @@ export class World {
     }
   }
 
+  // HALO-STYLE DOOR TEXTURE (user: doors need to look like legit Halo
+  // doors): brushed gunmetal, recessed panel grooves, a hazard-chevron
+  // band, corner bolts. The damaged variant carries scorch blotches and
+  // gouges for the jammed/broken doors that used to just glow red.
+  _doorTexture(damaged) {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 256;
+    const x = c.getContext('2d');
+    const g0 = x.createLinearGradient(0, 0, 0, 256);
+    g0.addColorStop(0, '#3d4550'); g0.addColorStop(0.5, '#49525e'); g0.addColorStop(1, '#39414c');
+    x.fillStyle = g0; x.fillRect(0, 0, 128, 256);
+    for (let i = 0; i < 90; i++) {
+      x.fillStyle = `rgba(${(i * 29) % 2 ? '255,255,255' : '0,0,0'},0.035)`;
+      x.fillRect((i * 37) % 128, 0, 1, 256);
+    }
+    for (const gy of [38, 120, 206]) {
+      x.fillStyle = 'rgba(0,0,0,0.5)'; x.fillRect(6, gy, 116, 3);
+      x.fillStyle = 'rgba(255,255,255,0.12)'; x.fillRect(6, gy + 3, 116, 1);
+    }
+    x.save();
+    x.beginPath(); x.rect(6, 138, 116, 26); x.clip();
+    for (let i = -2; i < 10; i++) {
+      x.fillStyle = i % 2 ? '#151517' : '#c7952c';
+      x.beginPath();
+      x.moveTo(i * 24, 164); x.lineTo(i * 24 + 24, 138);
+      x.lineTo(i * 24 + 36, 138); x.lineTo(i * 24 + 12, 164);
+      x.closePath(); x.fill();
+    }
+    x.restore();
+    x.fillStyle = 'rgba(0,0,0,0.35)'; x.fillRect(0, 0, 5, 256); x.fillRect(123, 0, 5, 256);
+    x.fillStyle = 'rgba(255,255,255,0.18)';
+    for (const [bx, by] of [[12, 14], [116, 14], [12, 242], [116, 242], [12, 128], [116, 128]]) {
+      x.beginPath(); x.arc(bx, by, 2.5, 0, 7); x.fill();
+    }
+    if (damaged) {
+      for (let i = 0; i < 7; i++) {
+        const cx2 = 20 + (i * 53) % 90, cy2 = 20 + (i * 89) % 216, r = 14 + (i * 31) % 26;
+        const gr = x.createRadialGradient(cx2, cy2, 2, cx2, cy2, r);
+        gr.addColorStop(0, 'rgba(8,6,4,0.85)');
+        gr.addColorStop(0.6, 'rgba(15,10,6,0.5)');
+        gr.addColorStop(1, 'rgba(0,0,0,0)');
+        x.fillStyle = gr;
+        x.beginPath(); x.arc(cx2, cy2, r, 0, 7); x.fill();
+      }
+      x.strokeStyle = 'rgba(10,8,6,0.7)'; x.lineWidth = 2;
+      for (let i = 0; i < 4; i++) {
+        x.beginPath();
+        x.moveTo(10 + i * 30, 40 + (i * 61) % 170);
+        x.lineTo(40 + i * 22, 80 + (i * 97) % 150);
+        x.stroke();
+      }
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  // SPLIT SLIDING DOORS (user: opening down the middle and sliding to the
+  // side, with actual texture). Two half-panels per door meet at a center
+  // seam and slide apart into the walls. ALL panels live in two
+  // InstancedMeshes (clean + scorched) — door draw calls went DOWN versus
+  // the old one-mesh-per-door build. Frames (jambs + lintel) are static
+  // world-space meshes, so the merge pass batches them per deck. A status
+  // lamp above each face burns green (open track), red (sealed) or
+  // guttering amber (jammed/burning).
   _buildDoors() {
     const g = this.graph;
+    const entries = [];
     for (const e of g.edges) {
       if (!e.door) continue;
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck !== b.deck) continue;
       const deck = a.deck, elev = elevOf(deck);
       const [dx, dz] = this.simToWorld(e.door.x, e.door.y, deck);
-      // PANEL LIES ALONG ITS WALL (user report: doors turned 90°). The old
-      // room-center-delta guess breaks whenever a room sits offset along a
-      // long corridor — the real answer is which axis the two footprints
-      // actually overlap on (that's the axis the shared wall runs along).
-      // Throat doors face down the throat instead.
-      let phi; // long-axis direction of the panel, radians in sim space
+      // PANEL LIES ALONG ITS WALL (user report: doors turned 90°) — same
+      // orientation logic as the old build. Throat doors face the throat.
+      let phi;
       if (e.doorA && e.doorB && !e.shared) {
         phi = Math.atan2(e.doorB.y - e.doorA.y, e.doorB.x - e.doorA.x) + Math.PI / 2;
       } else {
@@ -1173,25 +1312,114 @@ export class World {
         const yov = Math.min(a.y + a.d / 2, b.y + b.d / 2) - Math.max(a.y - a.d / 2, b.y - b.d / 2);
         phi = xov >= yov ? 0 : Math.PI / 2;
       }
-      const mat = new THREE.MeshStandardMaterial({
-        color: e.locked ? 0x7a2723 : 0x55637d,
-        emissive: e.locked ? 0xa03020 : 0x101820,
-        emissiveIntensity: e.locked ? 0.7 : 0.4,
-        roughness: 0.5, metalness: 0.6,
-      });
-      mat.userData.lockedLook = !!e.locked; // updateDoors clears the red look on unlock
-      const panel = new THREE.Mesh(
-        new THREE.BoxGeometry(DOOR_W + 0.1, CLEAR_H - 0.15, 0.14), mat);
-      panel.rotation.y = -phi; // sim direction (cos phi, sin phi) -> world x/z
-      panel.position.set(dx, elev + (CLEAR_H - 0.15) / 2, dz);
-      this.scene.add(panel);
-      this.doors.push({
-        edge: e, mesh: panel, deck,
-        x: dx, z: dz,
-        closedY: elev + (CLEAR_H - 0.15) / 2,
-        open01: 0, // slides UP into the frame
-      });
+      entries.push({ e, deck, elev, dx, dz, phi });
     }
+    const PW = DOOR_W / 2 + 0.06;   // each half overlaps the seam slightly
+    const PH = CLEAR_H - 0.12;
+    this._doorPW = PW; this._doorPH = PH;
+    const geo = new THREE.BoxGeometry(PW, PH, 0.15);
+    const matOk = new THREE.MeshStandardMaterial({
+      map: this._doorTexture(false), roughness: 0.52, metalness: 0.55,
+    });
+    const matBad = new THREE.MeshStandardMaterial({
+      map: this._doorTexture(true), color: 0x9a9a9a, roughness: 0.7, metalness: 0.45,
+    });
+    const nBad = entries.filter((d) => d.e.burning).length;
+    this.doorPanels = new THREE.InstancedMesh(geo, matOk, Math.max(1, (entries.length - nBad) * 2));
+    this.doorPanelsBad = new THREE.InstancedMesh(geo, matBad, Math.max(1, nBad * 2));
+    this.doorPanels.count = (entries.length - nBad) * 2;
+    this.doorPanelsBad.count = nBad * 2;
+    this.doorPanels.frustumCulled = false;
+    this.doorPanelsBad.frustumCulled = false;
+    this.scene.add(this.doorPanels, this.doorPanelsBad);
+    this.doorPanelMeshes = [this.doorPanels, this.doorPanelsBad];
+    // frames — static, auto-merged (shared material, world-space meshes)
+    const matFrame = new THREE.MeshStandardMaterial({ color: 0x272d36, roughness: 0.6, metalness: 0.5 });
+    // status lamps — unlit so they read at full brightness in the dark;
+    // per-instance color carries the door state
+    const lampGeo = new THREE.BoxGeometry(0.34, 0.07, 0.07);
+    this.doorLamps = new THREE.InstancedMesh(lampGeo,
+      new THREE.MeshBasicMaterial({ color: 0xffffff }), Math.max(1, entries.length * 2));
+    this.doorLamps.count = entries.length * 2;
+    this.doorLamps.frustumCulled = false;
+    this.scene.add(this.doorLamps);
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3();
+    const S = new THREE.Vector3(1, 1, 1), E = new THREE.Euler();
+    let okSlot = 0, badSlot = 0, lampSlot = 0;
+    for (const d of entries) {
+      const { e, elev, dx, dz, phi } = d;
+      const ux = Math.cos(phi), uz = Math.sin(phi);    // along the doorway
+      const px = -Math.sin(phi), pz = Math.cos(phi);   // through the doorway
+      // jambs + lintel
+      for (const s of [-1, 1]) {
+        const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.26, CLEAR_H + 0.2, 0.34), matFrame);
+        jamb.position.set(dx + ux * s * (DOOR_W / 2 + 0.14), elev + (CLEAR_H + 0.2) / 2, dz + uz * s * (DOOR_W / 2 + 0.14));
+        jamb.rotation.y = -phi;
+        this.scene.add(jamb);
+      }
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W + 0.78, 0.26, 0.34), matFrame);
+      lintel.position.set(dx, elev + CLEAR_H + 0.08, dz);
+      lintel.rotation.y = -phi;
+      this.scene.add(lintel);
+      // status lamps on both faces of the lintel
+      const lampSlots = [];
+      for (const s of [-1, 1]) {
+        E.set(0, -phi, 0); Q.setFromEuler(E);
+        P.set(dx + px * s * 0.21, elev + CLEAR_H - 0.06, dz + pz * s * 0.21);
+        M.compose(P, Q, S);
+        this.doorLamps.setMatrixAt(lampSlot, M);
+        lampSlots.push(lampSlot++);
+      }
+      const bad = !!e.burning;
+      const rec = {
+        edge: e, deck: d.deck, x: dx, z: dz, phi, elev,
+        bad, slots: bad ? [badSlot++, badSlot++] : [okSlot++, okSlot++],
+        lampSlots, open01: 0,
+        // deterministic buckle for the jammed doors (user: broken doors
+        // being just red is unrealistic) — a slight ajar gap and tilt
+        buckle: bad ? {
+          gap: 0.10 + ((e.i * 2654435761 >>> 8) % 100) / 100 * 0.14,
+          tilt: (((e.i * 40503 >>> 4) % 7) - 3) * 0.014,
+        } : null,
+      };
+      this.doors.push(rec);
+      this._stampDoor(rec);
+      this._setLamp(rec);
+    }
+    this.doorPanels.instanceMatrix.needsUpdate = true;
+    this.doorPanelsBad.instanceMatrix.needsUpdate = true;
+    this.doorLamps.instanceColor.needsUpdate = true;
+  }
+
+  _stampDoor(d) {
+    const mesh = d.bad ? this.doorPanelsBad : this.doorPanels;
+    const PW = this._doorPW, PH = this._doorPH;
+    const M = (this._dm ??= new THREE.Matrix4());
+    const Q = (this._dq ??= new THREE.Quaternion());
+    const P = (this._dp ??= new THREE.Vector3());
+    const S = (this._ds ??= new THREE.Vector3());
+    const E = (this._de ??= new THREE.Euler());
+    const ux = Math.cos(d.phi), uz = Math.sin(d.phi);
+    const slide = d.open01 * (DOOR_W / 2 + 0.22);
+    for (let k = 0; k < 2; k++) {
+      const side = k === 0 ? -1 : 1;
+      let off = side * (PW / 2 - 0.03 + slide);
+      let tilt = 0;
+      if (d.buckle) { off += side * d.buckle.gap / 2; tilt = side * d.buckle.tilt; }
+      E.set(0, -d.phi, tilt);
+      Q.setFromEuler(E);
+      P.set(d.x + ux * off, d.elev + PH / 2, d.z + uz * off);
+      M.compose(P, Q, S.set(1, 1, 1));
+      mesh.setMatrixAt(d.slots[k], M);
+    }
+  }
+
+  _setLamp(d) {
+    const c = (this._dc ??= new THREE.Color());
+    if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber
+    else if (d.edge.locked) c.setHex(0xe03424);       // sealed: red
+    else c.setHex(0x38d06a);                          // powered track: green
+    for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
   }
 
   // MAINTENANCE SHAFT ACCESS (user report: the shaft connections were
@@ -1352,14 +1580,22 @@ export class World {
 
   updateDoors(dt, movers) {
     const r2 = DOORS.openRadius * DOORS.openRadius;
+    let anyStamp = false;
+    const flick = Math.sin(performance.now() * 0.013) * Math.sin(performance.now() * 0.0037);
     for (const d of this.doors) {
-      // a door whose lock RELEASED mid-game (the armory seal) sheds its red
-      // glow — the panel material was baked from e.locked at build time
-      if (!d.edge.locked && d.mesh.material.userData.lockedLook) {
-        d.mesh.material.userData.lockedLook = false;
-        d.mesh.material.color.setHex(0x55637d);
-        d.mesh.material.emissive.setHex(0x101820);
-        d.mesh.material.emissiveIntensity = 0.4;
+      // a door whose lock RELEASED mid-game (the armory seal) flips its
+      // status lamp red -> green
+      if (!d.edge.locked && d._lampLocked !== false) {
+        d._lampLocked = false;
+        this._setLamp(d);
+        this.doorLamps.instanceColor.needsUpdate = true;
+      } else if (d.edge.locked && d._lampLocked === undefined) d._lampLocked = true;
+      // jammed doors gutter — the amber lamp flickers with the damage
+      if (d.bad && (performance.now() & 63) < 16) {
+        const c = (this._dc ??= new THREE.Color());
+        c.setHex(0xd77a1c).multiplyScalar(0.55 + 0.45 * Math.abs(flick));
+        for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
+        this.doorLamps.instanceColor.needsUpdate = true;
       }
       let want = 0;
       if (!d.edge.locked) {
@@ -1374,8 +1610,11 @@ export class World {
       d.open01 += Math.sign(want - d.open01) * Math.min(Math.abs(want - d.open01), rate * dt);
       // report open/close starts so the game can voice the hiss
       if (was <= 0.03 && d.open01 > 0.03) this.doorEvents.push({ x: d.x, z: d.z, deck: d.deck });
-      d.mesh.position.y = d.closedY + d.open01 * (CLEAR_H - 0.35);
-      d.mesh.visible = d.open01 < 0.97;
+      if (d.open01 !== was) { this._stampDoor(d); anyStamp = true; }
+    }
+    if (anyStamp) {
+      this.doorPanels.instanceMatrix.needsUpdate = true;
+      this.doorPanelsBad.instanceMatrix.needsUpdate = true;
     }
   }
 

@@ -187,13 +187,12 @@ for (let i = 0; i < sim.fires.length; i++) {
   const [fx2, fz2] = world.simToWorld(f.x, f.y, f.deck);
   fire.add(`sim${i}`, fx2, fz2, elevOf(f.deck), f.scale);
 }
-// burning broken doors glow hot
-for (const d of world.doors) {
-  if (d.edge.burning) {
-    d.mesh.material.color.setHex(0x8a4020);
-    d.mesh.material.emissive.setHex(0xff5510);
-    d.mesh.material.emissiveIntensity = 0.9;
-  }
+// burning jammed doors carry a faint ember heat in the scorched panel
+// material (the visible damage itself is the scorch texture + buckle +
+// guttering amber lamp — no more flat red slab)
+if (world.doorPanelsBad) {
+  world.doorPanelsBad.material.emissive.setHex(0xff5510);
+  world.doorPanelsBad.material.emissiveIntensity = 0.14;
 }
 // DAMAGE THROUGH THE SHIP (user: small high-fidelity fires + glow where it's
 // dark, sparking junctions): render-only sites seeded per run — the portal
@@ -1024,12 +1023,8 @@ function updateNameplate() {
     _npVec.set(best.wx, best.labelY - 0.6, best.wz).sub(camera.position).normalize();
     _npRay.set(camera.position, _npVec);
     _npRay.far = best.dist - 0.06;
-    if (_npRay.intersectObjects(world.wallMeshes, false).length) best = null;
-    else {
-      for (const d of world.doors) {
-        if ((d.open01 ?? 0) < 0.7 && _npRay.intersectObject(d.mesh, false).length) { best = null; break; }
-      }
-    }
+    if (_npRay.intersectObjects(world.wallMeshes, false).length
+      || _npRay.intersectObjects(world.doorPanelMeshes ?? [], false).length) best = null;
   }
   _npSticky = best?.a ?? null;
   if (!best) { np.style.display = 'none'; return; }
@@ -1169,8 +1164,9 @@ function shotCandidates() {
 // wall or CLOSED door before it ever reaches an agent standing behind it —
 // no shooting through bulkheads. Doors mid-slide count as solid too.
 function solidsForShot() {
-  const doors = world.doors.filter((d) => d.open01 < 0.92).map((d) => d.mesh);
-  return world.wallMeshes.length || doors.length ? world.wallMeshes.concat(doors) : [];
+  // door panels are two InstancedMeshes now — raycast hits any panel
+  // (slid-open panels sit inside walls, which stop the ray themselves)
+  return world.wallMeshes.concat(world.doorPanelMeshes ?? []);
 }
 
 function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
