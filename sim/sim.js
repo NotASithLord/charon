@@ -70,7 +70,7 @@ export class Sim {
       conversions: 0, conversionsRound: 0, humansConverted: 0,
       carriersSeated: 0, formsMinted: 0, corpsesBurned: 0,
       infectionFormsKilled: 0, combatFormsDowned: 0, humansDead: 0,
-      distressCalls: 0,
+      distressCalls: 0, friendlyFireHits: 0,
     };
 
     this._precomputeSensing();

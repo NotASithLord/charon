@@ -175,6 +175,14 @@ export function resolveCombat(sim, dt) {
       // entered a 40m dark hallway) — a shooter can only acquire inside the
       // room's light-dependent sight range; the flood needs no light
       const sight = sightRangeAt(sim, node);
+      // FRIENDLY FIRE (user): rifles are dangerous to everyone downrange —
+      // a squadmate in the tight lane corridor blocks the shot (the shooter
+      // holds and works a side-step for a clear line instead), and a MISS
+      // with a squadmate hugging the lane can clip him. The player counts:
+      // marines check their lane around you, and a stray round still bites.
+      const FF = P.combat.ff;
+      const mates = group.filter((a) => a.hp > 0 && !a.dead &&
+        (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
       for (const s of shooters) {
         if (s === flamer) continue;
         if (sim.t < (s.nextShotAt ?? 0)) continue;
@@ -205,6 +213,59 @@ export function resolveCombat(sim, dt) {
         }
         s._sawThreatT = sim.t;
         if (sim.t < (s._reactUntil ?? 0)) continue; // still turning / registering it
+        // check the lane before the trigger: anyone friendly BETWEEN muzzle
+        // and target, inside the corridor, blocks the shot outright; anyone
+        // in the wider graze band becomes the victim a miss can find
+        const ldx = best.x - s.x, ldy = best.y - s.y;
+        const laneL = Math.hypot(ldx, ldy) || 1e-6;
+        const lux = ldx / laneL, luy = ldy / laneL;
+        let laneBlocked = false, blocker = null, graze = null, grazeD = Infinity;
+        for (const h of mates) {
+          if (h === s) continue;
+          const hx = h.x - s.x, hy = h.y - s.y;
+          const along = hx * lux + hy * luy;
+          if (along < 0.4 || along > laneL - 0.2) continue; // behind the muzzle / past the target
+          const perp = Math.abs(hy * lux - hx * luy);
+          if (perp < FF.laneHalfM) { laneBlocked = true; blocker = h; break; }
+          if (perp < FF.grazeHalfM && perp < grazeD) { grazeD = perp; graze = h; }
+        }
+        if (laneBlocked) {
+          // WORK THE ANGLE. The side-step has to move the marine's POST, not
+          // just its body: resolveCombat runs at the END of the tick, so a
+          // raw position nudge is dragged straight back by _firingDrift on the
+          // next tick and the marine oscillates in place, blocked forever
+          // (measured: 71% of all shot opportunities suppressed). Displacing
+          // firePost makes the steering layer walk him out of the lane at the
+          // normal capped shuffle speed AND hold him there.
+          if (s._ffFlipAt === undefined) s._ffFlipAt = sim.t + FF.flipSec;
+          else if (sim.t >= s._ffFlipAt) {
+            s._ffSide = -(s._ffSide ?? ((s.id & 1) ? 1 : -1));
+            s._ffFlipAt = sim.t + FF.flipSec;
+          }
+          const side = s._ffSide ?? (s._ffSide = (s.id & 1) ? 1 : -1);
+          const room = sim.graph.node(s.pnode ?? s.node);
+          if (s.firePost) {
+            const nx = s.firePost[0] - luy * side * FF.postShiftM;
+            const ny = s.firePost[1] + lux * side * FF.postShiftM;
+            s.firePost[0] = Math.max(room.x - room.w / 2 + 0.8, Math.min(room.x + room.w / 2 - 0.8, nx));
+            s.firePost[1] = Math.max(room.y - room.d / 2 + 0.8, Math.min(room.y + room.d / 2 - 0.8, ny));
+          }
+          s.x += -luy * side * FF.sideStepMps * dt;
+          s.y += lux * side * FF.sideStepMps * dt;
+          sim._clampToRoom(s, room);
+          if (sim.t - (sim._ffCallT ?? -999) > FF.callCooldownSec) {
+            sim._ffCallT = sim.t;
+            sim.log('radio', `check your fire — friendlies in the lane in ${sim.graph.node(node).name}`, node);
+          }
+          // HOLDING FIRE IS NOT FREE. A marine who can never find a lane —
+          // pinned in a doorway, boxed in a corridor — does not stand there
+          // politely until the ship falls; past holdMaxSec discipline loses to
+          // the thing charging him and he fires through the gap anyway. That
+          // bounds the suppression AND is exactly where blue-on-blue belongs.
+          s._ffBlockedSince ??= sim.t;
+          if (sim.t - s._ffBlockedSince < FF.holdMaxSec) continue;
+          graze = blocker; grazeD = 0; // shooting past a man in the lane
+        } else { s._ffFlipAt = undefined; s._ffBlockedSince = undefined; }
         // FIRETEAM AMMO ECONOMY (user): your escorts burn real magazines.
         // A dry marine keeps his boot (stomps below) but the rifle is out
         // until you hand him a mag (G key, sim.giveMag).
@@ -250,9 +311,28 @@ export function resolveCombat(sim, dt) {
           if (lm === 3) acc *= P.darkness.unlitAccMult;
           else if (lm === 1 || lm === 2) acc *= P.darkness.flickerAccMult;
         }
-        if (sim.rng.chance(acc)) {
+        if (laneBlocked && blocker.hp > 0 && !blocker.dead && sim.rng.chance(FF.blockedHitChance)) {
+          // he fired through an occupied lane: the round meant for the form
+          // finds the man standing in it instead
+          sim.hurtHuman(blocker, gun.dmg * FF.dmgMult, s.id);
+          sim.stats.friendlyFireHits++;
+          if (sim.t - (sim._ffHitCallT ?? -999) > 6) {
+            sim._ffHitCallT = sim.t;
+            sim.log('radio', `a stray round hits a friendly in ${sim.graph.node(node).name}`, node);
+          }
+        } else if (sim.rng.chance(acc)) {
           if (best.faction === FACTION.INFECTION) { sim.removeAgent(best); sim.stats.infectionFormsKilled++; }
           else hurtFloodForm(sim, best, gun.dmg, false, s.id);
+        } else if (graze && graze.hp > 0 && !graze.dead && sim.rng.chance(FF.grazeChance)) {
+          // the miss has to land SOMEWHERE — the squadmate hugging the lane
+          // eats it (a graze, not a center-mass kill shot; hurtHuman still
+          // handles the worst case, so blue-on-blue CAN drop a man)
+          sim.hurtHuman(graze, gun.dmg * FF.dmgMult, s.id);
+          sim.stats.friendlyFireHits++;
+          if (sim.t - (sim._ffHitCallT ?? -999) > 6) {
+            sim._ffHitCallT = sim.t;
+            sim.log('radio', `a stray round hits a friendly in ${sim.graph.node(node).name}`, node);
+          }
         }
       }
       // stomp infection forms (they're fragile, §6.6) — but only the ones

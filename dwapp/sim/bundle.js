@@ -363,7 +363,38 @@ var PARAMS = {
     reactConeRad: 1.2,
     // per-marine marksmanship spread: acc multiplier in [1-spread, 1+spread]
     // hashed off the agent id — squads have a good shot and a poor one
-    marksmanSpread: 0.25
+    marksmanSpread: 0.25,
+    // FRIENDLY FIRE (user): rifles are dangerous to everyone downrange.
+    // A squadmate inside the tight lane corridor BLOCKS the shot — the
+    // shooter holds and side-steps for a clear line instead of firing
+    // through him — and a MISSED shot with a squadmate hugging the lane
+    // (inside grazeHalfM but outside laneHalfM) can clip him.
+    ff: {
+      laneHalfM: 0.55,
+      // a friendly this close to the fire lane blocks it
+      grazeHalfM: 1.1,
+      // missed shots can clip friendlies inside this
+      grazeChance: 0.08,
+      // per missed shot with a friendly in the graze band
+      blockedHitChance: 0.1,
+      // firing anyway THROUGH a man in the lane
+      dmgMult: 0.65,
+      // a graze, not a center-mass kill shot
+      sideStepMps: 1.7,
+      // deliberate reposition speed toward a clear lane
+      postShiftM: 0.55,
+      // how far the FIRING POST slides per blocked tick
+      // (the body nudge alone gets dragged back by the
+      // steering layer, which pinned marines forever)
+      flipSec: 1.4,
+      // side still blocked after this long -> try the other
+      holdMaxSec: 1.6,
+      // a marine who still has no lane after this fires
+      // anyway — discipline loses to the thing charging
+      // him, and suppression stays bounded
+      callCooldownSec: 18
+      // radio discipline: one "check your fire" per burst
+    }
   },
   // FLOOD DARKNESS (user rule): a room the flood holds ALONE goes dark at
   // 60 s (biomass overgrows the fixtures) and fills with spore fog at
@@ -3977,6 +4008,8 @@ function resolveCombat(sim2, dt) {
         }
       }
       const sight = sightRangeAt(sim2, node);
+      const FF = P.combat.ff;
+      const mates = group.filter((a) => a.hp > 0 && !a.dead && (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
       for (const s of shooters) {
         if (s === flamer) continue;
         if (sim2.t < (s.nextShotAt ?? 0)) continue;
@@ -4003,6 +4036,55 @@ function resolveCombat(sim2, dt) {
         }
         s._sawThreatT = sim2.t;
         if (sim2.t < (s._reactUntil ?? 0)) continue;
+        const ldx = best.x - s.x, ldy = best.y - s.y;
+        const laneL = Math.hypot(ldx, ldy) || 1e-6;
+        const lux = ldx / laneL, luy = ldy / laneL;
+        let laneBlocked = false, blocker = null, graze = null, grazeD = Infinity;
+        for (const h of mates) {
+          if (h === s) continue;
+          const hx = h.x - s.x, hy = h.y - s.y;
+          const along = hx * lux + hy * luy;
+          if (along < 0.4 || along > laneL - 0.2) continue;
+          const perp = Math.abs(hy * lux - hx * luy);
+          if (perp < FF.laneHalfM) {
+            laneBlocked = true;
+            blocker = h;
+            break;
+          }
+          if (perp < FF.grazeHalfM && perp < grazeD) {
+            grazeD = perp;
+            graze = h;
+          }
+        }
+        if (laneBlocked) {
+          if (s._ffFlipAt === void 0) s._ffFlipAt = sim2.t + FF.flipSec;
+          else if (sim2.t >= s._ffFlipAt) {
+            s._ffSide = -(s._ffSide ?? (s.id & 1 ? 1 : -1));
+            s._ffFlipAt = sim2.t + FF.flipSec;
+          }
+          const side = s._ffSide ?? (s._ffSide = s.id & 1 ? 1 : -1);
+          const room = sim2.graph.node(s.pnode ?? s.node);
+          if (s.firePost) {
+            const nx = s.firePost[0] - luy * side * FF.postShiftM;
+            const ny = s.firePost[1] + lux * side * FF.postShiftM;
+            s.firePost[0] = Math.max(room.x - room.w / 2 + 0.8, Math.min(room.x + room.w / 2 - 0.8, nx));
+            s.firePost[1] = Math.max(room.y - room.d / 2 + 0.8, Math.min(room.y + room.d / 2 - 0.8, ny));
+          }
+          s.x += -luy * side * FF.sideStepMps * dt;
+          s.y += lux * side * FF.sideStepMps * dt;
+          sim2._clampToRoom(s, room);
+          if (sim2.t - (sim2._ffCallT ?? -999) > FF.callCooldownSec) {
+            sim2._ffCallT = sim2.t;
+            sim2.log("radio", `check your fire — friendlies in the lane in ${sim2.graph.node(node).name}`, node);
+          }
+          s._ffBlockedSince ??= sim2.t;
+          if (sim2.t - s._ffBlockedSince < FF.holdMaxSec) continue;
+          graze = blocker;
+          grazeD = 0;
+        } else {
+          s._ffFlipAt = void 0;
+          s._ffBlockedSince = void 0;
+        }
         if (s.escort && s.mags !== void 0) {
           if (s.rounds <= 0) {
             if (s.mags > 0) {
@@ -4036,11 +4118,25 @@ function resolveCombat(sim2, dt) {
           if (lm === 3) acc2 *= P.darkness.unlitAccMult;
           else if (lm === 1 || lm === 2) acc2 *= P.darkness.flickerAccMult;
         }
-        if (sim2.rng.chance(acc2)) {
+        if (laneBlocked && blocker.hp > 0 && !blocker.dead && sim2.rng.chance(FF.blockedHitChance)) {
+          sim2.hurtHuman(blocker, gun.dmg * FF.dmgMult, s.id);
+          sim2.stats.friendlyFireHits++;
+          if (sim2.t - (sim2._ffHitCallT ?? -999) > 6) {
+            sim2._ffHitCallT = sim2.t;
+            sim2.log("radio", `a stray round hits a friendly in ${sim2.graph.node(node).name}`, node);
+          }
+        } else if (sim2.rng.chance(acc2)) {
           if (best.faction === FACTION.INFECTION) {
             sim2.removeAgent(best);
             sim2.stats.infectionFormsKilled++;
           } else hurtFloodForm(sim2, best, gun.dmg, false, s.id);
+        } else if (graze && graze.hp > 0 && !graze.dead && sim2.rng.chance(FF.grazeChance)) {
+          sim2.hurtHuman(graze, gun.dmg * FF.dmgMult, s.id);
+          sim2.stats.friendlyFireHits++;
+          if (sim2.t - (sim2._ffHitCallT ?? -999) > 6) {
+            sim2._ffHitCallT = sim2.t;
+            sim2.log("radio", `a stray round hits a friendly in ${sim2.graph.node(node).name}`, node);
+          }
         }
       }
       let stomps = shooters.reduce((s, a) => s + (a.faction === FACTION.MARINE ? P.combat.marine.stompPerSec : P.combat.armed.stompPerSec) * (a.held === sim2.tickCount ? 0.5 : 1), 0) * dt;
@@ -4519,7 +4615,8 @@ var Sim = class {
       infectionFormsKilled: 0,
       combatFormsDowned: 0,
       humansDead: 0,
-      distressCalls: 0
+      distressCalls: 0,
+      friendlyFireHits: 0
     };
     this._precomputeSensing();
     this.influence = {

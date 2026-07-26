@@ -924,6 +924,25 @@ const VOICES = {
     (a, b) => `door's cycling again between ${a} and ${b}`,
     (a, b) => `whatever seized the ${a} door let go — it just slid open`,
   ],
+  // friendly-fire discipline (user: marines hold and reposition when a
+  // squadmate wanders into the lane — and pay for it in blood when the
+  // chaos wins anyway)
+  checkFire: [
+    (r) => `hold fire, hold fire — got a man in my lane in ${r}!`,
+    (r) => `check your lanes in ${r}, we are crossing each other!`,
+    (r) => `can't shoot — friendly in my line in ${r}. moving for an angle`,
+    (r) => `watch your spacing in ${r}! I keep losing my lane`,
+    (r) => `shifting left for a clear lane in ${r} — nobody wander into my fire`,
+    (r) => `you're in my line! step out, step OUT — ${r}`,
+  ],
+  ffHit: [
+    (r) => `CHECK YOUR FIRE! CHECK YOUR FIRE! man hit in ${r}!`,
+    (r) => `who's shooting?! you just clipped one of ours in ${r}!`,
+    (r) => `blue on blue in ${r}! I say again, blue on blue!`,
+    (r) => `cease fire, cease fire — we're hitting our own in ${r}!`,
+    (r) => `friendly hit in ${r} — watch your damn lanes!`,
+    (r) => `round just took a piece of my squadmate — ${r}, tighten it UP!`,
+  ],
   confirmKill: [
     (r) => `making sure the downed one in ${r} stays down`,
     (r) => `double-tap on the body in ${r}. learned that the hard way`,
@@ -1026,6 +1045,10 @@ function gameLogView(e) {
         if (dj) return rx(e, witnessNear(e.node), say('doorJam', dj[1], dj[2]));
         const df = msg.match(/^the jammed door between (.+) and (.+) grinds free$/);
         if (df) return rx(e, witnessNear(e.node), say('doorFree', df[1], df[2]));
+        const cf = msg.match(/^check your fire — friendlies in the lane in (.+)$/);
+        if (cf) return rx(e, witnessNear(e.node), say('checkFire', cf[1]));
+        const fh = msg.match(/^a stray round hits a friendly in (.+)$/);
+        if (fh) return rx(e, witnessNear(e.node), say('ffHit', fh[1]), { type: 'combat' });
       }
       if (msg.startsWith('distress call')) {
         const w = witnessNear(e.node);

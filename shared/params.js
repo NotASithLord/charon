@@ -220,6 +220,27 @@ export const PARAMS = {
     // per-marine marksmanship spread: acc multiplier in [1-spread, 1+spread]
     // hashed off the agent id — squads have a good shot and a poor one
     marksmanSpread: 0.25,
+    // FRIENDLY FIRE (user): rifles are dangerous to everyone downrange.
+    // A squadmate inside the tight lane corridor BLOCKS the shot — the
+    // shooter holds and side-steps for a clear line instead of firing
+    // through him — and a MISSED shot with a squadmate hugging the lane
+    // (inside grazeHalfM but outside laneHalfM) can clip him.
+    ff: {
+      laneHalfM: 0.55,       // a friendly this close to the fire lane blocks it
+      grazeHalfM: 1.1,       // missed shots can clip friendlies inside this
+      grazeChance: 0.08,     // per missed shot with a friendly in the graze band
+      blockedHitChance: 0.1, // firing anyway THROUGH a man in the lane
+      dmgMult: 0.65,         // a graze, not a center-mass kill shot
+      sideStepMps: 1.7,      // deliberate reposition speed toward a clear lane
+      postShiftM: 0.55,      // how far the FIRING POST slides per blocked tick
+                             // (the body nudge alone gets dragged back by the
+                             // steering layer, which pinned marines forever)
+      flipSec: 1.4,          // side still blocked after this long -> try the other
+      holdMaxSec: 1.6,       // a marine who still has no lane after this fires
+                             // anyway — discipline loses to the thing charging
+                             // him, and suppression stays bounded
+      callCooldownSec: 18,   // radio discipline: one "check your fire" per burst
+    },
   },
   // FLOOD DARKNESS (user rule): a room the flood holds ALONE goes dark at
   // 60 s (biomass overgrows the fixtures) and fills with spore fog at
