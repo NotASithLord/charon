@@ -1024,15 +1024,22 @@ function gameLogView(e) {
   }
 }
 function renderLog() {
+  // lastEvent is an ABSOLUTE counter matched against sim.eventTotal, with
+  // sim.eventBase mapping into the (splice-capped) events array — the old
+  // array-length compare wedged the log for 200 events every time the 1600
+  // cap hit, then silently skipped them (user report: log stuck at min 12)
+  const total = sim.eventTotal ?? sim.events.length;
   // no new events -> touch NOTHING (swarm finding: the scroll-metric reads
   // below force a synchronous reflow, and they ran every frame)
-  if (lastEvent >= sim.events.length) return;
+  if (lastEvent >= total) return;
+  const base = sim.eventBase ?? 0;
+  if (lastEvent < base) lastEvent = base; // events already aged off the buffer
   const log = el('log');
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   let added = false;
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  while (lastEvent < sim.events.length) {
-    const raw = sim.events[lastEvent++];
+  while (lastEvent < total) {
+    const raw = sim.events[lastEvent++ - base];
     // PHYSICAL side-effects of raw events, independent of radio receipt:
     // blood marks where people are taken or fall, the 1MC PA for shipwide
     // orders (the speakers are in every compartment — no radio needed)

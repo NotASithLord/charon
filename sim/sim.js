@@ -296,7 +296,15 @@ export class Sim {
 
   log(type, msg, node = -1) {
     this.events.push({ t: this.t, type, msg, node });
-    if (this.events.length > 1600) this.events.splice(0, 200);
+    this.eventTotal = (this.eventTotal ?? 0) + 1; // monotonic — never rewinds
+    if (this.events.length > 1600) {
+      this.events.splice(0, 200);
+      // consumers track ABSOLUTE event indices; the splice shifts the array,
+      // so publish the offset (user report: the ship-activity log wedged at
+      // minute ~12 — the cap hit and the renderer's index overshot the array,
+      // silencing it until 200 skipped events re-accumulated)
+      this.eventBase = (this.eventBase ?? 0) + 200;
+    }
   }
 
   spawn(a) {

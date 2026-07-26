@@ -4728,7 +4728,11 @@ var Sim = class {
   }
   log(type, msg, node = -1) {
     this.events.push({ t: this.t, type, msg, node });
-    if (this.events.length > 1600) this.events.splice(0, 200);
+    this.eventTotal = (this.eventTotal ?? 0) + 1;
+    if (this.events.length > 1600) {
+      this.events.splice(0, 200);
+      this.eventBase = (this.eventBase ?? 0) + 200;
+    }
   }
   spawn(a) {
     this._assignCallsign(a);
