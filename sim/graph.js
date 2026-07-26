@@ -3,6 +3,9 @@
 // position interpolation.
 
 export const LAYER = { STD: 'std', SHAFT: 'shaft', VENT: 'vent' };
+
+// identity tags for pass predicates (hops-cache keys) — see hops() below
+let _ffSeq = 0;
 const EDGE_PREFIX = { hatch: 'H', blastdoor: 'B', lift: 'L', ladder: 'K', stairwell: 'T' };
 
 export class ShipGraph {
@@ -376,23 +379,77 @@ export class ShipGraph {
 
   // Fastest path from -> to as [{to, link, layer}] steps, or null.
   // Dijkstra over real travel time (deterministic: min-cost, ties by index).
+  // PERF (user: M2 stutter): the hive's opening plan runs 100+ path queries
+  // in one strategic tick. The old linear-scan selection was O(n²) and every
+  // call allocated four arrays plus a generator object per edge — the tick
+  // spiked 25-30ms mostly on garbage. Now: a lazy-deletion binary heap
+  // ordered (dist, node) — which pops in EXACTLY the order the linear scan
+  // selected (min dist, ties by lowest index), so routes are bit-identical —
+  // over reused scratch buffers and inlined adjacency iteration.
   path(from, to, layers, passFn) {
     if (from === to) return [];
     const n = this.n;
-    const dist = new Float64Array(n).fill(Infinity);
-    const done = new Uint8Array(n);
-    const next = new Int32Array(n).fill(-1);
-    const nextLink = new Array(n).fill(null);
+    const S = (this._pathScratch ??= {
+      dist: new Float64Array(n), done: new Uint8Array(n),
+      next: new Int32Array(n), nextLink: new Array(n),
+      hd: [], hn: [],
+    });
+    const { dist, done, next, nextLink, hd, hn } = S;
+    dist.fill(Infinity); done.fill(0); next.fill(-1); nextLink.fill(null);
+    hd.length = 0; hn.length = 0;
+    const push = (d, v) => {
+      let i = hd.length;
+      hd.push(d); hn.push(v);
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (hd[p] < d || (hd[p] === d && hn[p] < v)) break;
+        hd[i] = hd[p]; hn[i] = hn[p];
+        i = p;
+      }
+      hd[i] = d; hn[i] = v;
+    };
+    const pop = () => {
+      const topV = hn[0];
+      const ld = hd.pop(), lv = hn.pop();
+      const m = hd.length;
+      if (m > 0) {
+        let i = 0;
+        for (;;) {
+          const l = 2 * i + 1, r = l + 1;
+          let s = -1;
+          if (l < m) s = l;
+          if (r < m && (hd[r] < hd[l] || (hd[r] === hd[l] && hn[r] < hn[l]))) s = r;
+          if (s === -1) break;
+          if (hd[s] < ld || (hd[s] === ld && hn[s] < lv)) {
+            hd[i] = hd[s]; hn[i] = hn[s];
+            i = s;
+          } else break;
+        }
+        hd[i] = ld; hn[i] = lv;
+      }
+      return topV;
+    };
     dist[to] = 0;
+    push(0, to);
     for (;;) {
-      let u = -1, best = Infinity;
-      for (let i = 0; i < n; i++) if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
+      let u = -1;
+      while (hd.length) {
+        const d0 = hd[0], v0 = pop();
+        if (!done[v0] && d0 === dist[v0]) { u = v0; break; }
+      }
       if (u === -1) break;
       done[u] = 1;
       if (u === from) break;
-      for (const { to: v, link } of this.neighbors(u, layers, passFn)) {
-        const c = dist[u] + this.linkCost(link);
-        if (c < dist[v] - 1e-9) { dist[v] = c; next[v] = u; nextLink[v] = link; }
+      const du = dist[u];
+      for (const layer of layers) {
+        const arr = this.adj[layer][u];
+        for (let i = 0; i < arr.length; i++) {
+          const e = arr[i];
+          const v = e.to, link = e.link;
+          if (passFn && !passFn(link, u, v)) continue;
+          const c = du + this.linkCost(link);
+          if (c < dist[v] - 1e-9) { dist[v] = c; next[v] = u; nextLink[v] = link; push(c, v); }
+        }
       }
     }
     if (!Number.isFinite(dist[from])) return null;
@@ -408,8 +465,26 @@ export class ShipGraph {
     return steps;
   }
 
+  // PERF (user: M2 stutter): hops() ran a full-graph BFS per call, and the
+  // hive's strategic tick asks for distances in forms×bodies loops — thousands
+  // of identical BFS in one tick, 30-40ms main-thread spikes. Fields are now
+  // cached per (target, layers, predicate) and the cache is dropped whenever
+  // ANYTHING affecting passability mutates (locks, burning nodes, hive belief
+  // maps, and every tick boundary — the predicates read sim.t). Same inputs →
+  // same field, so behavior is bit-identical; only the CPU time changes.
+  // NOTE: hive predicates are direction-dependent (burning blocks ENTRY), so
+  // there is deliberately no symmetric from/to lookup.
+  invalidatePathCache() {
+    if (this._hopsCache?.size) this._hopsCache.clear();
+  }
   hops(from, to, layers, passFn) {
-    const ff = this.flowField([to], layers, passFn);
+    const c = (this._hopsCache ??= new Map());
+    const key = to + '|' + layers.join(',') + '|' + (passFn ? (passFn._ffid ??= ++_ffSeq) : 0);
+    let ff = c.get(key);
+    if (!ff) {
+      ff = this.flowField([to], layers, passFn);
+      c.set(key, ff);
+    }
     return ff.dist[from];
   }
 

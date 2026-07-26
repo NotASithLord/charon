@@ -75,6 +75,7 @@ export function applyCommand(sim, entry) {
         break;
       }
       e.locked = !!cmd.locked;
+      sim.graph.invalidatePathCache();
       sim._precomputeSensing(); // locks change LOS/hearing topology
       sim.log('command', `${cmd.locked ? 'sealed' : 'opened'} ${g.node(e.a).name}↔${g.node(e.b).name}`);
       break;

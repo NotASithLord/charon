@@ -371,6 +371,7 @@ function updateMarineTick(sim, a, dt) {
           a.fuel -= sim.P.flamethrower.fuelPerCorpse;
           sim.stats.corpsesBurned++;
           sim.graph.burningUntil[a.node] = sim.t + sim.P.flamethrower.burnNodeSec;
+          sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
           if (sim.stats.corpsesBurned % 10 === 1) sim.log('burn', `flamethrower burning bodies in ${nd.name} (fuel ${a.fuel.toFixed(0)})`, a.node);
         }
       }

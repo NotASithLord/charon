@@ -92,9 +92,11 @@ export class Hive {
     const g = this.sim.graph;
     if (link.kind === 'std' && !this.knownLocked.has(link.i)) {
       this.knownLocked.add(link.i);
+      g.invalidatePathCache(); // hive predicates read knownLocked
       this.sim.log('hive', `hive discovers a locked ${link.type} (${g.node(link.a).name} ↔ ${g.node(link.b).name}) — re-planning`);
     } else if (link.kind === 'vent' && !this.knownBlockedVents.has(link.i)) {
       this.knownBlockedVents.add(link.i);
+      g.invalidatePathCache(); // hive predicates read knownBlockedVents
       this.sim.log('hive', `hive finds a collapsed vent (${g.node(link.a).name} ↔ ${g.node(link.b).name})`);
     }
   }

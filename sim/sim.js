@@ -415,6 +415,9 @@ export class Sim {
     this.buffer.beginTick();
     this.tickCount++;
     this.t = this.tickCount * dt;
+    // the hops cache is only valid while passability inputs hold still —
+    // sim.t just moved (burning-node checks read it), so drop it
+    this.graph.invalidatePathCache();
 
     this._refreshOccupancy();
 
@@ -560,6 +563,7 @@ export class Sim {
     for (const e of this.graph.edges) {
       if ((e.a === armoryIdx || e.b === armoryIdx) && e.locked) e.locked = false;
     }
+    this.graph.invalidatePathCache();
     // the reserve steps out ready to fight — its squad joins the strategic
     // pool (the humans.js locked-gate stops applying the moment this flips)
     this.log('radio', 'ARMORY SEAL RELEASED — ODST reserve deploying. Racks are open.');

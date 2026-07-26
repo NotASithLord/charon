@@ -369,10 +369,24 @@ else {
   _prewarming = true;
   const start = rung;
   try {
+    // FORCE-WARM the late-appearing pipelines (user: still stuttering —
+    // every first-use compile is a mid-fight freeze): instanced sets sit at
+    // count 0 and veils/decals at visible=false until their moment, so
+    // compileAsync skips them and the FIRST muzzle flash / flood veil /
+    // blood mark compiles a fresh pipeline on the spot. Flip everything on
+    // for the warm passes, then restore exactly.
+    const warmed = [];
+    scene.traverse((o) => {
+      if (o.isInstancedMesh && o.count === 0) { warmed.push([o, 'count', 0]); o.count = 1; }
+    });
+    for (const v of world.darkVeils) {
+      if (v && !v.visible) { warmed.push([v, 'visible', false]); v.visible = true; }
+    }
     for (const i of [2, 3, RUNGS.length - 1, start]) {
       applyRung(i);
       await renderer.compileAsync(scene, camera);
     }
+    for (const [o, k, val] of warmed) o[k] = val;
   } catch { applyRung(start); }
   _prewarming = false;
 })();
@@ -483,6 +497,16 @@ const wallRay = new THREE.Raycaster();
 
 // --- HUD ---
 const el = (id) => document.getElementById(id);
+// dirty-checked DOM writes (perf: setting textContent/style every frame
+// forces style work even when the value is unchanged)
+const _hudCache = {};
+function setText(id, s) {
+  if (_hudCache[id] !== s) { _hudCache[id] = s; el(id).textContent = s; }
+}
+function setStyle(id, prop, v) {
+  const k = id + ':' + prop;
+  if (_hudCache[k] !== v) { _hudCache[k] = v; el(id).style[prop] = v; }
+}
 const overlay = el('overlay');
 
 // --- INTRO (user request): the briefing types itself out like a military
@@ -1540,6 +1564,20 @@ function playerObstacles() {
 let _ftEMA = 16, _resAt = 0, frameNo = 0, _slowEvals = 0, _fastEvals = 0, _rungMovedAt = 0; // ladder governor state
 let acc = 0;
 let physAcc = 0;
+// tick scheduler: a MessageChannel macrotask runs due sim ticks OUTSIDE the
+// rAF callback (see the accumulator in frame()). At most 3 ticks per task —
+// a tab-restore backlog drains over a few tasks instead of freezing one.
+const _tickChan = new MessageChannel();
+const _tickPort = _tickChan.port2;
+_tickChan.port1.onmessage = () => {
+  let ran = 0;
+  while (acc >= sim.dt && ran++ < 3) {
+    sim.tick();
+    acc -= sim.dt;
+  }
+  if (acc > sim.dt * 40) acc = 0;       // deep backlog: drop, don't marathon
+  else if (acc >= sim.dt) _tickPort.postMessage(0);
+};
 let shownLost = false;
 let spectateShown = false;
 let last = performance.now();
@@ -1589,13 +1627,14 @@ function frame(now) {
   viewmodel.position.y = GUN_TUNE.y - (weapon.reloading ? 0.16 : 0) - (weapon.meleeT > 0 ? 0.1 : 0);
   viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + (weapon.meleeT > 0 ? -0.5 : 0);
 
+  // SIM TICKS OFF THE RENDER TASK (user: M2 stutter). Ticks used to run
+  // inside the rAF callback, so a 5-30ms strategic tick landed ON TOP of the
+  // frame's render cost and blew the vsync deadline — a visible 10Hz hitch.
+  // The accumulator still decides WHEN ticks are due, but they execute in a
+  // separate macrotask posted after the frame is presented: the browser runs
+  // them in the idle gap between vsyncs, where a normal tick is invisible.
   acc += dtReal;
-  let guard = 0;
-  while (acc >= sim.dt && guard++ < 60) {
-    sim.tick();
-    acc -= sim.dt;
-  }
-  if (guard >= 60) acc = 0;
+  if (acc >= sim.dt) _tickPort.postMessage(0);
 
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
@@ -1729,17 +1768,18 @@ function frame(now) {
     viewmodel.visible = !player.dead;
   }
 
-  // HUD
-  el('clock').textContent = fmtTime(sim.t);
+  // HUD — dirty-checked: unconditional textContent/style writes every frame
+  // force style recalc even when nothing changed (part of the M2 stutter)
+  setText('clock', fmtTime(sim.t));
   const povAgent = ghost ?? player.agent;
   const room = sim.graph.node(povAgent.node);
-  el('room').textContent = room ? room.name : '—';
-  el('deckLabel').textContent = `DECK ${povAgent.deck}`;
+  setText('room', room ? room.name : '—');
+  setText('deckLabel', `DECK ${povAgent.deck}`);
   const hp = Math.max(0, Math.ceil(povAgent.hp));
-  el('healthBar').style.width = `${ghost ? hp / 63 * 100 : hp / 45 * 100}%`;
-  el('armorBar').style.width = `${ghost ? 0 : player.armor / 50 * 100}%`;
-  el('hpText').textContent = ghost ? `IT ${hp}` : `${Math.ceil(player.armor)} | ${hp}`;
-  el('ammo').textContent = ghost ? '' : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`);
+  setStyle('healthBar', 'width', `${ghost ? hp / 63 * 100 : hp / 45 * 100}%`);
+  setStyle('armorBar', 'width', `${ghost ? 0 : player.armor / 50 * 100}%`);
+  setText('hpText', ghost ? `IT ${hp}` : `${Math.ceil(player.armor)} | ${hp}`);
+  setText('ammo', ghost ? '' : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`));
   // ROOM LIGHT STATE (user: note-taking between playthroughs) — the sim's
   // authoritative fixture + flood states for the compartment you're in
   {
@@ -1754,34 +1794,34 @@ function frame(now) {
         sim.fogAt(ni) ? 'SPORE FOG' : null,
         sim.graph.unpowered[ni] ? 'UNPOWERED' : null,
       ].filter(Boolean);
-      rs.textContent = extras.length ? `${label} · ${extras.join(' · ')}` : label;
-      rs.className = dead ? 'rs-dead' : lm === 2 ? 'rs-harsh' : lm === 1 ? 'rs-soft' : 'rs-steady';
-    } else rs.textContent = '—';
+      setText('roomState', extras.length ? `${label} · ${extras.join(' · ')}` : label);
+      const rc = dead ? 'rs-dead' : lm === 2 ? 'rs-harsh' : lm === 1 ? 'rs-soft' : 'rs-steady';
+      if (rs.className !== rc) rs.className = rc;
+    } else setText('roomState', '—');
   }
   rifleMesh.userData.setAmmoDigits?.(weapon.mag);
   const src = player.dead ? null : player.ammoSource();
-  const hint = el('hint');
   if (src) {
-    hint.textContent = src === 'armory'
-      ? `E — strip mags from the rack (${sim.armoryStock} rifles)` : 'E — take mags off the dead';
-    hint.style.display = 'block';
+    setText('hint', src === 'armory'
+      ? `E — strip mags from the rack (${sim.armoryStock} rifles)` : 'E — take mags off the dead');
+    setStyle('hint', 'display', 'block');
   } else if (player.climb) {
-    hint.textContent = player.climb.toDeck < player.climb.fromDeck ? 'climbing up…' : 'climbing down…';
-    hint.style.display = 'block';
+    setText('hint', player.climb.toDeck < player.climb.fromDeck ? 'climbing up…' : 'climbing down…');
+    setStyle('hint', 'display', 'block');
   } else {
     const trunk = player.dead ? null : world.trunkAt(player.deck, player.x, player.z);
     if (trunk) {
       const up = player.deck === trunk.lowerDeck;
       const kind = trunk.vertical ? 'ladder' : 'stairs';
-      hint.textContent = player.queuedTrunk === trunk
+      setText('hint', player.queuedTrunk === trunk
         ? 'in line for the ladder — you go next'
         : trunk.edge?.type === 'ladder' && sim.vertBusy(trunk.edge, player.agent.id)
           ? `${kind} busy — L to take the next slot`
-          : `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`;
-      hint.style.display = 'block';
-    } else hint.style.display = 'none';
+          : `L — climb ${kind} ${up ? 'up' : 'down'} to deck ${up ? trunk.upperDeck : trunk.lowerDeck}`);
+      setStyle('hint', 'display', 'block');
+    } else setStyle('hint', 'display', 'none');
   }
-  el('pinned').style.display = player.pinned && !player.dead ? 'block' : 'none';
+  setStyle('pinned', 'display', player.pinned && !player.dead ? 'block' : 'none');
   renderLog();
   updateNameplate();
 

@@ -367,17 +367,50 @@ export class Agents3D {
     const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId, true); // rifle carriers
 
     const seen = new Set();
+    this._emergeAt ??= new Map();
+    this._hiddenPrev ??= new Set();
+    const hiddenNow = (this._hiddenNow ??= new Set());
+    hiddenNow.clear();
     for (let i = 0; i < buf.count; i++) {
       const id = buf.id[i];
       seen.add(id);
       const deck = buf.posZ[i]; // sim writes deck into posZ
+      const hidden = (buf.flags[i] & (FLAG.EXPOSED | FLAG.IN_SHAFT)) !== 0;
+      if (hidden) hiddenNow.add(id);
       let rp = this.rpos.get(id);
-      if (!rp || rp.deck !== deck) { rp = { x: buf.posX[i], y: buf.posY[i], deck, hoverY: buf.hoverY[i] || 0 }; this.rpos.set(id, rp); }
-      else {
+      // EMERGE AT A MARKED OPENING (user: combat forms teleported into the
+      // middle of the last-stand hallway). A body that arrives on a deck —
+      // out of a hidden duct/shaft transit, or any cross-deck hop — surfaces
+      // AT the nearest vent grate / shaft hatch / ladder in its room and
+      // rises out of it, instead of popping in at its sim position.
+      const emerged = !hidden && this._hiddenPrev.has(id);
+      if (!rp || rp.deck !== deck || emerged) {
+        let sx = buf.posX[i], sy = buf.posY[i];
+        let snap = emerged;
+        if (!snap && rp && rp.deck !== deck) {
+          // a cross-deck hop with a world-space position JUMP is a ladder or
+          // shaft arrival → snap to a mouth. A continuous crossing (walking
+          // the grand stairwell — same footprint, deck label flips) is not.
+          const [owx, owz] = this.world.simToWorld(rp.x, rp.y, rp.deck);
+          const [nwx, nwz] = this.world.simToWorld(sx, sy, deck);
+          snap = Math.hypot(nwx - owx, nwz - owz) > 3.5;
+        }
+        if (snap && buf.faction[i] !== FACTION.CORPSE) {
+          const m = this.world.mouthNear(buf.nodeId[i], sx, sy);
+          if (m) {
+            sx = m.x; sy = m.y;
+            this._emergeAt.set(id, performance.now());
+          }
+        }
+        rp = { x: sx, y: sy, deck, hoverY: buf.hoverY[i] || 0 };
+        this.rpos.set(id, rp);
+      } else {
         rp.x += (buf.posX[i] - rp.x) * k; rp.y += (buf.posY[i] - rp.y) * k;
         rp.hoverY = (rp.hoverY || 0) + ((buf.hoverY[i] || 0) - (rp.hoverY || 0)) * k;
       }
     }
+    // swap hidden sets (allocation-free)
+    { const t = this._hiddenPrev; this._hiddenPrev = hiddenNow; this._hiddenNow = t; }
     if (this.rpos.size > buf.count * 2) {
       for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
     }
@@ -426,7 +459,7 @@ export class Agents3D {
       // feet on the ground surface — in a stairwell room that follows the
       // mezzanine/ramp/hall, so bodies walk the stairs instead of floating
       // at one deck level (user: navigable stairwell room)
-      const elev = world.groundHeightAt(deck, wx, wz);
+      let elev = world.groundHeightAt(deck, wx, wz);
       const heading = -buf.headingR[i];
 
       if (f === FACTION.CORPSE) {
@@ -525,6 +558,22 @@ export class Agents3D {
       }
       // FLINCH (hit feedback): a freshly-hurt body jerks
       const flinch = (flags & FLAG.FLINCH ? Math.sin(performance.now() * 0.06 + id) * 0.09 - 0.14 : 0) + rise;
+
+      // CRAWL-OUT (user: deck arrivals must surface at the opening): a body
+      // snapped to a grate/hatch mouth starts sunk into the deck and climbs
+      // out over ~0.7s — the floor slab hides the sunk part, so it reads as
+      // hauling itself out of the ductwork.
+      {
+        const em = this._emergeAt.get(id);
+        if (em !== undefined) {
+          const p = (performance.now() - em) / 700;
+          if (p >= 1) this._emergeAt.delete(id);
+          else {
+            const es = p * p * (3 - 2 * p);
+            elev -= (1 - es) * 1.35;
+          }
+        }
+      }
 
       switch (f) {
         case FACTION.CIVILIAN: {

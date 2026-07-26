@@ -66,11 +66,31 @@ export class World {
     this.doorEvents = []; // door open starts, drained by the game for audio
     this.props = [];  // cover geometry rects (sim coords) — block walking
     this.wallMeshes = []; // solid vertical geometry — raycast target for "real physics" shots (user note)
+    // duct/shaft/ladder openings per room, sim coords — the agent renderer
+    // snaps deck-transit arrivals onto these so bodies surface AT a marked
+    // opening instead of teleporting into the middle of a hallway (user)
+    this.mouths = new Map();
     this._bandC = graph.deckBands.map((b) => (b.y0 + b.y1) / 2);
     this._build();
   }
 
   bandCenter(deck) { return this._bandC[deck - 1]; }
+
+  _addMouth(nodeIdx, sx, sy) {
+    (this.mouths.get(nodeIdx) ?? this.mouths.set(nodeIdx, []).get(nodeIdx)).push({ x: sx, y: sy });
+  }
+
+  // nearest registered opening in a room to a sim-space point (null if none)
+  mouthNear(nodeIdx, sx, sy) {
+    const list = this.mouths.get(nodeIdx);
+    if (!list || !list.length) return null;
+    let best = list[0], bd = Infinity;
+    for (const m of list) {
+      const d = (m.x - sx) ** 2 + (m.y - sy) ** 2;
+      if (d < bd) { bd = d; best = m; }
+    }
+    return best;
+  }
   simToWorld(sx, sy, deck) { return [sx, sy - this.bandCenter(deck)]; }
   worldToSim(wx, wz, deck) { return [wx, wz + this.bandCenter(deck)]; }
 
@@ -739,6 +759,13 @@ export class World {
           lowerNode: lower.idx, upperNode: upper.idx,
           lowElev, highElev,
         });
+        // both ends are emerge points for cross-deck arrivals
+        {
+          const [lsx, lsy] = this.worldToSim(x, z, lower.deck);
+          this._addMouth(lower.idx, lsx, lsy);
+          const [usx, usy] = this.worldToSim(x, z, upper.deck);
+          this._addMouth(upper.idx, usx, usy);
+        }
         // hatch collars top and bottom + ladder rungs up one side
         for (const [elev, ny] of [[lowElev, lowElev + 0.02], [highElev, highElev + 0.02]]) {
           const collar = new THREE.Mesh(new THREE.BoxGeometry(HATCH + 0.5, 0.08, HATCH + 0.5), matCollar(lift));
@@ -786,6 +813,8 @@ export class World {
         };
         this.trunks.push(rec);
         for (const p of [pl, pu]) {
+          const [msx, msy] = this.worldToSim(p.x, p.z, p.deck);
+          this._addMouth(p.node, msx, msy);
           const well = new THREE.Mesh(
             new THREE.CylinderGeometry(0.95, 0.95, CLEAR_H, 14, 1, true),
             new THREE.MeshStandardMaterial({
@@ -1189,6 +1218,7 @@ export class World {
         const px = Math.max(n.x - n.w / 2 + 1.1, Math.min(n.x + n.w / 2 - 1.1, n.x + (dx / L) * (n.w / 2 - 1.1)));
         const py = Math.max(n.y - n.d / 2 + 1.1, Math.min(n.y + n.d / 2 - 1.1, n.y + (dy / L) * (n.d / 2 - 1.1)));
         const [wx, wz] = this.simToWorld(px, py, n.deck);
+        this._addMouth(n.idx, px, py);
         const elev = elevOf(n.deck);
         const rim = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.035, 0.98), rimMat);
         rim.position.set(wx, elev + 0.015, wz);
@@ -1230,6 +1260,16 @@ export class World {
       dooredPairs.add(`${Math.min(e.a, e.b)}:${Math.max(e.a, e.b)}`);
       const [dx, dz] = this.simToWorld(e.door.x, e.door.y, a.deck);
       doorPts.push({ deck: a.deck, x: dx, z: dz });
+    }
+    // every vent opening is an emerge point — including ones that parallel a
+    // doorway (the door IS the opening there; no grate mesh, but a crawler
+    // still surfaces at that spot)
+    for (const v of g.vents) {
+      const a0 = g.node(v.a), b0 = g.node(v.b);
+      for (const [n, pt] of [[a0, v.doorA], [b0, v.doorB]]) {
+        const d = pt ?? v.door;
+        if (d) this._addMouth(n.idx, d.x, d.y);
+      }
     }
     for (const v of g.vents) {
       if (dooredPairs.has(`${Math.min(v.a, v.b)}:${Math.max(v.a, v.b)}`)) continue; // the door IS the opening

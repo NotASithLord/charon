@@ -126,6 +126,7 @@ export function resolveCombat(sim, dt) {
       if (flamer && targets.length) {
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
+        sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
         let flamePool = P.flamethrower.dps * dt;
         for (const t of targets) {
           if (flamePool <= 0) break;
