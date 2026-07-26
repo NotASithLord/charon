@@ -25,6 +25,8 @@ export class LightPool {
     });
     this.active = n;
     this.virtual = [];
+    this._pool = []; // recycled virtual-light records (perf: zero per-frame garbage)
+    this._used = 0;
   }
 
   // shrink/grow the live pool (quality tiers). Removing a light from the
@@ -42,12 +44,18 @@ export class LightPool {
   }
 
   // start a frame: forget last frame's declarations
-  frame() { this.virtual.length = 0; }
+  frame() { this.virtual.length = 0; this._used = 0; }
 
-  // declare a virtual light for this frame
+  // declare a virtual light for this frame — records recycle across frames
   add(x, y, z, color, intensity, distance, decay = 1.8) {
     if (intensity <= 0.02) return;
-    this.virtual.push({ x, y, z, color, intensity, distance, decay, score: 0 });
+    const v = this._pool[this._used] ?? (this._pool[this._used] = {
+      x: 0, y: 0, z: 0, color: 0, intensity: 0, distance: 0, decay: 0, score: 0,
+    });
+    this._used++;
+    v.x = x; v.y = y; v.z = z; v.color = color;
+    v.intensity = intensity; v.distance = distance; v.decay = decay; v.score = 0;
+    this.virtual.push(v);
   }
 
   // assign the pool: brightest-and-nearest win

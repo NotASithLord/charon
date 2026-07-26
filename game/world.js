@@ -1578,9 +1578,17 @@ export class World {
     }
   }
 
-  updateDoors(dt, movers) {
+  updateDoors(dt, movers, nMovers = movers.length) {
     const r2 = DOORS.openRadius * DOORS.openRadius;
     let anyStamp = false;
+    // bucket movers by deck once (perf pass 2): the per-door scan only
+    // walks its own deck's movers instead of all ~200 every time
+    const byDeck = (this._moversByDeck ??= [[], [], [], [], [], []]);
+    for (const b of byDeck) b.length = 0;
+    for (let i = 0; i < nMovers; i++) {
+      const m = movers[i];
+      (byDeck[m.deck] ?? (byDeck[m.deck] = [])).push(m);
+    }
     const flick = Math.sin(performance.now() * 0.013) * Math.sin(performance.now() * 0.0037);
     for (const d of this.doors) {
       // a door whose lock RELEASED mid-game (the armory seal) flips its
@@ -1599,8 +1607,9 @@ export class World {
       }
       let want = 0;
       if (!d.edge.locked) {
-        for (const m of movers) {
-          if (m.deck !== d.deck) continue;
+        const list = byDeck[d.deck] ?? [];
+        for (let i = 0; i < list.length; i++) {
+          const m = list[i];
           const ddx = m.x - d.x, ddz = m.z - d.z;
           if (ddx * ddx + ddz * ddz < r2) { want = 1; break; }
         }

@@ -1635,6 +1635,7 @@ function playerObstacles() {
 let _ftEMA = 16, _resAt = 0, frameNo = 0, _slowEvals = 0, _fastEvals = 0, _rungMovedAt = 0; // ladder governor state
 let acc = 0;
 let physAcc = 0;
+let _trackerAt = 0, _observeAt = 0; // subsystem throttle clocks (perf pass 2)
 // tick scheduler: a MessageChannel macrotask runs due sim ticks OUTSIDE the
 // rAF callback (see the accumulator in frame()). At most 3 ticks per task —
 // a tab-restore backlog drains over a few tasks instead of freezing one.
@@ -1710,8 +1711,11 @@ function frame(now) {
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
   soundSweep(now);
-  drawTracker(now);
-  marineMap.observe();
+  // subsystem throttles (perf pass 2): a 25m sweep display reads perfectly
+  // at 20Hz, and the ops board's intel accumulates fine at 6Hz — neither
+  // needs to burn canvas/agent-scan time every frame
+  if (now - _trackerAt > 50) { _trackerAt = now; drawTracker(now); }
+  if (now - _observeAt > 160) { _observeAt = now; marineMap.observe(); }
   if (mapOpen) marineMap.draw(player.agent, player.dead);
   audio.setListener(player.x, player.z, player.yaw);
   audio.alarm(sim.lastStand && !ended);
@@ -1811,17 +1815,22 @@ function frame(now) {
   }
   shake = Math.max(0, shake - dtReal * 3);
 
-  // sliding doors open for ANY movement near them (user rule)
-  doorMovers.length = 0;
-  doorMovers.push({ deck: player.deck, x: player.x, z: player.z });
+  // sliding doors open for ANY movement near them (user rule) — mover
+  // records come from a reused pool (perf pass 2: ~200 object literals per
+  // frame was measurable GC churn)
+  let nMovers = 0;
+  const takeMover = () => doorMovers[nMovers] ?? (doorMovers[nMovers] = { deck: 0, x: 0, z: 0 });
+  { const m = takeMover(); m.deck = player.deck; m.x = player.x; m.z = player.z; nMovers++; }
   const buf = sim.buffer;
   for (let i = 0; i < buf.count; i++) {
     if (buf.faction[i] === 6) continue; // the dead don't trip doors
     const deck = buf.posZ[i];
     const [wx, wz] = world.simToWorld(buf.posX[i], buf.posY[i], deck);
-    doorMovers.push({ deck, x: wx, z: wz });
+    const m = takeMover();
+    m.deck = deck; m.x = wx; m.z = wz;
+    nMovers++;
   }
-  world.updateDoors(dtReal, doorMovers);
+  world.updateDoors(dtReal, doorMovers, nMovers);
 
   // camera: your eyes — or the eyes of what you became
   const ghost = player.dead ? ghostAlive() : null;

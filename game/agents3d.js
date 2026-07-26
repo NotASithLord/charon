@@ -73,6 +73,21 @@ function carrierGeometry() {
   return merged;
 }
 
+// commit an instanced mesh's frame: draw `count` instances and upload ONLY
+// that range of the matrix buffer (falls back to a full upload on builds
+// without updateRanges)
+function commitInstanced(mesh, count) {
+  mesh.count = count;
+  const im = mesh.instanceMatrix;
+  if (im.clearUpdateRanges) {
+    im.clearUpdateRanges();
+    if (count > 0) im.addUpdateRange(0, count * 16);
+    im.needsUpdate = count > 0;
+  } else {
+    im.needsUpdate = true;
+  }
+}
+
 function makeInstanced(scene, geo, color, emissive = 0x000000, emissiveIntensity = 0.4) {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.15, emissive, emissiveIntensity });
   const mesh = new THREE.InstancedMesh(geo, mat, CAP);
@@ -763,19 +778,22 @@ export class Agents3D {
     }
     this.floodTracers.geometry.setDrawRange(0, fseg * 2);
     fpos.needsUpdate = true;
-    this.floodFlash.count = counts.floodFlash;
-    this.floodFlash.instanceMatrix.needsUpdate = true;
+    commitInstanced(this.floodFlash, counts.floodFlash);
 
+    // PARTIAL UPLOADS (perf pass 2): ~35 instanced meshes used to re-upload
+    // their FULL 512-slot matrix buffers every frame (~1MB/frame of copy
+    // whether 3 or 300 instances were live). Only the used range goes to
+    // the GPU now; slots past `count` are never drawn, so they never need
+    // uploading.
     for (const [set, c] of [[this.civSet, counts.civ], [this.armedSet, counts.armed],
     [this.marineSet, counts.marine], [this.odstSet, counts.odst], [this.infectionSet, counts.infection],
     [this.combatCivSet, counts.combatCiv], [this.combatOdstSet, counts.combatOdst]]) {
-      for (const mesh of set) { mesh.count = c; mesh.instanceMatrix.needsUpdate = true; }
+      for (const mesh of set) commitInstanced(mesh, c);
     }
     for (const [mesh, c] of [[this.carrier, counts.carrier],
     [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash],
     [this.beams, counts.beam]]) {
-      mesh.count = c;
-      mesh.instanceMatrix.needsUpdate = true;
+      commitInstanced(mesh, c);
     }
   }
 
