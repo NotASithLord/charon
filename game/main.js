@@ -538,9 +538,8 @@ const overlay = el('overlay');
 // ATMOSPHERE FIRST (user): the briefing opens on the ship's CURRENT state —
 // what you are about to step into — then backfills the lore as a mission log.
 const INTRO_BODY = [
-  'UNSC FLEETCOM — PRIORITY TRAFFIC // EYES ONLY',
-  'FROM: CENTCOM SOL / MARS DEFENSE COORDINATION',
-  'TO:   FFG-201 UNSC SATURN DEVOURING — MARS HIGH ANCHOR',
+  'UNSC SATURN DEVOURING — INTERNAL STATUS LOG // AUTO-GENERATED',
+  'SHIP: FFG-201 UNSC SATURN DEVOURING — MARS HIGH ANCHOR',
   'DATE: OCTOBER 2552 // LOCAL 0347',
   '',
   'STATUS:',
