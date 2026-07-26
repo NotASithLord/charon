@@ -141,6 +141,11 @@ torch.shadow.camera.near = 0.3;
 torch.shadow.camera.far = 32;
 torch.shadow.bias = -0.002;
 torch.shadow.radius = 4; // soft edges on everything the beam throws
+// NEVER pitch black (user: torch shadows of lying bodies read as flat black
+// "shader glitch" splats — a corpse under the beam at a grazing angle throws
+// a long razor umbra with zero fill). Part-lit shadows keep the depth cue
+// without the cardboard-cutout artifact.
+torch.shadow.intensity = 0.62;
 
 // --- boot: random ship every run unless a seed is pinned in the URL
 // (?seed=... for a reproducible one), starting flood kept light (20
@@ -347,7 +352,13 @@ const governor = new QualityGovernor({
     if (R.shadows) {
       if (torch.shadow.mapSize.x !== R.shadowMap) {
         torch.shadow.mapSize.set(R.shadowMap, R.shadowMap);
-        torch.shadow.map?.dispose();
+        // NO dispose (user's Firefox died with "Texture with
+        // 'ShadowDepthTexture' label has been destroyed"): rung changes are
+        // frequent now, and destroying the depth texture while an in-flight
+        // pass still references it kills the device on stricter validators.
+        // Nulling the map makes three allocate the new size lazily; the old
+        // target stays alive until nothing references it — a bounded, tiny
+        // leak (three sizes ever) instead of a device loss.
         torch.shadow.map = null;
       }
       torch.shadow.needsUpdate = true;
@@ -1699,15 +1710,28 @@ function soundSweep(now) {
 // 60Hz was measurable GC churn on the physics path)
 const _obstacleR = { 3: 0.32, 4: 0.48, 5: 0.75 };
 const _obstacleRecs = [];
+const _doorsOnDeck = {};
 let _obstacleN = 0;
 let _obstacleKey = -1;
 function playerObstacles() {
   const cy = elevOf(player.deck) + 0.9;
+  // doors on the player's deck — an NPC HOLDING in a door throat (squads
+  // pack up at doors before pushing) must not wall the player out of the
+  // room (user: "marines stop at a door and block me, just stuck"). You
+  // shoulder through people in a doorway; everywhere else they still block.
+  const deckDoors = (_doorsOnDeck[player.deck] ??= world.doors.filter((d) => d.deck === player.deck));
   let n = 0;
   for (const a of sim.agents) {
     if (a.dead || a.isPlayer || a.deck !== player.deck) continue;
     if (a.faction === 6 || a.downed || a.hp <= 0) continue;
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    let inThroat = false;
+    for (let di = 0; di < deckDoors.length; di++) {
+      const d = deckDoors[di];
+      const ddx = wx - d.x, ddz = wz - d.z;
+      if (ddx * ddx + ddz * ddz < 1.69) { inThroat = true; break; } // 1.3m of a door line
+    }
+    if (inThroat) continue;
     const r = _obstacleRecs[n] ?? (_obstacleRecs[n] = { id: 0, x: 0, y: 0, z: 0, radius: 0.4, half: 0.5 });
     r.id = a.id; r.x = wx; r.y = cy; r.z = wz; r.radius = _obstacleR[a.faction] ?? 0.4;
     n++;

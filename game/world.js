@@ -76,8 +76,12 @@ export class World {
 
   bandCenter(deck) { return this._bandC[deck - 1]; }
 
-  _addMouth(nodeIdx, sx, sy) {
-    (this.mouths.get(nodeIdx) ?? this.mouths.set(nodeIdx, []).get(nodeIdx)).push({ x: sx, y: sy });
+  // kind 'hole' = a real opening in the structure (hatch, grate) — bodies
+  // arriving there CLIMB OUT of it; kind 'pad' = a stairwell-kiosk doorway
+  // at floor level — bodies arriving there step out, they never rise through
+  // the deck (user: "marines spring out of the ground")
+  _addMouth(nodeIdx, sx, sy, kind = 'hole') {
+    (this.mouths.get(nodeIdx) ?? this.mouths.set(nodeIdx, []).get(nodeIdx)).push({ x: sx, y: sy, kind });
   }
 
   // nearest registered opening in a room to a sim-space point (null if none)
@@ -861,7 +865,7 @@ export class World {
         this.trunks.push(rec);
         for (const p of [pl, pu]) {
           const [msx, msy] = this.worldToSim(p.x, p.z, p.deck);
-          this._addMouth(p.node, msx, msy);
+          this._addMouth(p.node, msx, msy, 'pad'); // kiosk doorway — no hole to rise from
           // STAIR KIOSK (user: the glowing cylinder was an egregious low-res
           // marker): a real steel enclosure with an open dark doorway facing
           // the room — reads as the head of an enclosed stairwell, built from

@@ -354,9 +354,19 @@ export class Agents3D {
     if (this._curD2 < CAST_NEAR2) this._castNear.add(set);
     for (const mesh of set) {
       const pivot = mesh.userData.pivot;
-      const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(mesh.userData.part, clip, animT, id, hold) : 0;
+      const part = mesh.userData.part;
+      const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(part, clip, animT, id, hold) : 0;
       if (!ang) { mesh.setMatrixAt(i, this._m); continue; }
-      this._mRot.makeRotationZ(ang);
+      // TWO-AXIS HOLD (user: the hold still read as splayed "awk stuff" from
+      // behind): the H2 arms are modeled with an outward A-pose slope, so a
+      // pure forward pitch keeps the elbows flared. Rifle carriers also
+      // ADDUCT — the X-rotation pulls the hands in toward the weapon's
+      // centerline, closing the silhouette.
+      if (hold && clip !== CLIP.DEATH && (part === 'armL' || part === 'armR')) {
+        this._eHold ??= new THREE.Euler();
+        this._eHold.set(part === 'armR' ? 0.38 : -0.38, 0, ang);
+        this._mRot.makeRotationFromEuler(this._eHold);
+      } else this._mRot.makeRotationZ(ang);
       this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
         .multiply(this._mRot)
         .multiply(this._mOut.makeTranslation(-pivot[0], -pivot[1], -pivot[2]));
@@ -429,7 +439,10 @@ export class Agents3D {
           const m = this.world.mouthNear(buf.nodeId[i], sx, sy);
           if (m) {
             sx = m.x; sy = m.y;
-            this._emergeAt.set(id, performance.now());
+            // only a real OPENING gets the climb-out rise — a stairwell-kiosk
+            // pad arrival steps out at floor level (user: marines sprang out
+            // of solid deck at the stair pads)
+            if (m.kind !== 'pad') this._emergeAt.set(id, performance.now());
           }
         }
         rp = { x: sx, y: sy, deck, hoverY: buf.hoverY[i] || 0 };
