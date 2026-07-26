@@ -318,19 +318,40 @@ function updateMarineTick(sim, a, dt) {
         a.path = [];
         if (sim.setPathTo(a, lead.node, ['std'], humanPass)) a.state = STATE.MOVE;
       } else if (lead.node === a.node && !a.move && sim.floodStrengthAt(a.node) === 0) {
-        // SPREAD FORMATION (user: the fireteam should spread out through
-        // whatever room you're in, capped ~7m around you — the old tight fan
-        // behind read as a conga line). Golden-angle ring slots around the
-        // player at staggered radii, clamped inside the room so nobody holds
-        // station in a wall; the same catch-up speeds close the gap when the
-        // player moves.
-        const mi = Math.max(0, squad.members.indexOf(a.id));
-        const ang = lead.heading + Math.PI * 0.5 + mi * 2.399963; // golden spacing
-        const off = Math.min(7, 3.2 + (mi % 3) * 1.4);
+        // COVERAGE POSTS (user: "they should take up standing positions per
+        // room to cover it, not respond so granularly to you that they are
+        // constantly running around even with little movement").
+        //
+        // The old slot was recomputed every tick from the player's LIVE
+        // position AND heading, so a single step — or just turning on the
+        // spot — slid the whole ring and sent four marines jogging. A post is
+        // claimed ONCE and then held. It is only re-claimed when the player
+        // genuinely changes where they are in the room: crossing into a
+        // different SECTOR of it (so a hangar or cargo hold gets different
+        // posts per half, while a normal compartment is one sector and never
+        // re-posts at all), or drifting past the leash.
+        const E = sim.P.escort;
         const room = sim.graph.node(lead.node);
-        let tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
-        tx = Math.max(room.x - room.w / 2 + 0.8, Math.min(room.x + room.w / 2 - 0.8, tx));
-        ty = Math.max(room.y - room.d / 2 + 0.8, Math.min(room.y + room.d / 2 - 0.8, ty));
+        const sxi = Math.floor((lead.x - (room.x - room.w / 2)) / E.sectorM);
+        const syi = Math.floor((lead.y - (room.y - room.d / 2)) / E.sectorM);
+        const key = `${lead.node}|${sxi}|${syi}`;
+        const stale = a.postKey !== key || a.postX === undefined
+          || Math.hypot(a.postX - lead.x, a.postY - lead.y) > E.repostLeashM;
+        if (stale) {
+          a.postKey = key;
+          const mi = Math.max(0, squad.members.indexOf(a.id));
+          // golden spacing, anchored on the room rather than on which way the
+          // player happens to be looking — the arc each marine covers stays
+          // put while you move around inside the sector
+          const ang = mi * 2.399963 + lead.node * 0.7;
+          const off = Math.min(E.maxRadiusM, 3.2 + (mi % 3) * 1.4);
+          a.postX = Math.max(room.x - room.w / 2 + 0.8,
+            Math.min(room.x + room.w / 2 - 0.8, lead.x + Math.cos(ang) * off));
+          a.postY = Math.max(room.y - room.d / 2 + 0.8,
+            Math.min(room.y + room.d / 2 - 0.8, lead.y + Math.sin(ang) * off));
+          a.postFace = ang; // face OUT from the anchor: each man covers his arc
+        }
+        const tx = a.postX, ty = a.postY;
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
         a.followSpeed = 0; // drives the render clip (walk/run) — see _clipFor
         if (d > 0.5) {
@@ -341,7 +362,8 @@ function updateMarineTick(sim, a, dt) {
           sim._clampToRoom(a, sim.graph.node(a.node));
           a.followSpeed = step / dt;
         }
-        a.heading = d > 0.8 ? Math.atan2(dy, dx) : lead.heading;
+        // walking in, look where you're going; on station, cover your arc
+        a.heading = d > 0.8 ? Math.atan2(dy, dx) : a.postFace;
         a.animTime += dt;
         a.closeFollow = true; // _advanceMovement won't park-drift it off station
       }

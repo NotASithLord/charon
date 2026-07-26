@@ -153,6 +153,14 @@ export const PARAMS = {
     searchMinPool: 45,         // won't spend forms searching below this pool
     openingSweepMargin: 12,    // sec of safety margin vs estimated sweep ETA
   },
+  // FIRETEAM COVERAGE POSTS (user: escorts should hold standing positions
+  // that cover the room instead of re-shuffling every time you take a step).
+  // A post is claimed once and held; it is only re-claimed when the player
+  // crosses into a different SECTOR of the room, or drifts past the leash.
+  // sectorM is deliberately larger than a normal compartment, so ordinary
+  // rooms are a single sector and never re-post — only the big spaces
+  // (hangars, cargo holds) get per-half posts.
+  escort: { sectorM: 16, maxRadiusM: 7, repostLeashM: 9 },
   // Combat model (§7 support numbers, all PLACEHOLDER)
   combat: {
     // Weighted (§7 support) so a combat form is a serious threat: 1 marine

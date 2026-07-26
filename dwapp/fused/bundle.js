@@ -264,6 +264,14 @@ var PARAMS = {
     openingSweepMargin: 12
     // sec of safety margin vs estimated sweep ETA
   },
+  // FIRETEAM COVERAGE POSTS (user: escorts should hold standing positions
+  // that cover the room instead of re-shuffling every time you take a step).
+  // A post is claimed once and held; it is only re-claimed when the player
+  // crosses into a different SECTOR of the room, or drifts past the leash.
+  // sectorM is deliberately larger than a normal compartment, so ordinary
+  // rooms are a single sector and never re-post — only the big spaces
+  // (hangars, cargo holds) get per-half posts.
+  escort: { sectorM: 16, maxRadiusM: 7, repostLeashM: 9 },
   // Combat model (§7 support numbers, all PLACEHOLDER)
   combat: {
     // Weighted (§7 support) so a combat form is a serious threat: 1 marine
@@ -2010,13 +2018,28 @@ function updateMarineTick(sim2, a, dt) {
         a.path = [];
         if (sim2.setPathTo(a, lead.node, ["std"], humanPass)) a.state = STATE.MOVE;
       } else if (lead.node === a.node && !a.move && sim2.floodStrengthAt(a.node) === 0) {
-        const mi = Math.max(0, squad.members.indexOf(a.id));
-        const ang = lead.heading + Math.PI * 0.5 + mi * 2.399963;
-        const off = Math.min(7, 3.2 + mi % 3 * 1.4);
+        const E = sim2.P.escort;
         const room = sim2.graph.node(lead.node);
-        let tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
-        tx = Math.max(room.x - room.w / 2 + 0.8, Math.min(room.x + room.w / 2 - 0.8, tx));
-        ty = Math.max(room.y - room.d / 2 + 0.8, Math.min(room.y + room.d / 2 - 0.8, ty));
+        const sxi = Math.floor((lead.x - (room.x - room.w / 2)) / E.sectorM);
+        const syi = Math.floor((lead.y - (room.y - room.d / 2)) / E.sectorM);
+        const key = `${lead.node}|${sxi}|${syi}`;
+        const stale = a.postKey !== key || a.postX === void 0 || Math.hypot(a.postX - lead.x, a.postY - lead.y) > E.repostLeashM;
+        if (stale) {
+          a.postKey = key;
+          const mi = Math.max(0, squad.members.indexOf(a.id));
+          const ang = mi * 2.399963 + lead.node * 0.7;
+          const off = Math.min(E.maxRadiusM, 3.2 + mi % 3 * 1.4);
+          a.postX = Math.max(
+            room.x - room.w / 2 + 0.8,
+            Math.min(room.x + room.w / 2 - 0.8, lead.x + Math.cos(ang) * off)
+          );
+          a.postY = Math.max(
+            room.y - room.d / 2 + 0.8,
+            Math.min(room.y + room.d / 2 - 0.8, lead.y + Math.sin(ang) * off)
+          );
+          a.postFace = ang;
+        }
+        const tx = a.postX, ty = a.postY;
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
         a.followSpeed = 0;
         if (d > 0.5) {
@@ -2027,7 +2050,7 @@ function updateMarineTick(sim2, a, dt) {
           sim2._clampToRoom(a, sim2.graph.node(a.node));
           a.followSpeed = step / dt;
         }
-        a.heading = d > 0.8 ? Math.atan2(dy, dx) : lead.heading;
+        a.heading = d > 0.8 ? Math.atan2(dy, dx) : a.postFace;
         a.animTime += dt;
         a.closeFollow = true;
       }
