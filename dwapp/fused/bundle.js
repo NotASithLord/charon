@@ -2328,8 +2328,9 @@ var Hive = class {
   updateBeliefs() {
     const sim2 = this.sim, dt = sim2.P.sim.strategicTickSec;
     const lambda = sim2.P.belief.decayRatePerSec;
-    for (const b of this.beliefs.values()) {
+    for (const [id, b] of this.beliefs) {
       if (!b.static) b.conf *= Math.exp(-lambda * dt);
+      if (b.conf < 0.05) this.beliefs.delete(id);
     }
     const seen = /* @__PURE__ */ new Set();
     const observed = /* @__PURE__ */ new Map();
@@ -2523,7 +2524,9 @@ var Hive = class {
     this.lastScarcity = S;
     const mass = I + C * 2 + K * 2;
     const wasAllIn = this.allIn;
-    this.allIn = this.beliefs.size > 0 && mass >= 50 && mass >= this.beliefs.size * 3;
+    let believedAlive = 0;
+    for (const b of this.beliefs.values()) if (b.static || b.conf > 0.15) believedAlive++;
+    this.allIn = believedAlive > 0 && mass >= 50 && mass >= believedAlive * 3;
     if (this.allIn && !wasAllIn) sim2.log("hive", "the hive rises as one — every form converges for the end");
     const wasAggro = this.posture === "AGGRESSIVE";
     this.posture = K >= 2 && S <= 1.05 || this.allIn ? "AGGRESSIVE" : "EVASIVE";
@@ -2615,6 +2618,7 @@ var Hive = class {
   // squads cluster onto one deck, every other deck gets darker. Returns a
   // 0..2 bonus for how safe a deck is to operate on. Cached per tick.
   radioDark(deck) {
+    if (this.allIn) return 0;
     if (this._darkTick !== this.sim.tickCount) {
       this._darkTick = this.sim.tickCount;
       const byDeck = {};
@@ -2836,7 +2840,7 @@ var Hive = class {
       const raider = this._raiderId !== void 0 ? sim2.byId.get(this._raiderId) : null;
       const raiderLive = raider && !raider.dead && !raider.downed && raider.hp > 0;
       if (!raiderLive) this._raiderId = void 0;
-      if ((this.posture === "EVASIVE" || K + seeding >= 3) && !raiderLive && sim2.t >= (this._raidCooldownUntil ?? 0)) {
+      if (!this.allIn && (this.posture === "EVASIVE" || K + seeding >= 3) && !raiderLive && sim2.t >= (this._raidCooldownUntil ?? 0)) {
         let bestT = -1, bestS = 0.5;
         for (const n of g.nodes) {
           if (!n.roles.includes("soft") && !n.roles.includes("medbay")) continue;
@@ -2869,7 +2873,7 @@ var Hive = class {
       }
     }
     for (const f of combat) {
-      if (!rampaging.has(f.node)) continue;
+      if (!this.allIn && !rampaging.has(f.node)) continue;
       if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT || f.task.kind === TASK.TRANSFORM)) continue;
       if (f.task?.seed) continue;
       const target = this.nearestBelievedHuman(f.node);
@@ -2907,7 +2911,7 @@ var Hive = class {
       this._musterBan ??= /* @__PURE__ */ new Map();
       for (const [target, forms] of staged) {
         const defense = this.believedHumanStr[target] + this.believedHardness[target];
-        const needed = this.allIn ? 1 : Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
+        const needed = this.allIn ? Math.min(P.swarm.maxMusterForms, Math.max(4, Math.ceil(combat.length * 0.6))) : Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
         const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
         if (defense <= 0.8 || arrived >= needed) {
           this._musterStart.delete(target);
@@ -3897,7 +3901,7 @@ function resolveCombat(sim2, dt) {
     const combatForms = group.filter((a) => a.faction === FACTION.COMBAT && !a.downed && a.hp > 0 && !a.dead);
     const infForms = group.filter((a) => a.faction === FACTION.INFECTION && a.hp > 0 && !a.dead);
     const carriers = group.filter((a) => a.faction === FACTION.CARRIER && a.hp > 0 && !a.dead);
-    const downedForms = group.filter((a) => a.faction === FACTION.COMBAT && a.downed && !a.dead && a.damage < 100);
+    const downedForms = group.filter((a) => a.faction === FACTION.COMBAT && a.downed && !a.dead && a.damage < 95);
     const anyFlood = combatForms.length + infForms.length + carriers.length > 0;
     if (!shooters.length && !anyFlood) continue;
     if (shooters.length && anyFlood) {
@@ -3982,8 +3986,11 @@ function resolveCombat(sim2, dt) {
       const marines = shooters.filter((s) => s.faction === FACTION.MARINE);
       if (marines.length) {
         const t = downedForms.sort((a, b) => a.id - b.id)[0];
-        t.damage = Math.min(100, t.damage + 40 * dt * marines.length);
-        if (t.damage >= 100) sim2.log("combat", `marines make sure of a downed form in ${sim2.graph.node(node).name}`);
+        t.damage = Math.min(95, t.damage + 40 * dt * marines.length);
+        if (t.damage >= 95 && !t.madeSure) {
+          t.madeSure = true;
+          sim2.log("combat", `marines make sure of a downed form in ${sim2.graph.node(node).name}`);
+        }
       }
     }
     if (combatForms.length) {
@@ -4071,7 +4078,7 @@ function hurtFloodForm(sim2, a, dmg, isFlame, by = -1) {
   }
   a.hp -= dmg;
   if (isFlame) a.damage = Math.min(100, a.damage + dmg * 2);
-  else if (a.downed) a.damage = Math.min(100, a.damage + dmg);
+  else if (a.downed) a.damage = Math.min(95, a.damage + dmg);
   if (a.hp <= 0 && !a.downed) {
     if (isFlame) a.damage = 100;
     if (a.faction === FACTION.CARRIER) {

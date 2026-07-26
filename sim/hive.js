@@ -111,8 +111,14 @@ export class Hive {
   updateBeliefs() {
     const sim = this.sim, dt = sim.P.sim.strategicTickSec;
     const lambda = sim.P.belief.decayRatePerSec;
-    for (const b of this.beliefs.values()) {
+    for (const [id, b] of this.beliefs) {
       if (!b.static) b.conf *= Math.exp(-lambda * dt);
+      // a belief that has decayed to nothing is a ghost — drop it. (Ghost
+      // entries never expired, so the ALL-IN trigger compared the hive's
+      // mass against every human it had EVER seen — with a hundred stale
+      // records the endgame convergence could never fire: user report of
+      // the last stand being trickled instead of rushed.)
+      if (b.conf < 0.05) this.beliefs.delete(id);
     }
     // any form with LOS resets the record
     const seen = new Set();
@@ -340,9 +346,13 @@ export class Hive {
     // 150-form hive besieged 6 rifles forever (probe timeouts).
     const mass = I + C * 2 + K * 2;
     const wasAllIn = this.allIn;
-    // mass-ratio trigger (a count cap never fired — hiding civilians kept
-    // the believed-survivor count high while 150 forms besieged 6 rifles)
-    this.allIn = this.beliefs.size > 0 && mass >= 50 && mass >= this.beliefs.size * 3;
+    // mass-ratio trigger against CONFIDENT beliefs only (a raw count kept
+    // every human ever seen; a count cap never fired — hiding civilians
+    // kept the believed-survivor count high while 150 forms besieged 6
+    // rifles)
+    let believedAlive = 0;
+    for (const b of this.beliefs.values()) if (b.static || b.conf > 0.15) believedAlive++;
+    this.allIn = believedAlive > 0 && mass >= 50 && mass >= believedAlive * 3;
     if (this.allIn && !wasAllIn) sim.log('hive', 'the hive rises as one — every form converges for the end');
 
     // POSTURE (user: evasive hit-and-run early, aggressive once strong). Early —
@@ -477,6 +487,10 @@ export class Hive {
   // squads cluster onto one deck, every other deck gets darker. Returns a
   // 0..2 bonus for how safe a deck is to operate on. Cached per tick.
   radioDark(deck) {
+    // the radio-dark growth incentive STANDS DOWN at the end (user report:
+    // during the last stand every other deck reads dark, and the bonus was
+    // actively pulling the hive AWAY from the line it should be storming)
+    if (this.allIn) return 0;
     if (this._darkTick !== this.sim.tickCount) {
       this._darkTick = this.sim.tickCount;
       const byDeck = {};
@@ -768,7 +782,7 @@ export class Hive {
       const raider = this._raiderId !== undefined ? sim.byId.get(this._raiderId) : null;
       const raiderLive = raider && !raider.dead && !raider.downed && raider.hp > 0;
       if (!raiderLive) this._raiderId = undefined;
-      if ((this.posture === 'EVASIVE' || K + seeding >= 3) && !raiderLive && sim.t >= (this._raidCooldownUntil ?? 0)) {
+      if (!this.allIn && (this.posture === 'EVASIVE' || K + seeding >= 3) && !raiderLive && sim.t >= (this._raidCooldownUntil ?? 0)) {
         let bestT = -1, bestS = 0.5;
         for (const n of g.nodes) {
           if (!n.roles.includes('soft') && !n.roles.includes('medbay')) continue;
@@ -812,7 +826,11 @@ export class Hive {
     //    the flood never assaults a position it doesn't outnumber ~2:1 — it
     //    stages nearby and gathers mass first, then everyone goes in.
     for (const f of combat) {
-      if (!rampaging.has(f.node)) continue;
+      // ALL-IN drafts GLOBALLY (user report: forms with free reign of the
+      // ship never joined the endgame push): the rampage-pocket gate only
+      // conscripted forms already standing near the fight — everyone
+      // breeding three decks away sat the assault out forever
+      if (!this.allIn && !rampaging.has(f.node)) continue;
       if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT
         || f.task.kind === TASK.TRANSFORM)) continue; // a rooting carrier is not a soldier
       if (f.task?.seed) continue; // carrier-seed detail is off-limits to the draft
@@ -858,8 +876,14 @@ export class Hive {
       for (const [target, forms] of staged) {
         const defense = this.believedHumanStr[target] + this.believedHardness[target];
         // a wave past maxMusterForms overwhelms ANY line — never keep waiting
-        // for 2x a fear-inflated estimate of the defense
-        const needed = this.allIn ? 1
+        // for 2x a fear-inflated estimate of the defense.
+        // ALL-IN IS A WAVE, NOT A GREEN LIGHT (user report: the last stand
+        // was trickled): needed=1 under allIn launched every staged form the
+        // moment it arrived — solo, in single file, into the guns. The
+        // zerg rush gathers MOST of the living force and goes in together
+        // (the 75s patience valve below still breaks any stall).
+        const needed = this.allIn
+          ? Math.min(P.swarm.maxMusterForms, Math.max(4, Math.ceil(combat.length * 0.6)))
           : Math.min(defense * P.swarm.killRatio, P.swarm.maxMusterForms);
         const arrived = forms.filter((f) => !f.move && f.node === f.task.node).length;
         if (defense <= 0.8 || arrived >= needed) {

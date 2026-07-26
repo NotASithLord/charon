@@ -114,7 +114,7 @@ export function resolveCombat(sim, dt) {
     const combatForms = group.filter((a) => a.faction === FACTION.COMBAT && !a.downed && a.hp > 0 && !a.dead);
     const infForms = group.filter((a) => a.faction === FACTION.INFECTION && a.hp > 0 && !a.dead);
     const carriers = group.filter((a) => a.faction === FACTION.CARRIER && a.hp > 0 && !a.dead);
-    const downedForms = group.filter((a) => a.faction === FACTION.COMBAT && a.downed && !a.dead && a.damage < 100);
+    const downedForms = group.filter((a) => a.faction === FACTION.COMBAT && a.downed && !a.dead && a.damage < 95);
     const anyFlood = combatForms.length + infForms.length + carriers.length > 0;
     if (!shooters.length && !anyFlood) continue;
 
@@ -218,16 +218,22 @@ export function resolveCombat(sim, dt) {
         stomps -= 1;
       }
     } else if (sim.marinesKnowRevive && shooters.length && downedForms.length) {
-      // no live threat: marines put confirming rounds into downed forms —
-      // this is what removes bodies from the hive's economy without fire.
+      // no live threat: marines put confirming rounds into downed forms.
       // GATED (user): early on the marines don't know the downed get back
       // up — nobody wastes ammo on a dead thing. The first witnessed revive
       // (sim.reviveWitnessed) teaches the whole net the hard way.
+      // ONLY FIRE DESTROYS (user rule): the rounds mangle the body (damage
+      // caps at 95, slowing nothing but their own ammo) — the marines
+      // BELIEVE they made sure, but without a flamethrower every one of
+      // these gets back up. That's the horror working as intended.
       const marines = shooters.filter((s) => s.faction === FACTION.MARINE);
       if (marines.length) {
         const t = downedForms.sort((a, b) => a.id - b.id)[0];
-        t.damage = Math.min(100, t.damage + 40 * dt * marines.length);
-        if (t.damage >= 100) sim.log('combat', `marines make sure of a downed form in ${sim.graph.node(node).name}`);
+        t.damage = Math.min(95, t.damage + 40 * dt * marines.length);
+        if (t.damage >= 95 && !t.madeSure) {
+          t.madeSure = true;
+          sim.log('combat', `marines make sure of a downed form in ${sim.graph.node(node).name}`);
+        }
       }
     }
 
@@ -343,8 +349,12 @@ export function hurtFloodForm(sim, a, dmg, isFlame, by = -1) {
     return;
   }
   a.hp -= dmg;
+  // ONLY FIRE DESTROYS (user rule): bullets mangle a downed form but can
+  // never take it out of the hive's economy — damage from anything that
+  // isn't flame caps at 95, so every unburned downed form stays a
+  // reanimation target. The flamethrower alone crosses 100.
   if (isFlame) a.damage = Math.min(100, a.damage + dmg * 2);
-  else if (a.downed) a.damage = Math.min(100, a.damage + dmg);
+  else if (a.downed) a.damage = Math.min(95, a.damage + dmg);
   if (a.hp <= 0 && !a.downed) {
     if (isFlame) a.damage = 100;
     if (a.faction === FACTION.CARRIER) { explodeCarrier(sim, a); return; }
