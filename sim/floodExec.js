@@ -306,7 +306,7 @@ export function updateFloodTick(sim, dt) {
             cf.hostArmed = body.wasArmed === true; // the host's weapon comes up with it
             sim.stats.conversions++; sim.stats.conversionsRound++;
             sim.removeAgent(a); // the infection form is spent (§6.6)
-            sim.log('convert', `a corpse rises as a combat form in ${sim.graph.node(a.node).name}`);
+            sim.log('convert', `a corpse rises as a combat form in ${sim.graph.node(a.node).name}`, a.node, body.x, body.y);
           }
         } else moveToward(sim, a, body.node, hive.safeInfectionPath.bind(hive));
         break;
@@ -353,7 +353,7 @@ export function updateFloodTick(sim, dt) {
             target.hp = target.maxHp * sim.P.combatForm.reanimateIntegrityFrac;
             sim.reviveWitnessed(target.node);
             sim.removeAgent(a); // costs 1 infection form (§7)
-            sim.log('reanimate', `the hive spends a form to reanimate a body in ${sim.graph.node(target.node).name}`);
+            sim.log('reanimate', `the hive spends a form to reanimate a body in ${sim.graph.node(target.node).name}`, target.node, target.x, target.y);
           }
         } else moveToward(sim, a, target.node, hive.safeInfectionPath.bind(hive));
         break;
@@ -542,7 +542,7 @@ function convertHuman(sim, form, target) {
   sim.removeAgent(form); // 1 infection form spent on a living host (§6.6)
   sim.stats.conversions++; sim.stats.conversionsRound++;
   sim.stats.humansConverted++;
-  sim.log('convert', `${factionName(target.faction)} taken in ${sim.graph.node(target.node).name} — a new combat form stands up`);
+  sim.log('convert', `${factionName(target.faction)} taken in ${sim.graph.node(target.node).name} — a new combat form stands up`, target.node, target.x, target.y);
 }
 
 function factionName(f) {

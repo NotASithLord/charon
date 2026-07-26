@@ -250,45 +250,136 @@ export class BloodFX {
     this.pool = [];
     this.idx = 0;
     this.max = 44;
-    const c = document.createElement('canvas');
-    c.width = c.height = 96;
-    const x = c.getContext('2d');
-    const g = x.createRadialGradient(48, 48, 4, 48, 48, 44);
-    g.addColorStop(0, 'rgba(70,8,10,0.85)');
-    g.addColorStop(0.6, 'rgba(48,6,8,0.55)');
-    g.addColorStop(1, 'rgba(30,4,6,0)');
-    x.fillStyle = g;
-    x.fillRect(0, 0, 96, 96);
-    // smears: streaks dragged out of the pool
-    for (let i = 0; i < 14; i++) {
-      const a = (i * 2.399) % (Math.PI * 2), r = 20 + (i * 13) % 26;
-      x.strokeStyle = `rgba(56,7,9,${0.25 + (i % 4) * 0.12})`;
-      x.lineWidth = 1.5 + (i % 3);
-      x.beginPath();
-      x.moveTo(48 + Math.cos(a) * 8, 48 + Math.sin(a) * 8);
-      x.lineTo(48 + Math.cos(a) * r, 48 + Math.sin(a) * r);
-      x.stroke();
-    }
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
     this._geo = new THREE.PlaneGeometry(1, 1);
-    this._mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+    // Several baked VARIANTS, picked per mark: one shared texture made every
+    // pool in the ship a rotated copy of the same perfect circle, which read
+    // as a decal sticker rather than something that bled out of a body.
+    this._mats = [0, 1, 2, 3].map((v) => {
+      const tex = new THREE.CanvasTexture(BloodFX._bake(v));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+    });
   }
 
-  add(wx, wz, elev, seed = 0) {
+  // One pool: overlapping off-centre blobs for a lumpy silhouette, a dark
+  // settled centre, drag smears, and a scatter of satellite droplets. The
+  // PRNG is seeded per variant, so the bake is byte-identical every boot.
+  static _bake(variant) {
+    const S = 128, c = document.createElement('canvas');
+    c.width = c.height = S;
+    const x = c.getContext('2d');
+    let s = (0x9e3779b9 ^ Math.imul(variant + 1, 0x85ebca6b)) >>> 0;
+    const rnd = () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+    const cx = S / 2, cy = S / 2;
+    // An organic outline, not a circle: a base radius modulated by a few
+    // harmonics with per-variant phase. Stacked radial gradients (the first
+    // attempt) read as fuzzy overlapping clouds — liquid needs a DEFINED
+    // edge with the soft stain outside it.
+    const ph = [rnd() * 6.283, rnd() * 6.283, rnd() * 6.283];
+    const lobe = (a, R) => R * (1 + 0.17 * Math.sin(a * 2 + ph[0])
+      + 0.11 * Math.sin(a * 3 + ph[1]) + 0.07 * Math.sin(a * 5 + ph[2]));
+    const outline = (R, ox = 0, oy = 0) => {
+      x.beginPath();
+      for (let i = 0; i <= 64; i++) {
+        const a = (i / 64) * Math.PI * 2, r = lobe(a, R);
+        const px = cx + ox + Math.cos(a) * r, py = cy + oy + Math.sin(a) * r;
+        i ? x.lineTo(px, py) : x.moveTo(px, py);
+      }
+      x.closePath();
+    };
+    const R = 0.30 * S;
+
+    // STAIN — soaked-in halo around the pool, well outside its edge
+    const halo = x.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 1.6);
+    halo.addColorStop(0, 'rgba(36,5,7,0.42)');
+    halo.addColorStop(1, 'rgba(30,4,6,0)');
+    x.fillStyle = halo;
+    x.fillRect(0, 0, S, S);
+
+    // POOL — hard-edged liquid body, plus a couple of lobes spilling off it
+    // (drawn in the same pass so they UNION instead of ringing each other)
+    x.fillStyle = 'rgb(44,5,8)';
+    outline(R); x.fill();
+    const spills = 2 + ((variant + 1) % 2);
+    for (let i = 0; i < spills; i++) {
+      const a = rnd() * Math.PI * 2, d = (0.18 + rnd() * 0.14) * S;
+      outline((0.10 + rnd() * 0.07) * S, Math.cos(a) * d, Math.sin(a) * d);
+      x.fill();
+    }
+
+    // DEPTH — darkest where it pooled deepest, clipped to the liquid so the
+    // gradient can never bleed past the edge
+    x.save();
+    outline(R); x.clip();
+    const dg = x.createRadialGradient(cx - R * 0.15, cy - R * 0.1, 0, cx, cy, R * 1.05);
+    dg.addColorStop(0, 'rgba(18,2,3,0.85)');
+    dg.addColorStop(0.55, 'rgba(30,3,5,0.35)');
+    dg.addColorStop(1, 'rgba(62,8,11,0)');
+    x.fillStyle = dg;
+    x.fillRect(0, 0, S, S);
+    x.restore();
+
+    // SMEARS — tapered drags pulled out of the rim (a body was moved here)
+    const smears = 5 + ((variant * 3) % 4);
+    for (let i = 0; i < smears; i++) {
+      const a = rnd() * Math.PI * 2;
+      // start AT the rim, not inside it — a smear that begins at the centre
+      // draws as a needle laid across the pool instead of a drag out of it
+      const r0 = lobe(a, R) * 0.94, r1 = r0 + R * (0.25 + rnd() * 0.75);
+      const bend = (rnd() - 0.5) * 0.5;   // smears curve; they aren't rays
+      const steps = 8;
+      const at = (t) => {
+        const rr = r0 + (r1 - r0) * t, aa = a + bend * t * t;
+        return [cx + Math.cos(aa) * rr, cy + Math.sin(aa) * rr];
+      };
+      for (let k = 0; k < steps; k++) {
+        const t0 = k / steps, t1 = (k + 1) / steps;
+        x.strokeStyle = `rgba(40,4,7,${(0.55 * (1 - t0) ** 1.5).toFixed(3)})`;
+        x.lineWidth = (1 - t0) * (2.4 + rnd() * 2.2) + 0.35;
+        x.lineCap = 'round';
+        x.beginPath();
+        x.moveTo(...at(t0));
+        x.lineTo(...at(t1));
+        x.stroke();
+      }
+    }
+
+    // SPATTER — thrown droplets, crisp (surface tension) and smaller further out
+    const drops = 18 + ((variant * 5) % 12);
+    for (let i = 0; i < drops; i++) {
+      const a = rnd() * Math.PI * 2;
+      const t = rnd();
+      const d = R * (1.05 + t * 0.55);
+      const rr = (1 - t) * 2.2 + 0.55;
+      const dx = cx + Math.cos(a) * d, dy = cy + Math.sin(a) * d;
+      x.fillStyle = `rgba(40,4,7,${(0.9 - t * 0.35).toFixed(3)})`;
+      x.beginPath();
+      x.ellipse(dx, dy, rr, rr * (0.6 + rnd() * 0.5), a, 0, Math.PI * 2); // elongated along the throw
+      x.fill();
+    }
+    return c;
+  }
+
+  // `sizeMul` lets the caller mark a heavier event (a body dragging itself
+  // back up leaves more than a clean fall).
+  add(wx, wz, elev, seed = 0, sizeMul = 1) {
     let m = this.pool[this.idx];
     if (!m) {
-      m = new THREE.Mesh(this._geo, this._mat);
+      m = new THREE.Mesh(this._geo, this._mats[0]);
       m.renderOrder = 1;
       this.scene.add(m);
       this.pool[this.idx] = m;
     }
+    m.material = this._mats[(seed >>> 3) % this._mats.length];
     m.rotation.set(-Math.PI / 2, 0, (seed * 2.399) % (Math.PI * 2));
-    m.scale.setScalar(1.1 + ((seed * 97) % 10) / 8);
+    m.scale.setScalar((1.1 + ((seed * 97) % 10) / 8) * sizeMul);
     m.position.set(
-      wx + (((seed * 31) % 7) - 3) * 0.14,
+      // the jitter used to be ±0.42 m, which threw the mark clear of the body
+      // it belonged to; now the sim hands us the exact spot, so this is only
+      // enough wobble to keep repeat marks from stacking perfectly
+      wx + (((seed * 31) % 7) - 3) * 0.05,
       elev + 0.014 + (this.idx % 7) * 0.0005, // tiny y-stagger kills z-fighting between marks
-      wz + (((seed * 17) % 7) - 3) * 0.14);
+      wz + (((seed * 17) % 7) - 3) * 0.05);
     this.idx = (this.idx + 1) % this.max;
   }
 }

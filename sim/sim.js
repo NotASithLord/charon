@@ -295,8 +295,12 @@ export class Sim {
     this.log('radio', `distress call from ${this.graph.node(agent.node).name}`, agent.node);
   }
 
-  log(type, msg, node = -1) {
-    this.events.push({ t: this.t, type, msg, node });
+  // `x`/`y` are the EXACT sim-space spot the event happened at, when the
+  // caller knows it. Renderers stamp physical marks (blood) there instead of
+  // at the room's geometric centre — a body converted in a corner used to
+  // bleed in the middle of the hangar (user report).
+  log(type, msg, node = -1, x, y) {
+    this.events.push({ t: this.t, type, msg, node, x, y });
     this.eventTotal = (this.eventTotal ?? 0) + 1; // monotonic — never rewinds
     if (this.events.length > 1600) {
       this.events.splice(0, 200);
@@ -444,7 +448,7 @@ export class Sim {
       this.stats.humansDead++;
       if (a.faction === FACTION.MARINE) {
         const squad = this.squads[a.squad];
-        this.log('combat', `a marine falls in ${this.graph.node(a.node).name}`, a.node);
+        this.log('combat', `a marine falls in ${this.graph.node(a.node).name}`, a.node, a.x, a.y);
         if (squad) squad.calledContact = false; // survivors will call again
       }
       this.screamTick[a.node] = this.tickCount;

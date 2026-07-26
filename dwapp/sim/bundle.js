@@ -3676,7 +3676,7 @@ function updateFloodTick(sim2, dt) {
             sim2.stats.conversions++;
             sim2.stats.conversionsRound++;
             sim2.removeAgent(a);
-            sim2.log("convert", `a corpse rises as a combat form in ${sim2.graph.node(a.node).name}`);
+            sim2.log("convert", `a corpse rises as a combat form in ${sim2.graph.node(a.node).name}`, a.node, body.x, body.y);
           }
         } else moveToward(sim2, a, body.node, hive.safeInfectionPath.bind(hive));
         break;
@@ -3724,7 +3724,7 @@ function updateFloodTick(sim2, dt) {
             target.hp = target.maxHp * sim2.P.combatForm.reanimateIntegrityFrac;
             sim2.reviveWitnessed(target.node);
             sim2.removeAgent(a);
-            sim2.log("reanimate", `the hive spends a form to reanimate a body in ${sim2.graph.node(target.node).name}`);
+            sim2.log("reanimate", `the hive spends a form to reanimate a body in ${sim2.graph.node(target.node).name}`, target.node, target.x, target.y);
           }
         } else moveToward(sim2, a, target.node, hive.safeInfectionPath.bind(hive));
         break;
@@ -3891,7 +3891,7 @@ function convertHuman(sim2, form, target) {
   sim2.stats.conversions++;
   sim2.stats.conversionsRound++;
   sim2.stats.humansConverted++;
-  sim2.log("convert", `${factionName(target.faction)} taken in ${sim2.graph.node(target.node).name} — a new combat form stands up`);
+  sim2.log("convert", `${factionName(target.faction)} taken in ${sim2.graph.node(target.node).name} — a new combat form stands up`, target.node, target.x, target.y);
 }
 function factionName(f) {
   return f === FACTION.CIVILIAN ? "a civilian" : f === FACTION.ARMED ? "an armed crewman" : "a marine";
@@ -4830,8 +4830,12 @@ var Sim = class {
     this.floodKnown = true;
     this.log("radio", `distress call from ${this.graph.node(agent.node).name}`, agent.node);
   }
-  log(type, msg, node = -1) {
-    this.events.push({ t: this.t, type, msg, node });
+  // `x`/`y` are the EXACT sim-space spot the event happened at, when the
+  // caller knows it. Renderers stamp physical marks (blood) there instead of
+  // at the room's geometric centre — a body converted in a corner used to
+  // bleed in the middle of the hangar (user report).
+  log(type, msg, node = -1, x, y) {
+    this.events.push({ t: this.t, type, msg, node, x, y });
     this.eventTotal = (this.eventTotal ?? 0) + 1;
     if (this.events.length > 1600) {
       this.events.splice(0, 200);
@@ -4964,7 +4968,7 @@ var Sim = class {
       this.stats.humansDead++;
       if (a.faction === FACTION.MARINE) {
         const squad = this.squads[a.squad];
-        this.log("combat", `a marine falls in ${this.graph.node(a.node).name}`, a.node);
+        this.log("combat", `a marine falls in ${this.graph.node(a.node).name}`, a.node, a.x, a.y);
         if (squad) squad.calledContact = false;
       }
       this.screamTick[a.node] = this.tickCount;

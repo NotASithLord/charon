@@ -1110,10 +1110,17 @@ function renderLog() {
     // PHYSICAL side-effects of raw events, independent of radio receipt:
     // blood marks where people are taken or fall, the 1MC PA for shipwide
     // orders (the speakers are in every compartment — no radio needed)
-    if (raw.node >= 0 && (raw.type === 'convert' || (raw.type === 'combat' && raw.msg.startsWith('a marine falls')))) {
+    // BLOOD LANDS ON THE BODY (user: splats belong right over the reanimated
+    // bodies). The sim now carries the exact spot on the event — before this,
+    // conversions passed NO node at all (so they left no mark whatsoever) and
+    // the marine-falls mark was stamped at the room's geometric centre, which
+    // in a hangar is tens of metres from the corpse.
+    if (raw.node >= 0 && (raw.type === 'convert' || raw.type === 'reanimate'
+      || (raw.type === 'combat' && raw.msg.startsWith('a marine falls')))) {
       const nd = sim.graph.node(raw.node);
-      const [bx, bz] = world.simToWorld(nd.x, nd.y, nd.deck);
-      blood.add(bx, bz, elevOf(nd.deck), lastEvent * 7919);
+      const [bx, bz] = world.simToWorld(raw.x ?? nd.x, raw.y ?? nd.y, nd.deck);
+      // a body that gets back up drags a fresh pool out from under itself
+      blood.add(bx, bz, elevOf(nd.deck), lastEvent * 7919, raw.type === 'convert' ? 1.25 : 1);
     }
     if (raw.type === 'radio' && (raw.msg.startsWith('FALL BACK') || raw.msg.startsWith('ARMORY SEAL'))) {
       audio.play('pa', null, 0.55, 'pa', 6000);
