@@ -1618,6 +1618,7 @@ let frameNo = 0;
 let physAcc = 0;
 let _trackerAt = 0, _observeAt = 0; // subsystem throttle clocks (perf pass 2)
 let _smYaw = 0, _smPitch = 0, _bobPhase = 0, _bobAmp = 0; // viewmodel sway/bob (first-strike feel)
+let _fpsEma = 16.7, _fpsWorst = 0, _fpsShownAt = 0; // top-right perf readout
 // sim ticks run OUTSIDE the rAF task (engine/runtime.js TickScheduler):
 // the browser executes them in the idle gap between vsyncs
 const ticker = new TickScheduler({ stepSec: sim.dt, run: () => sim.tick() });
@@ -1938,6 +1939,27 @@ function frame(now) {
   // engine governor now (engine/runtime.js) — per-rung effects still land
   // through this game's apply callback above
   governor.frame(now, dtReal, window.innerWidth, window.innerHeight);
+
+  // PERF READOUT (user: benchmark across hardware) — live FPS + frame ms +
+  // a slow-decaying worst spike + resolution/rung/backend, top right under
+  // the room state. Refreshed at 4Hz, dirty-checked.
+  {
+    const ms = dtReal * 1000;
+    _fpsEma = _fpsEma * 0.92 + Math.min(200, ms) * 0.08;
+    if (ms > _fpsWorst) _fpsWorst = ms;
+    if (now - _fpsShownAt > 250) {
+      _fpsShownAt = now;
+      const fps = Math.round(1000 / _fpsEma);
+      const cls = fps >= 55 ? 'fps-good' : fps >= 30 ? 'fps-mid' : 'fps-bad';
+      const html = `<b>${fps} FPS</b> · ${_fpsEma.toFixed(1)}ms · spike ${_fpsWorst.toFixed(0)}ms`
+        + ` · ${renderer.getPixelRatio().toFixed(2)}x · r${rung}`
+        + ` · ${renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2'}`;
+      const meter = el('fpsMeter');
+      if (meter.className !== cls) meter.className = cls;
+      if (_hudCache.fpsMeter !== html) { _hudCache.fpsMeter = html; meter.innerHTML = html; }
+      _fpsWorst *= 0.55; // spikes linger a couple of seconds, then fade
+    }
+  }
   if (renderer.shadowMap.enabled && (frameNo & 1) === 0) torch.shadow.needsUpdate = true; // 30Hz shadows
   frameNo++;
   renderer.info.reset(); // per-frame accumulation across all post passes
