@@ -12,18 +12,20 @@
   #topbar { top: 12px; left: 14px; }
   #topbar b { color: #e8eef7; font-size: 15px; }
   #room { color: #7fd1a0; font-size: 15px; font-weight: 700; }
-  #vitals { top: 12px; right: 430px; text-align: right; }
+  #vitals { top: 12px; right: 14px; text-align: right; }
   #hp { font-size: 16px; font-weight: 700; color: #7fd1a0; }
   #hp.low { color: #ff6a4d; }
   #crosshair {
     top: 50%; left: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
     border: 1px solid rgba(255,255,255,0.65); border-radius: 50%;
   }
-  /* the activity log: prominent, long, always visible (user note) */
+  /* the radio log: bottom half of the right edge only — the top half stays
+     clear glass so the panel costs less field of view (user note) */
   #logwrap {
-    top: 0; right: 0; bottom: 0; width: 410px;
+    top: 52%; right: 0; bottom: 0; width: 384px;
     background: linear-gradient(to left, rgba(7,10,14,0.92), rgba(7,10,14,0.78));
-    border-left: 1px solid #1c2430; padding: 12px 14px 14px;
+    border-left: 1px solid #1c2430; border-top: 1px solid #1c2430;
+    padding: 10px 14px 12px;
     display: flex; flex-direction: column;
   }
   #logwrap h2 { font-size: 12px; color: #6a7686; letter-spacing: 1.5px; margin-bottom: 8px; }

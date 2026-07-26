@@ -88,15 +88,15 @@ const lightPool = new LightPool(scene, 10);
   em(0xff5030, 0.8, 2, 1, 9.9, 1.2, 0, -Math.PI / 2);  // faint red starboard
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(env, 0.04).texture;
-  scene.environmentIntensity = 0.35;
+  scene.environmentIntensity = 0.08;
   pmrem.dispose();
 }
 
-const hemi = new THREE.HemisphereLight(0x9fb2d0, 0x141821, 1.4);
+const hemi = new THREE.HemisphereLight(0x9fb2d0, 0x141821, 0.07);
 scene.add(hemi);
-const ambient = new THREE.AmbientLight(0x7d879e, 1.1);
+const ambient = new THREE.AmbientLight(0x7d879e, 0.06);
 scene.add(ambient);
-const lamp = new THREE.PointLight(0xcfe0ff, 15, 18, 1.8);
+const lamp = new THREE.PointLight(0xcfe0ff, 0, 10, 1.8);
 scene.add(lamp);
 // FLASHLIGHT (user rule): in flood-held darkness this is all you have. In
 // spore fog its throw clamps to a few meters instead of the whole room.
@@ -399,8 +399,11 @@ function updateRoomLightPool() {
       lightPool.add(L.em.x, L.em.y, L.em.z, 0xff4030,
         2.6 + Math.sin(performance.now() * 0.0011 + L.phase) * 0.5, 11, 1.9);
     } else {
-      lightPool.add(L.x, L.y - 0.25, L.z, 0xbfd4f2,
-        L.mode === 'steady' ? 6.5 : 7 * L.lvl, 16, 1.9);
+      // hung WELL below the plating: the throw pools on the deck and walls
+      // while the ceiling above stays near-black (user: bright ceilings
+      // ruin the darkness — light the room, not the overhead)
+      lightPool.add(L.x, L.y - 1.25, L.z, 0xbfd4f2,
+        L.mode === 'steady' ? 14 : 15 * L.lvl, 19, 1.9);
     }
   }
 }
@@ -792,7 +795,9 @@ function updateNameplate() {
     if (a.isPlayer || !a.callsign || a.deck !== player.deck) continue;
     const low = a.faction === 6 || a.downed; // corpses and downed forms lie on the deck
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
-    const base = elevOf(a.deck);
+    // anchor on the actual surface underfoot (stair ring, raised launch
+    // apron) — a flat deck elevation put plates inside raised floors
+    const base = world.groundHeightAt(a.deck, wx, wz);
     _npVec.set(wx, base + (low ? 0.3 : 1.45), wz).sub(camera.position);
     const dist = _npVec.length();
     if (dist > 32 || dist < 0.4) continue;
@@ -809,11 +814,19 @@ function updateNameplate() {
     }
   }
   if (best) {
-    // a wall between you and them kills the plate
+    // DIRECT LINE OF SIGHT ONLY (user rule): a wall between you and them
+    // kills the plate. The far margin is razor-thin — a crewman hugging the
+    // other side of a wall used to slip his chest point past a fat margin
+    // and read through the plating. Closed door panels count as walls too.
     _npVec.set(best.wx, best.labelY - 0.6, best.wz).sub(camera.position).normalize();
     _npRay.set(camera.position, _npVec);
-    _npRay.far = best.dist - 0.3;
+    _npRay.far = best.dist - 0.06;
     if (_npRay.intersectObjects(world.wallMeshes, false).length) best = null;
+    else {
+      for (const d of world.doors) {
+        if ((d.open01 ?? 0) < 0.7 && _npRay.intersectObject(d.mesh, false).length) { best = null; break; }
+      }
+    }
   }
   _npSticky = best?.a ?? null;
   if (!best) { np.style.display = 'none'; return; }
@@ -1435,16 +1448,16 @@ function frame(now) {
   // your flashlight is all that works. Spore fog closes the flashlight's
   // throw down to a few meters and stains the air green-brown.
   const dimT = Math.min(1, dtReal * 3);
-  // DEAD SHIP (user rule): even "lit" compartments run on secondary power —
-  // the old full ambient wash is gone. A dim structural floor keeps geometry
-  // readable; the actual LIGHT comes from discrete sources: the fixture
+  // DEAD SHIP (user rule): NO ambient wash at all, ever — a bright visible
+  // ceiling kills the horror. A hair of structural floor stops pure-black
+  // banding; every visible photon comes from discrete sources: the fixture
   // pool, the red hatch lamps, doorway spill, fires, muzzles, your torch.
-  const ambTarget = inDark ? 0.0 : 0.3;
-  const hemiTarget = inDark ? 0.0 : 0.38;
+  const ambTarget = inDark ? 0.0 : 0.06;
+  const hemiTarget = inDark ? 0.0 : 0.07;
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
-  lamp.intensity = inDark ? 0.0 : 7 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
-  torch.intensity += ((inDark ? 65 : 22) - torch.intensity) * dimT;
+  lamp.intensity = inDark ? 0.0 : 1.6 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  torch.intensity += ((inDark ? 65 : 34) - torch.intensity) * dimT;
   torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
   {
     const tp = player.cameraPose();
@@ -1479,7 +1492,7 @@ function frame(now) {
     const expTarget = inFog ? 0.9 : inDark ? 1.12 : 1.35;
     post.exposure += (expTarget - post.exposure) * Math.min(1, dtReal * 1.6);
     // IBL never lights a black room — it fades with the ambient state
-    scene.environmentIntensity = 0.35 * (ambient.intensity / 0.3);
+    scene.environmentIntensity = 0.08 * (ambient.intensity / 0.06);
   }
 
   // hit feedback fades

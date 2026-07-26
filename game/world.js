@@ -408,7 +408,9 @@ export class World {
       bumpMap: wallTexBase, bumpScale: 0.5,
     });
     const matWall = this._matWall;
-    const matCeil = new THREE.MeshStandardMaterial({ color: 0x141a26, emissive: 0x2a3a58, emissiveIntensity: 0.35, roughness: 1, side: THREE.DoubleSide });
+    // NO self-glow (user: a bright visible ceiling ruins the darkness) — the
+    // overhead plating is pitch dark unless an actual light source hits it
+    const matCeil = new THREE.MeshStandardMaterial({ color: 0x10141c, roughness: 1, side: THREE.DoubleSide });
     this._matCeil = matCeil;
     this._mkFloorMat = mkFloorMat; // reused by _buildStairRoom (separate method)
 

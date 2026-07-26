@@ -123,7 +123,9 @@ export class Agents3D {
     // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
     // call for every carried rifle on the ship (marines, armed crew, armed
     // combat forms) — see game/rifle-model.js
-    this.rifle = makeInstanced(scene, carryGeometry(), 0xc9d4e2);
+    this.rifle = makeInstanced(scene, carryGeometry(), 0x23272e);
+    this.rifle.material.roughness = 0.45;
+    this.rifle.material.metalness = 0.65;
 
     // combat FX: tracers + muzzle flashes. Flood fire (a hostArmed combat
     // form emptying its stolen rifle) gets its own sickly-green tracer so
@@ -785,7 +787,8 @@ export class Agents3D {
       rag = sys.spawn(id,
         { x: wx, y: elev + hoverY, z: wz, heading, deck },
         impulse,
-        (x, z) => this.world.groundHeightAt(deck, x, z));
+        (x, z) => this.world.groundHeightAt(deck, x, z),
+        (x, z) => elevOf(deck) + this.world.ceilHeightAt(deck, x, z) - 0.15);
       if (!rag) return false; // disabled at the system level
       this._ragSeen.add(id);
     }

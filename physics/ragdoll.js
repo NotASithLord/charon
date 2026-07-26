@@ -166,11 +166,14 @@ export class RagdollSystem {
   //   pose:    { x, y, z, heading, deck }  world-space feet position + facing
   //   impulse: { dirX, dirZ, speed, up, spin, kick }  the launch off the blow
   //   groundYAt: (x, z) => floorY   injected floor sampler (deck-bound closure)
+  //   ceilYAt:  (x, z) => ceilY    optional ceiling sampler — a blast-lofted
+  //             body bounces off the overhead plating instead of poking into
+  //             the deck above (user: bodies clipping through ceilings)
   // Returns the ragdoll, or null if disabled. Enforces the concurrent cap by
   // evicting the oldest ASLEEP body first (already settled — least missed),
   // falling back to the oldest overall; the evicted id then renders as a plain
   // static corpse via the caller's fallback path.
-  spawn(id, pose, impulse, groundYAt) {
+  spawn(id, pose, impulse, groundYAt, ceilYAt) {
     const p = this.p;
     if (p.maxActive <= 0) return null;
     if (!this._byId.has(id)) this._evictIfFull();
@@ -194,6 +197,7 @@ export class RagdollSystem {
       limbs,               // part -> quat (the render reads this)
       limbState,           // part -> { q, omega }
       groundYAt,
+      ceilYAt,
       asleep: false,
       sleepT: 0,
       seq: this._seq++,
@@ -309,9 +313,32 @@ export class RagdollSystem {
 
     let grounded = false;
     let maxPen = 0;
+    let maxCeilPen = 0;
     for (const localY of [rr, p.bodyLen - rr]) {
       const off = qrot(r.rootQuat, [0, localY, 0]);
       const P = [r.rootPos[0] + off[0], r.rootPos[1] + off[1], r.rootPos[2] + off[2]];
+      // ceiling contact (mirror of the floor): a lofted end hitting the
+      // overhead plating loses its upward velocity and is pushed back down —
+      // no body ever pokes into the deck above.
+      if (r.ceilYAt) {
+        const ceilY = r.ceilYAt(P[0], P[2]);
+        const cpen = P[1] + rr - ceilY;
+        if (cpen > 0) {
+          if (cpen > maxCeilPen) maxCeilPen = cpen;
+          const rVecC = [P[0] - com[0], P[1] - com[1], P[2] - com[2]];
+          const vnC = r.vel[1] + cross3(r.omega, rVecC)[1];
+          if (vnC > 0) {
+            const rxnC = cross3(rVecC, [0, -1, 0]);
+            const denomC = 1 + dot3(rxnC, rxnC) / p.inertia;
+            const jC = ((1 + p.restitution) * vnC) / denomC;
+            r.vel[1] -= jC;
+            const dOmegaC = cross3(rVecC, [0, -jC, 0]);
+            r.omega[0] += dOmegaC[0] / p.inertia;
+            r.omega[1] += dOmegaC[1] / p.inertia;
+            r.omega[2] += dOmegaC[2] / p.inertia;
+          }
+        }
+      }
       const floorY = r.groundYAt(P[0], P[2]);
       const pen = (floorY + rr) - P[1];
       if (pen <= 0) continue;
@@ -335,7 +362,9 @@ export class RagdollSystem {
       }
     }
     // project the deepest penetration out — pure position fix, injects no
-    // energy, so it can never destabilise.
+    // energy, so it can never destabilise. (Floor wins over ceiling if a body
+    // is somehow squeezed by both — it must never sink below the deck.)
+    if (maxCeilPen > 0) r.rootPos[1] -= maxCeilPen;
     if (maxPen > 0) r.rootPos[1] += maxPen;
 
     // 3) friction as damping while grounded (never adds energy → always stable)
