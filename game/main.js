@@ -92,7 +92,12 @@ const post = new PostFX(renderer, scene, camera);
 // fixtures, door spill, NPC muzzles, your muzzle/impacts/grenades) — see
 // game/lights.js. Constant light count = bounded fragment cost and ZERO
 // shader recompiles (adding/removing real lights recompiled every program).
-const lightPool = new LightPool(scene, 10);
+// 16 slots so the top rungs can afford real weapon lights alongside the room
+// fixtures (user: an M2 in Chrome has GPU headroom, spend it on realism). The
+// governor shrinks the live count per rung — setActive REMOVES lights from the
+// scene, which shortens the light loop compiled into every shader — so the
+// lower rungs land at or below the old budget.
+const lightPool = new LightPool(scene, 16);
 
 // IMAGE-BASED LIGHTING (the RoomEnvironment recipe, compacted): a tiny
 // procedural interior baked through PMREM gives every PBR material real
@@ -331,11 +336,11 @@ agents.rifle.castShadow = true;
 // stepping down mid-fight costs a uniform change, not a shader storm.
 // ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
 const RUNGS = [
-  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 10, bloom: 0.5, motes: 36, rag: 48 },
-  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 10, bloom: 0.5, motes: 36, rag: 48 },
-  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 8, bloom: 0.375, motes: 24, rag: 32 },
-  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24, rag: 24 },
-  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12, rag: 16 },
+  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 12 },
+  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 12 },
+  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 10, bloom: 0.375, motes: 24, rag: 32, rifleLights: 8 },
+  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24, rag: 24, rifleLights: 5 },
+  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12, rag: 16, rifleLights: 3 },
 ];
 // whole-frame pixel budget: huge windows can't buy retina supersampling on
 // an integrated GPU — the cap yields before the budget does (HD opts out)
@@ -455,6 +460,18 @@ function updateRoomLightPool() {
           0xbfd4f2, L.mode === 'steady' ? 14 : 15 * L.lvl, 19, 1.9);
       }
     }
+  }
+  // WEAPON LIGHTS (user: a light on their rifle that does real work, so you
+  // naturally see more in a dark room with your fireteam than without —
+  // from the pure physics). agents3d declares one per armed body standing in
+  // a blacked-out room; they compete in the same pool as everything else, and
+  // in a dark room the fixtures are off, so there is little to compete with.
+  // Nearest-first, budgeted per rung.
+  const rlCap = RUNGS[rung].rifleLights ?? 4;
+  const n = Math.min(agents.rifleLightN, rlCap);
+  for (let i = 0; i < n; i++) {
+    const r = agents.rifleLights[i];
+    lightPool.add(r.x, r.y, r.z, 0xdCE6FF, 9, 13, 1.7);
   }
 }
 

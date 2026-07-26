@@ -817,11 +817,33 @@ export class World {
           const [usx, usy] = this.worldToSim(x, z, upper.deck);
           this._addMouth(upper.idx, usx, usy);
         }
-        // hatch collars top and bottom + ladder rungs up one side
+        // Hatch collars top and bottom. A FRAME, not a plate (user: "make the
+        // openings of the decks at the ladders translucent not the grey
+        // blobs") — the deck already has a real hole cut through it here, and
+        // the old collar was a solid HATCH+0.5 slab laid straight over that
+        // hole, so the opening read as a grey pad on the floor. Four bars
+        // border the opening and leave it clear, with a smoked safety panel
+        // across it: you can see down the well, and it stays non-colliding so
+        // grenades and rounds still drop through.
+        const RIM = 0.25, HALF = HATCH / 2, OUT = HALF + RIM / 2;
         for (const [elev, ny] of [[lowElev, lowElev + 0.02], [highElev, highElev + 0.02]]) {
-          const collar = new THREE.Mesh(new THREE.BoxGeometry(HATCH + 0.5, 0.08, HATCH + 0.5), matCollar(lift));
-          collar.position.set(x, ny, z);
-          this.scene.add(collar);
+          const cm = matCollar(lift);
+          for (const [bw, bd, bx2, bz2] of [
+            [HATCH + RIM * 2, RIM, 0, -OUT], [HATCH + RIM * 2, RIM, 0, OUT],
+            [RIM, HATCH, -OUT, 0], [RIM, HATCH, OUT, 0],
+          ]) {
+            const bar = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.08, bd), cm);
+            bar.position.set(x + bx2, ny, z + bz2);
+            this.scene.add(bar);
+          }
+          const pane = new THREE.Mesh(new THREE.PlaneGeometry(HATCH, HATCH), this._matHatchPane ??=
+            new THREE.MeshStandardMaterial({
+              color: 0x2b3644, roughness: 0.35, metalness: 0.5,
+              transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide,
+            }));
+          pane.rotation.x = -Math.PI / 2;
+          pane.position.set(x, ny + 0.01, z);
+          this.scene.add(pane);
         }
         const runN = Math.floor((highElev - lowElev) / 0.38);
         for (let i = 0; i <= runN; i++) {

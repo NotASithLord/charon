@@ -189,6 +189,10 @@ export class Agents3D {
     this._mOut = new THREE.Matrix4();
     this._downAt = new Map(); // id -> ms when first seen downed (death blend)
     this._playerShots = []; // {ax,ay,az,bx,by,bz,ttl}
+    // weapon lights declared this frame; the host drains them into its light
+    // pool (records recycle — no per-frame garbage)
+    this.rifleLights = [];
+    this.rifleLightN = 0;
     this._q2 = new THREE.Quaternion(); // second temp for the ragdoll limb stamp
 
     // CLASSIC-HALO RAGDOLLS (cosmetic; physics/ragdoll.js). A dead body is
@@ -398,9 +402,36 @@ export class Agents3D {
     this._playerShots.push({ ax: from.x, ay: from.y, az: from.z, bx: to.x, by: to.y, bz: to.z, ttl: 0.09 });
   }
 
+  // RIFLE LIGHT (user: a weapon light that does REAL work, so a dark room is
+  // genuinely brighter with your fireteam in it). The pool lives in main.js
+  // and re-declares AFTER this runs, so collect into a recycled buffer here
+  // and let the host drain it. Position is a couple of metres down the
+  // barrel: a point source out in front throws like a torch without paying
+  // for a second shadow-casting spot per marine.
+  _addRifleLight(wx, elev, wz, heading) {
+    // only bodies near enough to matter — the pool scores by distance anyway,
+    // but this keeps the declaration list (and the host's cap) meaningful
+    const ddx = wx - (this.viewX ?? 0), ddz = wz - (this.viewZ ?? 0);
+    if (ddx * ddx + ddz * ddz > 900) return; // 30 m
+    const fx = Math.cos(heading), fz = -Math.sin(heading); // matches _rifleAt
+    const r = this.rifleLights[this.rifleLightN]
+      ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0 });
+    r.x = wx + fx * 2.6; r.y = elev + 1.45; r.z = wz + fz * 2.6;
+    this.rifleLightN++;
+  }
+
+  // is this room dark enough that an armed body would have its light on?
+  // NOT just flood-darkness (user: "only the fireteam seems to have it") — a
+  // room whose mains are dead is pitch black too, and every marine standing
+  // in one was walking around with the lamp off.
+  _needsLamp(nodeIdx) {
+    return this.sim.darkAt(nodeIdx) || this.sim.graph.lightMode[nodeIdx] === 3;
+  }
+
   update(dt) {
     const { sim, world } = this;
     const buf = sim.buffer;
+    this.rifleLightN = 0;
     // First frame: everything already dead is PRE-PLACED (the event/breach
     // corpses seeded at t=0) — mark it so it lies where it was authored instead
     // of every corpse on the ship flopping the instant the game loads. Only
@@ -669,9 +700,10 @@ export class Agents3D {
           stampHold(this.armedSet, counts.armed++);
           this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
-          if (sim.darkAt(buf.nodeId[i])) {
+          if (this._needsLamp(buf.nodeId[i])) {
             this._rifleAt(wx, elev + 1.2, wz, heading);
             this.beams.setMatrixAt(counts.beam++, this._m);
+            this._addRifleLight(wx, elev, wz, heading);
           }
           break;
         }
@@ -681,9 +713,10 @@ export class Agents3D {
           else stampHold(this.marineSet, counts.marine++);
           this._rifleAt(wx, elev + 1.25, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
-          if (sim.darkAt(buf.nodeId[i])) {
+          if (this._needsLamp(buf.nodeId[i])) {
             this._rifleAt(wx, elev + 1.3, wz, heading);
             this.beams.setMatrixAt(counts.beam++, this._m);
+            this._addRifleLight(wx, elev, wz, heading);
           }
           break;
         }
