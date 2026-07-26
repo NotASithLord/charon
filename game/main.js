@@ -1193,25 +1193,39 @@ function soundSweep(now) {
   const g = sim.graph;
   // same-deck gunfire: nearest 3 firing rooms only, quieter with distance
   const firing = [];
-  let offDeckFire = false;
+  const offDeck = [];
   for (let n = 0; n < g.n; n++) {
     if (sim.tickCount - sim.gunfireTick[n] > 1 || sim.gunfireTick[n] < 5) continue;
     const nd = g.node(n);
     if (nd.deck === player.deck) {
       const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
       firing.push({ n, wx, wz, d: Math.hypot(wx - player.x, wz - player.z) });
-    } else if (Math.abs(nd.deck - player.deck) === 1) offDeckFire = true;
+    } else if (Math.abs(nd.deck - player.deck) <= 2) {
+      const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
+      offDeck.push({ n, wx, wz, dd: Math.abs(nd.deck - player.deck), d: Math.hypot(wx - player.x, wz - player.z) });
+    }
   }
   firing.sort((a, b) => a.d - b.d);
   for (const f of firing.slice(0, 3)) audio.play('shotFar', { x: f.wx, z: f.wz }, 0.7, `gun${f.n}`, 220);
-  // a battle on another deck is ONE muffled roll through the deckplates
-  if (offDeckFire) audio.play('rumble', null, 0.09, 'offdeck', 2600);
+  // battles on other decks come DIRECTIONALLY through the hull now — dull
+  // thump-bursts panned to the fight's bearing, muffled harder per deck of
+  // steel (pairs with the radio net: no report may arrive, but you can still
+  // HEAR where the fight is), over the low rumble in the deckplates
+  offDeck.sort((a, b) => (a.dd * 100 + a.d) - (b.dd * 100 + b.d));
+  for (const f of offDeck.slice(0, 2)) {
+    audio.playFar('farFight', { x: f.wx, z: f.wz }, f.dd, 0.9, `far${f.n}`, 3400);
+  }
+  if (offDeck.length) audio.play('rumble', null, 0.09, 'offdeck', 2600);
   for (let n = 0; n < g.n; n++) {
     if (sim.tickCount - sim.screamTick[n] > 1 || sim.screamTick[n] < 5) continue;
     const nd = g.node(n);
-    if (nd.deck !== player.deck) continue;
     const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
-    audio.play('scream', { x: wx, z: wz }, 0.7, `scr${n}`, 700);
+    if (nd.deck === player.deck) {
+      audio.play('scream', { x: wx, z: wz }, 0.7, `scr${n}`, 700);
+    } else if (Math.abs(nd.deck - player.deck) === 1) {
+      // someone dying one deck away — a faint cry through the plating
+      audio.playFar('deathScream', { x: wx, z: wz }, 1, 0.5, `fscr${n}`, 4000);
+    }
   }
   // --- flood proximity (user: flood sounds and screams when they are nearby) ---
   let nearCombat = null, nearCarrier = null, charging = null;
@@ -1488,6 +1502,24 @@ function frame(now) {
   el('armorBar').style.width = `${ghost ? 0 : player.armor / 50 * 100}%`;
   el('hpText').textContent = ghost ? `IT ${hp}` : `${Math.ceil(player.armor)} | ${hp}`;
   el('ammo').textContent = ghost ? '' : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`);
+  // ROOM LIGHT STATE (user: note-taking between playthroughs) — the sim's
+  // authoritative fixture + flood states for the compartment you're in
+  {
+    const rs = el('roomState');
+    const ni = povAgent.node;
+    if (ni >= 0) {
+      const lm = sim.graph.lightMode[ni];
+      const dead = lm === 3 || sim.darkAt(ni);
+      const label = sim.darkAt(ni) ? 'FLOOD DARK'
+        : ['LIGHTS STEADY', 'SOFT FLICKER', 'HARSH FLICKER', 'LIGHTS DEAD'][lm];
+      const extras = [
+        sim.fogAt(ni) ? 'SPORE FOG' : null,
+        sim.graph.unpowered[ni] ? 'UNPOWERED' : null,
+      ].filter(Boolean);
+      rs.textContent = extras.length ? `${label} · ${extras.join(' · ')}` : label;
+      rs.className = dead ? 'rs-dead' : lm === 2 ? 'rs-harsh' : lm === 1 ? 'rs-soft' : 'rs-steady';
+    } else rs.textContent = '—';
+  }
   rifleMesh.userData.setAmmoDigits?.(weapon.mag);
   const src = player.dead ? null : player.ammoSource();
   const hint = el('hint');

@@ -129,6 +129,57 @@ export class GameAudio {
       const env = Math.min(1, t * 8) * Math.exp(-t * 4);
       return (Math.sin(t * 2 * Math.PI * (34 - t * 8)) * 0.6 + rnd() * 0.12) * env;
     });
+    // far firefight: an irregular burst of dull thumps — rifle fire heard
+    // through decks of steel. Played through playFar's lowpass so distance
+    // and bulkheads do the muffling.
+    this.buffers.farFight = mk(1.5, (t) => {
+      // 6 thumps at irregular offsets baked into the buffer
+      const offs = [0.02, 0.14, 0.23, 0.55, 0.66, 1.02];
+      let v = 0;
+      for (const o of offs) {
+        const dt = t - o;
+        if (dt >= 0 && dt < 0.16) {
+          v += Math.sin(dt * 2 * Math.PI * (120 - dt * 180)) * Math.exp(-dt * 34)
+            + (rnd() - 0.5) * 0.5 * Math.exp(-dt * 50);
+        }
+      }
+      return v * 0.7;
+    });
+  }
+
+  // Far one-shot heard THROUGH the ship: bearing-panned like play(), but no
+  // 48m cutoff — instead a lowpass does the physical muffling, closing down
+  // with every deck of steel in the way. (user: distant fights should be
+  // hearable and trackable even when no radio report gets through)
+  playFar(name, at, deckDelta, vol = 1, key = null, minGapMs = 2500) {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const buf = this.buffers[name];
+    if (!buf) return;
+    const now = performance.now();
+    if (key) {
+      if (now - (this.lastPlay[key] ?? 0) < minGapMs) return;
+      this.lastPlay[key] = now;
+    }
+    const dx = at.x - this.listener.x, dz = at.z - this.listener.z;
+    const d = Math.hypot(dx, dz);
+    const gain = clamp(vol / (1 + d / 30 + deckDelta * 0.7), 0, 0.5);
+    if (gain < 0.02) return;
+    const rightX = Math.cos(this.listener.yaw), rightZ = -Math.sin(this.listener.yaw);
+    const pan = d > 0.5 ? clamp((dx * rightX + dz * rightZ) / d, -1, 1) * 0.6 : 0;
+    if (!Number.isFinite(gain) || !Number.isFinite(pan)) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = 0.9 + ((now * 7919) % 100) / 500;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = deckDelta === 0 ? 900 : deckDelta === 1 ? 380 : 220;
+    lp.Q.value = 0.5;
+    const g = this.ctx.createGain();
+    g.gain.value = gain;
+    const p = this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : null;
+    if (p) { src.connect(lp).connect(g).connect(p).connect(this.master); p.pan.value = pan; }
+    else src.connect(lp).connect(g).connect(this.master);
+    src.start();
   }
 
   // continuous ship-tone bed: engine drone + air handlers. Subtle — it exists

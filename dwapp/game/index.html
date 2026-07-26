@@ -49,6 +49,11 @@
   #nameplate.np-crew { color: #a8c6ea; }
   #nameplate.np-flood { color: #e06a55; }
   #nameplate.np-corpse { color: #8a8f96; }
+  #roomState { margin-top: 3px; font-size: 11.5px; letter-spacing: 0.08em; text-align: right; }
+  #roomState.rs-steady { color: #7fd08a; }
+  #roomState.rs-soft { color: #d8c86a; }
+  #roomState.rs-harsh { color: #e09a4a; }
+  #roomState.rs-dead { color: #e06a55; }
   #overlay {
     position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 14px;
@@ -179,6 +184,7 @@
     <div id="hpText">50 | 45</div>
     <div id="deckLabel">DECK —</div>
     <div id="ammo">60 / 240</div>
+    <div id="roomState">—</div>
   </div>
   <div class="hud" id="crosshair"></div>
   <div id="nameplate"></div>
