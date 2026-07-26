@@ -10,17 +10,26 @@
 
 import * as THREE from './vendor/three.webgpu.module.js';
 
-// Boot a WebGPU renderer (automatic WebGL2 fallback; `forceWebGL` pins the
-// fallback for A/B testing). MSAA off by design: FTL's post chain (see
-// engine/post.js) does FXAA in the final grade, so canvas MSAA is pure
-// waste against a 5-pass HDR pipeline. Tone mapping is OFF at the renderer
-// — the scene renders LINEAR into a half-float target and the grade pass
+// Boot a WebGPU renderer. WEBGPU IS REQUIRED for the product path (user
+// call: support is universal in evergreen browsers now — no silent
+// degraded WebGL2 experience). The WebGL2 backend survives ONLY as a
+// dev/testing escape hatch behind `forceWebGL` (`?gl=1` in hosts): the
+// TSL materials compile to GLSL for free, and headless CI containers
+// cannot run WebGPU, so the entire screenshot/validation harness rides
+// this flag. MSAA off by design: FTL's post chain (see engine/post.js)
+// does FXAA in the final grade. Tone mapping is OFF at the renderer —
+// the scene renders LINEAR into a half-float target and the grade pass
 // applies ACES + exposure.
+// Throws Error('webgpu-required') when WebGPU is unavailable and
+// forceWebGL wasn't explicitly requested — hosts catch it and show their
+// "needs WebGPU" screen.
 export async function createRenderer({ canvas, forceWebGL = false, pixelRatioCap = 1.25 }) {
+  if (!forceWebGL && !navigator.gpu) throw new Error('webgpu-required');
   const renderer = new THREE.WebGPURenderer({
     canvas, antialias: false, powerPreference: 'high-performance', forceWebGL,
   });
   await renderer.init();
+  if (!forceWebGL && !renderer.backend.isWebGPUBackend) throw new Error('webgpu-required');
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioCap));
   renderer.info.autoReset = false; // hosts accumulate per-frame across post passes
   renderer.toneMapping = THREE.NoToneMapping;
@@ -29,26 +38,23 @@ export async function createRenderer({ canvas, forceWebGL = false, pixelRatioCap
   return renderer;
 }
 
-// Either backend can lose its device mid-run — WebGPU by spec at any time,
-// WebGL2 by context loss (which the node renderer routes here too). Rather
-// than a frozen black canvas: a WebGPU loss reloads once onto the WebGL2
-// fallback (`?gl=1`); a WebGL2 loss reloads in place, capped by a session
-// counter so a hopeless driver doesn't reload-loop. `params` are written
-// onto the reload URL so the host can reboot into the same state (seed).
-export function installDeviceLostReload(renderer, { label = 'ftl', storageKey = 'ftl-gl-lost', params = {} } = {}) {
+// The device can be lost mid-run — WebGPU by spec at any time, WebGL2 (dev
+// flag) by context loss. Rather than a frozen black canvas: reload in
+// place, capped by a session counter so a hopeless driver doesn't
+// reload-loop. There is deliberately NO downgrade onto WebGL2 anymore
+// (user call: WebGPU is the product path — a broken WebGPU stack should
+// surface, not silently degrade). `params` are written onto the reload
+// URL so the host can reboot into the same state (seed).
+export function installDeviceLostReload(renderer, { label = 'ftl', storageKey = 'ftl-lost', params = {} } = {}) {
   let handled = false;
   renderer.onDeviceLost = (info) => {
     if (handled || info?.reason === 'destroyed') return;
     handled = true;
     console.error(`[${label}] render device lost:`, info?.message ?? info);
+    const n = +(sessionStorage.getItem(storageKey) ?? 0);
+    if (n >= 2) return; // twice is a pattern — stop reloading into it
+    sessionStorage.setItem(storageKey, String(n + 1));
     const u = new URL(location.href);
-    if (renderer.backend.isWebGPUBackend) {
-      u.searchParams.set('gl', '1');
-    } else {
-      const n = +(sessionStorage.getItem(storageKey) ?? 0);
-      if (n >= 2) return; // twice is a pattern — stop reloading into it
-      sessionStorage.setItem(storageKey, String(n + 1));
-    }
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
     location.replace(u);
   };

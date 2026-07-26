@@ -39,12 +39,30 @@ const QTIER = QP.get('q');
 // process sits on the integrated GPU. Falls back to WebGL2 automatically
 // (same node/TSL materials compile to GLSL there); ?gl=1 forces the
 // fallback for A/B testing.
-// Boot through the FTL engine runtime (engine/runtime.js): WebGPU with
-// automatic WebGL2 fallback, MSAA off (the post chain's FXAA handles
-// edges), linear HDR (ACES in the grade pass), PCFSoft shadows.
-const renderer = await createRenderer({
-  canvas, forceWebGL: QP.has('gl'), pixelRatioCap: HD ? 2 : 1.25,
-});
+// Boot through the FTL engine runtime (engine/runtime.js). WEBGPU IS
+// REQUIRED (user call: evergreen support is universal now) — no silent
+// WebGL2 product path. ?gl=1 remains as a dev/testing flag only (the
+// headless validation harness rides it; TSL compiles to GLSL for free).
+let renderer;
+try {
+  renderer = await createRenderer({
+    canvas, forceWebGL: QP.has('gl'), pixelRatioCap: HD ? 2 : 1.25,
+  });
+} catch (err) {
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;inset:0;z-index:99;display:flex;flex-direction:column;'
+    + 'align-items:center;justify-content:center;gap:12px;background:#05070a;color:#cfe0ff;'
+    + 'font-family:monospace;text-align:center;padding:24px';
+  div.innerHTML = err?.message === 'webgpu-required'
+    ? '<b style="font-size:20px;letter-spacing:0.2em">WEBGPU REQUIRED</b>'
+      + '<span style="color:#8ea0b8;max-width:44em">HALO CHARON renders through WebGPU. '
+      + 'Every current Chrome, Edge, Safari and Firefox supports it — update your browser, '
+      + 'or check that hardware acceleration is enabled.</span>'
+    : '<b style="font-size:20px;letter-spacing:0.2em">RENDERER OFFLINE</b>'
+      + `<span style="color:#8ea0b8;max-width:44em">${String(err?.message ?? err)}</span>`;
+  document.body.appendChild(div);
+  throw err;
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070a);

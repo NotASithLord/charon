@@ -1,7 +1,9 @@
 # FTL Engine
 
 A reusable browser FPS engine, extracted from the *Halo Charon* project.
-WebGPU-first (three.js node/TSL materials, automatic WebGL2 fallback),
+WebGPU-required (three.js node/TSL materials; a WebGL2 backend survives
+only behind the `forceWebGL` dev flag — headless CI containers cannot run
+WebGPU, so the screenshot/validation harness rides `?gl=1`),
 built for moody interior shooters that must run well on integrated
 laptop GPUs and package as a single self-contained file.
 
@@ -13,7 +15,7 @@ through constructor options and callbacks.
 
 | Module | What it is |
 | --- | --- |
-| `runtime.js` | The shell: `createRenderer` (WebGPU boot, WebGL2 fallback, linear-HDR + PCFSoft defaults), `installDeviceLostReload` (device-loss recovery with backend downgrade), `QualityGovernor` (rung ladder + per-rung effects callback + whole-frame pixel budget + prewarm with force-warm/restore), `TickScheduler` (fixed-step sim ticks in MessageChannel macrotasks, off the rAF path). |
+| `runtime.js` | The shell: `createRenderer` (WebGPU boot — throws `webgpu-required` when unavailable so hosts show their own gate screen; WebGL2 exists only behind the `forceWebGL` dev flag; linear-HDR + PCFSoft defaults), `installDeviceLostReload` (reload-in-place recovery with a session cap — no backend downgrade), `QualityGovernor` (rung ladder + per-rung effects callback + whole-frame pixel budget + prewarm with force-warm/restore), `TickScheduler` (fixed-step sim ticks in MessageChannel macrotasks, off the rAF path — see `tick.js`). |
 | `post.js` | HDR post pipeline on the TSL node system: scene pass → bloom (patched `BloomNode`, mip-count parameterized) → grade (chromatic aberration, Narkowicz ACES, vignette, midtone grain, manual sRGB) → compact FXAA. One `PostFX` class; `setBloomScale`, `exposure`, `setSize`. |
 | `lights.js` | `LightPool` — a fixed pool of point lights serving unlimited *virtual* light declarations per frame (brightest-and-nearest win). Constant light count = bounded fragment cost and zero shader recompiles. Zero per-frame garbage. |
 | `fx.js` | Instanced-billboard particle FX (fire with TSL shader flames, sparks, blood decals with a ring buffer and canvas-baked smears). Camera-billboarded quads — the node renderer draws `THREE.Points` at 1px, so never use Points. |
