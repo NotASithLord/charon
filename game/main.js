@@ -6,7 +6,7 @@
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
 import { hurtFloodForm } from '../sim/combat.js';
-import { World, elevOf } from './world.js';
+import { World, elevOf, DOOR_W } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
@@ -1775,7 +1775,16 @@ function playerObstacles() {
   // pack up at doors before pushing) must not wall the player out of the
   // room (user: "marines stop at a door and block me, just stuck"). You
   // shoulder through people in a doorway; everywhere else they still block.
-  const deckDoors = (_doorsOnDeck[player.deck] ??= world.doors.filter((d) => d.deck === player.deck));
+  // ORIENTED THROAT (user: blocked out of Cargo Hold 2 by a body parked in
+  // the doorway). The old test was a 1.3 m sphere on the door's centre point,
+  // which is wrong in both directions: it missed a body standing in the far
+  // half of a deep throat — still squarely in your way — while freeing anyone
+  // loitering BESIDE the door, where they should block you normally. Test the
+  // actual opening instead: within the door's width across, and a throat's
+  // depth through it.
+  const deckDoors = (_doorsOnDeck[player.deck] ??= world.doors.filter((d) => d.deck === player.deck)
+    .map((d) => ({ x: d.x, z: d.z, c: Math.cos(d.phi), s: Math.sin(d.phi) })));
+  const THROAT_HALF_W = DOOR_W / 2 + 0.35, THROAT_DEPTH = 1.7;
   let n = 0;
   for (const a of sim.agents) {
     if (a.dead || a.isPlayer || a.deck !== player.deck) continue;
@@ -1785,7 +1794,9 @@ function playerObstacles() {
     for (let di = 0; di < deckDoors.length; di++) {
       const d = deckDoors[di];
       const ddx = wx - d.x, ddz = wz - d.z;
-      if (ddx * ddx + ddz * ddz < 1.69) { inThroat = true; break; } // 1.3m of a door line
+      const lx = ddx * d.c + ddz * d.s;      // across the opening
+      const lz = -ddx * d.s + ddz * d.c;     // through it
+      if (lx > -THROAT_HALF_W && lx < THROAT_HALF_W && lz > -THROAT_DEPTH && lz < THROAT_DEPTH) { inThroat = true; break; }
     }
     if (inThroat) continue;
     const r = _obstacleRecs[n] ?? (_obstacleRecs[n] = { id: 0, x: 0, y: 0, z: 0, radius: 0.4, half: 0.5 });

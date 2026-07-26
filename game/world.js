@@ -1590,11 +1590,36 @@ export class World {
     // every vent opening is an emerge point — including ones that parallel a
     // doorway (the door IS the opening there; no grate mesh, but a crawler
     // still surfaces at that spot)
+    // CLEAR OF THE THROAT (user: "the vent is right at the door entrance,
+    // which should not be the case"). A vent that parallels a doorway has no
+    // grate — the door IS its opening — but surfacing a crawler exactly on the
+    // door point parks bodies in the one gap the player has to walk through.
+    // Step the emerge point off the door, into the room, so they climb out
+    // BESIDE the doorway instead of standing in it.
+    const CLEAR = 2.1;
     for (const v of g.vents) {
       const a0 = g.node(v.a), b0 = g.node(v.b);
       for (const [n, pt] of [[a0, v.doorA], [b0, v.doorB]]) {
         const d = pt ?? v.door;
-        if (d) this._addMouth(n.idx, d.x, d.y);
+        if (!d) continue;
+        // Walk the emerge point toward the room's centre until it is clear of
+        // EVERY doorway on the deck. Stepping toward the centre (rather than
+        // away from the door) can't push a body through a bulkhead, and it
+        // handles the common case the topological test misses: a vent whose
+        // mouth happens to land on some OTHER pair's door.
+        let mx = d.x, my = d.y;
+        const cx = n.x - mx, cy2 = n.y - my;
+        const clen = Math.hypot(cx, cy2);
+        if (clen > 1e-3) {
+          const ux = cx / clen, uy = cy2 / clen;
+          for (let step = 0; step < 8; step++) {
+            const [gx, gz] = this.simToWorld(mx, my, n.deck);
+            if (!doorPts.some((p) => p.deck === n.deck && Math.hypot(p.x - gx, p.z - gz) < CLEAR)) break;
+            if (Math.hypot(mx + ux * 0.7 - n.x, my + uy * 0.7 - n.y) > clen) break; // don't overshoot the centre
+            mx += ux * 0.7; my += uy * 0.7;
+          }
+        }
+        this._addMouth(n.idx, mx, my);
       }
     }
     for (const v of g.vents) {
