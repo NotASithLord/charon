@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HALO CHARON // SANDBOX</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #05070a; overflow: hidden;
+         font: 12px/1.5 "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; color: #9fb3c8; }
+  /* width/height are REQUIRED, not just inset: a canvas is a replaced element,
+     so width:auto resolves to its (device-pixel) drawing-buffer size rather
+     than stretching to the inset box — without these the view is anchored
+     top-left at 2x and most of the frame hangs off-screen. */
+  canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%;
+           touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #panel { position: fixed; top: 10px; left: 10px; width: 232px; max-height: calc(100vh - 20px);
+           overflow-y: auto; background: rgba(8,12,18,.88); border: 1px solid #22303f;
+           border-radius: 7px; padding: 10px; backdrop-filter: blur(6px); }
+  h2 { font-size: 10px; letter-spacing: 1.4px; color: #61748a; font-weight: 600;
+       margin: 11px 0 5px; text-transform: uppercase; }
+  h2:first-child { margin-top: 0; }
+  button { font: inherit; color: #c8d8e8; background: #131c26; border: 1px solid #27394b;
+           border-radius: 4px; padding: 3px 7px; margin: 0 3px 3px 0; cursor: pointer; }
+  button:hover { background: #1c2938; border-color: #3d6a9c; }
+  button.on { background: #234; border-color: #7fd1a0; color: #bff0d4; }
+  #list button { display: block; width: 100%; text-align: left; }
+  #list i { color: #4a5867; }
+  input[type=range] { width: 100%; accent-color: #7fd1a0; }
+  #hud { position: fixed; bottom: 10px; left: 10px; color: #61748a; }
+  #help { color: #4a5867; margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel">
+  <h2>spawn</h2>
+  <div id="spawns"></div>
+  <h2>in the room</h2>
+  <div id="list"></div>
+  <div id="carrierRow" style="display:none">
+    <h2>carrier load · <span id="heldOut"></span></h2>
+    <input id="held" type="range" min="0" max="8" step="1">
+    <button id="pop">rupture it</button>
+  </div>
+  <h2>force clip</h2>
+  <div id="clips"></div>
+  <h2>scene</h2>
+  <button id="pause">run sim</button>
+  <button id="step">step</button>
+  <button id="lights">ship lighting</button>
+  <button id="clear">clear room</button>
+  <div id="help">drag to orbit · wheel to zoom<br>?room=&lt;id&gt; ?dark=1 ?gl=1</div>
+</div>
+<div id="hud"></div>
+<script type="module" src="./sandbox.js"></script>
+</body>
+</html>

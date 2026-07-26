@@ -13,6 +13,17 @@ Blackandfan H3EK-Tags repository (github.com/Blackandfan/H3EK-Tags), under
 the same Microsoft Game Content Usage Rules for non-commercial fan
 creations.
 
+The Flood carrier mesh, textures (../characters/floodcarrier.jpg,
+floodcarrier_emissive.jpg) and the skin/animation data in
+../../carrier-data.js were converted by scripts/convert-carrier.mjs from
+"Enemies>Halo 3>The Flood>Carrier" by jameslucino117 on Sketchfab
+(sketchfab.com/3d-models/enemieshalo-3the-floodcarrier-4050784d47c64ddda37828ddcf600e28),
+licensed CC-BY-4.0 (creativecommons.org/licenses/by/4.0/). CC-BY REQUIRES
+THAT ATTRIBUTION TRAVEL WITH THE WORK: keep this credit, and the one in
+carrier-data.js's header, in any build that ships these files. The
+underlying Halo character design remains Microsoft's, under the same Game
+Content Usage Rules as everything above.
+
 Halo (c) Microsoft Corporation. This project is a free, strictly
 non-commercial fan project, not endorsed by or affiliated with Microsoft.
 If this project ever moves toward anything commercial, these files must be
