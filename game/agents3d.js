@@ -30,6 +30,11 @@ const CAST_NEAR2 = 34 * 34;
 // without updateRanges)
 function commitInstanced(mesh, count) {
   mesh.count = count;
+  // EMPTY SETS LEAVE THE RENDER LIST (swarm finding: a count-0 InstancedMesh
+  // still paid bindings processing and a full uniform upload per pass per
+  // frame — and most of the 57 character part-meshes are empty most frames).
+  // Firefox's wgpu pays the most per redundant binding; every backend wins.
+  mesh.visible = count > 0;
   const im = mesh.instanceMatrix;
   if (im.clearUpdateRanges) {
     im.clearUpdateRanges();
@@ -826,7 +831,15 @@ export class Agents3D {
       seg++;
     }
     this.tracers.geometry.setDrawRange(0, seg * 2);
-    pos.needsUpdate = true;
+    // upload only the live segments; zero segments = no upload, no draw
+    // (swarm finding: both tracer buffers uploaded whole every frame even
+    // with nothing firing anywhere on the ship)
+    this.tracers.visible = seg > 0;
+    if (pos.clearUpdateRanges) {
+      pos.clearUpdateRanges();
+      if (seg > 0) pos.addUpdateRange(0, seg * 2 * 3);
+    }
+    pos.needsUpdate = seg > 0;
 
     // flood gunfire (user note: armed forms should be VISIBLY shooting) —
     // hostArmed combat forms firing their stolen rifles at humans in the room
@@ -875,7 +888,12 @@ export class Agents3D {
       }
     }
     this.floodTracers.geometry.setDrawRange(0, fseg * 2);
-    fpos.needsUpdate = true;
+    this.floodTracers.visible = fseg > 0;
+    if (fpos.clearUpdateRanges) {
+      fpos.clearUpdateRanges();
+      if (fseg > 0) fpos.addUpdateRange(0, fseg * 2 * 3);
+    }
+    fpos.needsUpdate = fseg > 0;
     commitInstanced(this.floodFlash, counts.floodFlash);
 
     // PARTIAL UPLOADS (perf pass 2): ~35 instanced meshes used to re-upload

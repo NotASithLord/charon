@@ -326,11 +326,11 @@ agents.rifle.castShadow = true;
 // stepping down mid-fight costs a uniform change, not a shader storm.
 // ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
 const RUNGS = [
-  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 10, bloom: 0.5, motes: 36 },
-  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 10, bloom: 0.5, motes: 36 },
-  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 8, bloom: 0.375, motes: 24 },
-  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24 },
-  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12 },
+  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 10, bloom: 0.5, motes: 36, rag: 48 },
+  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 10, bloom: 0.5, motes: 36, rag: 48 },
+  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 8, bloom: 0.375, motes: 24, rag: 32 },
+  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24, rag: 24 },
+  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12, rag: 16 },
 ];
 // whole-frame pixel budget: huge windows can't buy retina supersampling on
 // an integrated GPU — the cap yields before the budget does (HD opts out)
@@ -355,6 +355,10 @@ const governor = new QualityGovernor({
     lightPool.setActive(R.lights);
     post.setBloomScale(R.bloom);
     motes.setCount(R.motes);
+    // CPU lever (swarm finding: the ladder shed only GPU cost): fewer live
+    // ragdoll solvers on the low rungs — the cap gates new flops, extras
+    // evict oldest-asleep exactly as at the full cap
+    if (agents.ragdolls) agents.ragdolls.p.maxActive = R.rag ?? 48;
   },
   onResize: (w, h) => post.setSize(w, h),
 });

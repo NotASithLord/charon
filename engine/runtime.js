@@ -26,7 +26,11 @@ import * as THREE from './vendor/three.webgpu.module.js';
 export async function createRenderer({ canvas, forceWebGL = false, pixelRatioCap = 1.25 }) {
   const boot = async (gl) => {
     const renderer = new THREE.WebGPURenderer({
-      canvas, antialias: false, powerPreference: 'high-performance', forceWebGL: gl,
+      // alpha:false configures the WebGPU canvas 'opaque' (swarm finding:
+      // the default 'premultiplied' makes Firefox composite the full-window
+      // canvas WITH blending every frame — pure waste over a black page)
+      canvas, antialias: false, alpha: false,
+      powerPreference: 'high-performance', forceWebGL: gl,
     });
     await renderer.init();
     return renderer;
@@ -121,20 +125,38 @@ export class QualityGovernor {
     this.prewarming = true;
     const start = this.rung;
     const seq = order ?? [2, 3, this.rungs.length - 1, start];
+    // WATCHDOG (swarm finding, live incident): Firefox's wgpu can grind a
+    // compileAsync for minutes (the backend yields one rAF per object at
+    // whatever the frame rate is) or stall a pipeline promise outright — and
+    // the vendored wrapper only ever RESOLVES, so the catch below can never
+    // fire on a stall. Un-deadlined, `prewarming` latched true forever and
+    // the descend ladder below was dead code: the game sat at rung 0 at 20
+    // FPS. Each rung now races a generous deadline; on timeout we abandon
+    // the wait (the compile keeps filling the pipeline cache in the
+    // background — pipelines lazy-compile mid-game exactly as pre-prewarm),
+    // and `prewarming` ALWAYS clears in the finally.
+    const DEADLINE_MS = 18000;
     try {
       const restore = forceWarm ? forceWarm(scene) : null;
       try {
         for (const i of seq) {
           this.applyRung(i);
-          await this.renderer.compileAsync(scene, camera);
+          const timedOut = await Promise.race([
+            this.renderer.compileAsync(scene, camera).then(() => false),
+            new Promise((r) => setTimeout(() => r(true), DEADLINE_MS)),
+          ]);
+          if (timedOut) {
+            console.warn(`[${this.label}] prewarm rung ${i} compile exceeded ${DEADLINE_MS}ms — unblocking the quality ladder (slow shader compiles; pipelines will finish warming in the background)`);
+            break;
+          }
         }
       } finally {
         restore?.();
       }
-    } catch {
+    } catch { /* fall through to the finally — the ladder must never stay latched */ } finally {
       this.applyRung(start);
+      this.prewarming = false;
     }
-    this.prewarming = false;
   }
 
   // Call once per frame with the real frame delta; walks resolution and
@@ -143,6 +165,11 @@ export class QualityGovernor {
     this._ema = this._ema * 0.94 + Math.min(50, dtRealSec * 1000) * 0.06;
     if (now - this._evalAt <= 3000) return;
     this._evalAt = now;
+    // NOTHING moves while pinned or prewarming (swarm finding: the walk used
+    // to run on prewarm's TRANSIENT rungs — it read rung 3's 0.60 floor
+    // mid-compile-grind and stranded pixel ratio below rung 0's 0.85 floor
+    // forever once prewarm restored the start rung)
+    if (this.pinned || this.prewarming) return;
     const R = this.rungs[this.rung];
     const cur = this.renderer.getPixelRatio();
     const floor = R.res[0];
@@ -151,19 +178,23 @@ export class QualityGovernor {
     let next = cur;
     if (this._ema > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
     else if (this._ema < 13 && cur < cap) next = Math.min(cap, cur + 0.1);
+    else if (cur < floor - 0.01) next = floor; // self-heal: never sit stranded below the active rung's floor
     if (Math.abs(next - cur) > 0.01) {
       this.renderer.setPixelRatio(next);
       this.renderer.setSize(viewportW, viewportH, false);
       this.onResize?.(viewportW, viewportH);
     }
-    if (this.pinned || this.prewarming) return;
-    // descend: pinned at the floor and still under ~42fps, twice running
-    if (this._ema > 24 && cur <= floor + 0.01 && this.rung < this.rungs.length - 1) {
-      if (++this._slow >= 2) {
+    // descend: pinned at the floor and still under ~42fps, twice running —
+    // or CATASTROPHICALLY slow (~<25fps), where waiting out the resolution
+    // walk first costs 12+ seconds of slideshow (swarm finding): drop a rung
+    // immediately per evaluation until the machine breathes
+    const catastrophic = this._ema > 40 && this.rung < this.rungs.length - 1;
+    if (catastrophic || (this._ema > 24 && cur <= floor + 0.01 && this.rung < this.rungs.length - 1)) {
+      if (catastrophic || ++this._slow >= 2) {
         this.applyRung(this.rung + 1);
         this._slow = 0;
         this._movedAt = now;
-        console.info(`[${this.label}] quality rung -> ${this.rung} (frame ${this._ema.toFixed(1)}ms)`);
+        console.info(`[${this.label}] quality rung -> ${this.rung} (frame ${this._ema.toFixed(1)}ms${catastrophic ? ', fast descent' : ''})`);
       }
     } else this._slow = 0;
     // ascend: locked-vsync smooth at full rung resolution for a long
