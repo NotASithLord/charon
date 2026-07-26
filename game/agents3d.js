@@ -8,6 +8,7 @@ import { FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
 import { carryGeometry } from './rifle-model.js';
 import { characterParts } from './characters.js';
+import { buildCarrier, CarrierAnimator, SACK_BLOAT_M } from './carrier-model.js';
 import { RagdollSystem } from '../engine/physics/ragdoll.js';
 import { TASK } from '../sim/hive.js';
 import { sightRangeAt } from '../sim/combat.js';
@@ -23,66 +24,6 @@ function shotJitter(id, tick, salt) {
 // 32m — an instance beyond ~34m of the eye can't cast into the beam, so a
 // part-set with no stamped instance that close skips the depth pass entirely
 const CAST_NEAR2 = 34 * 34;
-
-// CARRIER FORM (user note: "not a blob"): no source mesh exists in the tag
-// dump, so this is a sculpted procedural body — a lumpy two-lobed gas sack
-// on stubby legs with dorsal feeler stalks, merged into ONE geometry so the
-// instanced swell-scaling still works. Feet at y=0.
-function carrierGeometry() {
-  const parts = [];
-  const lumpy = (geo, amp, squashY = 1) => {
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-      const n = 1 + amp * Math.sin(x * 7.1 + 1.3) * Math.sin(y * 6.3 + 0.7) * Math.sin(z * 5.7 + 2.1);
-      pos.setXYZ(i, x * n, y * n * squashY, z * n);
-    }
-    geo.computeVertexNormals();
-    return geo;
-  };
-  const sack = lumpy(new THREE.SphereGeometry(0.72, 14, 11), 0.17, 0.94);
-  sack.translate(0, 1.0, 0);
-  parts.push(sack);
-  const lobe = lumpy(new THREE.SphereGeometry(0.4, 10, 8), 0.2);
-  lobe.translate(0.42, 1.42, 0.08);
-  parts.push(lobe);
-  const belly = lumpy(new THREE.SphereGeometry(0.34, 9, 7), 0.22);
-  belly.translate(-0.35, 0.72, -0.18);
-  parts.push(belly);
-  for (const [lx, lz, tilt] of [[0.4, 0.32, 0.35], [0.42, -0.3, -0.3], [-0.38, 0.34, 0.3], [-0.4, -0.32, -0.35]]) {
-    const leg = new THREE.ConeGeometry(0.15, 0.85, 6);
-    leg.rotateX(Math.PI);           // taper to the deck
-    leg.rotateZ(tilt * 0.5);
-    leg.translate(lx, 0.42, lz);
-    parts.push(leg);
-  }
-  for (let k = 0; k < 4; k++) {
-    const st = new THREE.ConeGeometry(0.05, 0.45 + (k % 2) * 0.2, 5);
-    st.rotateZ((k - 1.5) * 0.25);
-    st.translate(-0.3 + k * 0.2, 1.85, k % 2 ? 0.17 : -0.14);
-    parts.push(st);
-  }
-  let vCount = 0, iCount = 0;
-  for (const g of parts) { vCount += g.attributes.position.count; iCount += g.index.count; }
-  const pos = new Float32Array(vCount * 3), nrm = new Float32Array(vCount * 3), uv = new Float32Array(vCount * 2);
-  const idx = new Uint32Array(iCount);
-  let vo = 0, io = 0;
-  for (const g of parts) {
-    pos.set(g.attributes.position.array, vo * 3);
-    nrm.set(g.attributes.normal.array, vo * 3);
-    uv.set(g.attributes.uv.array, vo * 2);
-    const gi = g.index.array;
-    for (let k = 0; k < gi.length; k++) idx[io + k] = gi[k] + vo;
-    vo += g.attributes.position.count;
-    io += gi.length;
-  }
-  const merged = new THREE.BufferGeometry();
-  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-  merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  merged.setIndex(new THREE.BufferAttribute(idx, 1));
-  return merged;
-}
 
 // commit an instanced mesh's frame: draw `count` instances and upload ONLY
 // that range of the matrix buffer (falls back to a full upload on builds
@@ -157,7 +98,20 @@ export class Agents3D {
     this.infectionSet = mkSet('infection');
     this.combatCivSet = mkSet('combat_civ');
     this.combatOdstSet = mkSet('combat_odst');
-    this.carrier = makeInstanced(scene, carrierGeometry(), 0x8a9a58, 0x46521e, 0.55);
+    // REAL CARRIER MESH: the Halo 3 carrier, GPU-skinned per instance from a
+    // baked bone bank (game/carrier-model.js). Replaces the sculpted gas-sack
+    // primitive — it has an actual skeleton, so its states are animation
+    // rather than scale: rooted and breathing while it incubates, a lumbering
+    // waddle, a strain cycle when the skin is nearly full, and a collapse it
+    // ruptures out of.
+    const carrier = buildCarrier(CAP);
+    this.carrier = carrier.mesh;
+    this.carrierAnim = carrier.anim;
+    this._commitCarrierAnim = carrier.commitAnim;
+    scene.add(this.carrier);
+    this._carrierAnims = new Map();   // agent id -> CarrierAnimator
+    this._carrierLast = new Map();    // agent id -> last drawn [x, y, z, heading, load]
+    this._bursting = [];              // carriers mid-detonation, render-only
     this.corpse = makeInstanced(scene, new THREE.BoxGeometry(1.5, 0.28, 0.55), 0x5a5a5a);
     // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
     // call for every carried rifle on the ship (marines, armed crew, armed
@@ -741,10 +695,22 @@ export class Agents3D {
         }
         case FACTION.CARRIER: {
           const held = sim.byId.get(id)?.held ?? 0;
-          const cap = sim.P.carrier.maxInfectionForms;
-          const s = 0.8 + (held / cap) * 0.7 + (held / cap > 0.6 ? Math.sin(sim.t * 5) * 0.04 : 0);
-          // the sculpted body has its feet at y=0 — swell grows it upward
-          this._pose(wx, elev, wz, heading, s, s, s);
+          const load = Math.min(1, held / sim.P.carrier.maxInfectionForms);
+          let anim = this._carrierAnims.get(id);
+          if (!anim) this._carrierAnims.set(id, anim = new CarrierAnimator(id));
+          // CLIP FROM SIM STATE: a carrier past the seek threshold is fit to
+          // burst, so it strains wherever it is — rooted it convulses in
+          // place, moving it hurries. Below that it incubates and waddles.
+          const ripe = load >= sim.P.carrier.seekOrExplodeFraction;
+          const moving = clip === CLIP.WALK || clip === CLIP.RUN;
+          anim.play(moving ? (ripe ? 'run' : 'walk') : (ripe ? 'strain' : 'idle'));
+          anim.advance(dt);
+          // the load reads as the SACK filling, not as a bigger animal — the
+          // old primitive scaled the whole body 0.8x to 1.5x and grew its feet
+          anim.write(this.carrierAnim, counts.carrier, load * SACK_BLOAT_M);
+          const s = 0.94 + load * 0.1;
+          this._pose(wx, elev, wz, heading, s, s, s, flinch);
+          this._carrierLast.set(id, [wx, elev, wz, heading, load]);
           if (this._curD2 < CAST_NEAR2) this._castNear.add(this.carrier);
           this.carrier.setMatrixAt(counts.carrier++, this._m);
           break;
@@ -759,6 +725,45 @@ export class Agents3D {
       for (const id of this._ragSeen) {
         if (!seen.has(id)) { this.ragdolls.remove(id); this._ragSeen.delete(id); this._ragRest.delete(id); }
       }
+    }
+
+    // DETONATION, RENDER-ONLY. explodeCarrier() kills the agent and spawns the
+    // spilled infection forms in the same tick, so a rupturing carrier is
+    // simply gone from the buffer the next frame — there is no dying body to
+    // animate. A carrier only ever leaves the buffer by rupturing (the sim has
+    // no other exit for one), so a vanished id IS a detonation: keep drawing
+    // it where it stood for the length of the collapse clip, with the sack
+    // running away with itself into the burst.
+    for (const [id, anim] of this._carrierAnims) {
+      if (seen.has(id)) continue;
+      const at = this._carrierLast.get(id);
+      this._carrierAnims.delete(id);
+      this._carrierLast.delete(id);
+      if (!at) continue;
+      anim.play('detonate', 0.1);
+      this._bursting.push({ anim, at });
+    }
+    for (let b = this._bursting.length - 1; b >= 0; b--) {
+      const burst = this._bursting[b];
+      burst.anim.advance(dt);
+      if (burst.anim.finished || counts.carrier >= CAP) { this._bursting.splice(b, 1); continue; }
+      const [bx, by, bz, bh, load] = burst.at;
+      // same visibility rules the live bodies get: fully-fogged at 62m, and
+      // its OWN distance decides shadow casting (_curD2 still holds whatever
+      // the last agent in the loop above measured)
+      let d2 = 0;
+      if (this.viewX !== undefined) {
+        const vdx = bx - this.viewX, vdz = bz - this.viewZ;
+        d2 = vdx * vdx + vdz * vdz;
+        if (d2 > 62 * 62) continue;
+      }
+      const p = burst.anim.progress;
+      burst.anim.write(this.carrierAnim, counts.carrier,
+        SACK_BLOAT_M * (Math.max(load, 0.7) + p * p * 1.9));
+      const s = 0.94 + load * 0.1 + p * 0.12;
+      this._pose(bx, by, bz, bh, s, s, s);
+      if (d2 < CAST_NEAR2) this._castNear.add(this.carrier);
+      this.carrier.setMatrixAt(counts.carrier++, this._m);
     }
 
     // tracers + muzzle flashes from live fights
@@ -894,6 +899,7 @@ export class Agents3D {
     [this.beams, counts.beam]]) {
       commitInstanced(mesh, c);
     }
+    this._commitCarrierAnim(counts.carrier);   // per-instance clip/phase/swell
   }
 
   _pose(x, y, z, rotY, sx, sy, sz, rx = 0) {

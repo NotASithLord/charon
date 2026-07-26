@@ -1,0 +1,89 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>carrier rig</title>
+<style>
+  body{margin:0;background:#111;font:12px/1.4 Menlo,monospace;color:#9fb3c8}
+  #labels{position:fixed;top:8px;left:8px}
+  #labels b{color:#cfe0ff}
+</style></head>
+<body>
+<canvas id="c" width="1400" height="700"></canvas>
+<div id="labels"></div>
+<script type="module">
+// Rig check for the instanced-skinned carrier. Draws one carrier per clip out
+// of the SAME InstancedMesh the game uses, so this exercises the real path:
+// bone-texture lookup, per-instance clip/phase, crossfade, sack bloat.
+//   ?gl=1   force the WebGL2 fallback backend
+//   ?spin=0 stop the turntable
+import * as THREE from './../engine/vendor/three.webgpu.module.js';
+import { buildCarrier, CarrierAnimator, CARRIER_CLIPS, SACK_BLOAT_M } from './carrier-model.js';
+
+const QP = new URLSearchParams(location.search);
+const renderer = new THREE.WebGPURenderer({
+  canvas: document.getElementById('c'), antialias: true, forceWebGL: QP.has('gl'),
+});
+await renderer.init();
+console.log('backend:', renderer.backend.isWebGPUBackend ? 'WebGPU' : 'WebGL2');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x151a22);
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x223, 2.0));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(4, 7, 5);
+scene.add(sun);
+
+const grid = new THREE.GridHelper(24, 24, 0x334455, 0x223344);
+scene.add(grid);
+
+const names = Object.keys(CARRIER_CLIPS);
+const { mesh, anim, commitAnim } = buildCarrier(16);
+scene.add(mesh);
+mesh.count = names.length;
+
+document.getElementById('labels').innerHTML =
+  names.map((n, i) => `<b>${i}</b> ${n} (${CARRIER_CLIPS[n].count}f @ ${CARRIER_CLIPS[n].fps})`).join('<br>')
+  + '<br><br>left→right, feet on the grid';
+
+const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+const rigs = names.map((n, i) => {
+  const a = new CarrierAnimator(i * 7);
+  a.play(n, 0.01);
+  return { a, name: n, x: (i - (names.length - 1) / 2) * 2.6 };
+});
+
+const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+const e = new THREE.Euler();
+let t = 0, last = performance.now();
+
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now; t += dt;
+
+  // ?focus=N frames one rig, ?dist= sets range, ?spin=0 holds a 3/4 view
+  const focus = QP.has('focus') ? rigs[Math.min(rigs.length - 1, +QP.get('focus'))] : null;
+  const dist = +(QP.get('dist') ?? (focus ? 3.4 : 9.5));
+  const spin = QP.has('spin') ? +QP.get('spin') : t * 0.35;
+  const cx = focus ? focus.x : 0;
+  camera.position.set(cx + Math.sin(spin) * dist, focus ? 1.2 : 2.6, Math.cos(spin) * dist);
+  camera.lookAt(cx, 0.85, 0);
+
+  rigs.forEach((r, i) => {
+    r.a.advance(dt);
+    // the one-shot clip replays so it can be watched
+    if (r.a.finished) { r.a.time = 0; r.a.fade = 1; }
+    // swell ramps up and down so the bloat range is visible on every rig
+    const load = 0.5 + 0.5 * Math.sin(t * 0.5 + i);
+    const bloat = r.name === 'detonate'
+      ? SACK_BLOAT_M * (0.7 + r.a.progress * r.a.progress * 1.9)
+      : load * SACK_BLOAT_M;
+    r.a.write(anim, i, bloat);
+    e.set(0, -0.6, 0);
+    m.compose(p.set(r.x, 0, 0), q.setFromEuler(e), s.set(1, 1, 1));
+    mesh.setMatrixAt(i, m);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  commitAnim(rigs.length);
+  renderer.render(scene, camera);
+});
+</script>
+</body></html>

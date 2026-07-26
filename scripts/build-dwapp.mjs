@@ -42,7 +42,15 @@ const TARGETS = [
   { name: 'fused', dir: 'fused', title: 'Halo Charon — Fused' },
 ];
 
-const dataUri = (bytes) => `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`;
+// The carrier's textures come out of a GLB as JPEG (scripts/convert-carrier.mjs
+// copies them through rather than re-encoding), so the MIME type has to follow
+// the extension — a jpeg served as image/png decodes to nothing.
+const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+const IMAGE_EXT = Object.keys(MIME);
+const dataUri = (name, bytes) => {
+  const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+  return `data:${MIME[ext]};base64,${Buffer.from(bytes).toString('base64')}`;
+};
 
 const buildTarget = async (t) => {
   const pageDir = join(ROOT, t.dir);
@@ -56,10 +64,10 @@ const buildTarget = async (t) => {
     const assetDir = join(ROOT, t.assets);
     const names = (await readdir(assetDir, { recursive: true }))
       .map((n) => n.split('\\').join('/'))
-      .filter((n) => n.endsWith('.png'));
+      .filter((n) => IMAGE_EXT.includes(n.slice(n.lastIndexOf('.')).toLowerCase()));
     const map = {};
     for (const n of names) {
-      map[`${t.assets.replace(`${t.dir}/`, '')}/${n}`] = dataUri(await readFile(join(assetDir, n)));
+      map[`${t.assets.replace(`${t.dir}/`, '')}/${n}`] = dataUri(n, await readFile(join(assetDir, n)));
     }
     const prelude = [
       `import * as THREE from ${JSON.stringify(join(ROOT, 'engine/vendor/three.webgpu.module.js'))};`,
