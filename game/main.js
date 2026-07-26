@@ -381,11 +381,16 @@ else {
     for (const v of world.darkVeils) {
       if (v && !v.visible) { warmed.push([v, 'visible', false]); v.visible = true; }
     }
-    for (const i of [2, 3, RUNGS.length - 1, start]) {
-      applyRung(i);
-      await renderer.compileAsync(scene, camera);
+    try {
+      for (const i of [2, 3, RUNGS.length - 1, start]) {
+        applyRung(i);
+        await renderer.compileAsync(scene, camera);
+      }
+    } finally {
+      // ALWAYS restore — a compile failure that left every flood veil
+      // visible read as a pitch-black ship (user report)
+      for (const [o, k, val] of warmed) o[k] = val;
     }
-    for (const [o, k, val] of warmed) o[k] = val;
   } catch { applyRung(start); }
   _prewarming = false;
 })();
@@ -414,9 +419,20 @@ function updateRoomLightPool() {
     } else {
       // hung WELL below the plating: the throw pools on the deck and walls
       // while the ceiling above stays near-black (user: bright ceilings
-      // ruin the darkness — light the room, not the overhead)
-      lightPool.add(L.x, L.y - 1.25, L.z, 0xbfd4f2,
-        L.mode === 'steady' ? 14 : 15 * L.lvl, 19, 1.9);
+      // ruin the darkness — light the room, not the overhead). LONG rooms
+      // (corridors, holds) emit up to three fixtures spaced down the long
+      // axis — one center light left 40m corridor ends pitch black even
+      // with the mains up (user: pitch-black regression).
+      const nd = sim.graph.node(n);
+      const longSpan = Math.max(nd.w, nd.d);
+      const nFix = longSpan > 30 ? 3 : longSpan > 14 ? 2 : 1;
+      const alongX = nd.w >= nd.d;
+      const stepW = longSpan / (nFix + (nFix > 1 ? 0.2 : 1));
+      for (let f = 0; f < nFix; f++) {
+        const off = nFix === 1 ? 0 : (f - (nFix - 1) / 2) * stepW;
+        lightPool.add(L.x + (alongX ? off : 0), L.y - 1.25, L.z + (alongX ? 0 : off),
+          0xbfd4f2, L.mode === 'steady' ? 14 : 15 * L.lvl, 19, 1.9);
+      }
     }
   }
 }
@@ -1725,12 +1741,16 @@ function frame(now) {
   // ceiling kills the horror. A hair of structural floor stops pure-black
   // banding; every visible photon comes from discrete sources: the fixture
   // pool, the red hatch lamps, doorway spill, fires, muzzles, your torch.
-  const ambTarget = inDark ? 0.0 : 0.06;
-  const hemiTarget = inDark ? 0.0 : 0.07;
+  // lit rooms keep a LOW structural floor (~3x darker than the old wash —
+  // ceilings stay dark, fixtures carry the light); flood-dark and dead
+  // rooms stay at absolute zero, torch-only (user: pitch-black regression
+  // after the first darkness pass over-crushed LIT compartments too)
+  const ambTarget = inDark ? 0.0 : 0.1;
+  const hemiTarget = inDark ? 0.0 : 0.12;
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
-  lamp.intensity = inDark ? 0.0 : 1.6 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
-  torch.intensity += ((inDark ? 65 : 34) - torch.intensity) * dimT;
+  lamp.intensity = inDark ? 0.0 : 4.5 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  torch.intensity += ((inDark ? 95 : 60) - torch.intensity) * dimT;
   torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
   {
     const tp = player.cameraPose();
