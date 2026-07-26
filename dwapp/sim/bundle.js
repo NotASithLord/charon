@@ -1974,9 +1974,12 @@ function updateMarineTick(sim2, a, dt) {
         if (sim2.setPathTo(a, lead.node, ["std"], humanPass)) a.state = STATE.MOVE;
       } else if (lead.node === a.node && !a.move && sim2.floodStrengthAt(a.node) === 0) {
         const mi = Math.max(0, squad.members.indexOf(a.id));
-        const ang = lead.heading + Math.PI + (mi % 3 - 1) * 0.6;
-        const off = 1.5 + (mi >= 3 ? 1 : 0);
-        const tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
+        const ang = lead.heading + Math.PI * 0.5 + mi * 2.399963;
+        const off = Math.min(7, 3.2 + mi % 3 * 1.4);
+        const room = sim2.graph.node(lead.node);
+        let tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
+        tx = Math.max(room.x - room.w / 2 + 0.8, Math.min(room.x + room.w / 2 - 0.8, tx));
+        ty = Math.max(room.y - room.d / 2 + 0.8, Math.min(room.y + room.d / 2 - 0.8, ty));
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
         a.followSpeed = 0;
         if (d > 0.5) {

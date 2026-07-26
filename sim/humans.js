@@ -318,15 +318,19 @@ function updateMarineTick(sim, a, dt) {
         a.path = [];
         if (sim.setPathTo(a, lead.node, ['std'], humanPass)) a.state = STATE.MOVE;
       } else if (lead.node === a.node && !a.move && sim.floodStrengthAt(a.node) === 0) {
-        // CLOSE FOLLOW (user: fireteam terrible at following closely). In the
-        // player's room and no flood to fight: hold a tight formation slot just
-        // behind them and close the gap in REAL SPACE — sprinting when you've
-        // fallen behind, easing in when near — instead of drifting to a room
-        // parking slot away from them.
+        // SPREAD FORMATION (user: the fireteam should spread out through
+        // whatever room you're in, capped ~7m around you — the old tight fan
+        // behind read as a conga line). Golden-angle ring slots around the
+        // player at staggered radii, clamped inside the room so nobody holds
+        // station in a wall; the same catch-up speeds close the gap when the
+        // player moves.
         const mi = Math.max(0, squad.members.indexOf(a.id));
-        const ang = lead.heading + Math.PI + ((mi % 3) - 1) * 0.6; // fan behind
-        const off = 1.5 + (mi >= 3 ? 1.0 : 0);
-        const tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
+        const ang = lead.heading + Math.PI * 0.5 + mi * 2.399963; // golden spacing
+        const off = Math.min(7, 3.2 + (mi % 3) * 1.4);
+        const room = sim.graph.node(lead.node);
+        let tx = lead.x + Math.cos(ang) * off, ty = lead.y + Math.sin(ang) * off;
+        tx = Math.max(room.x - room.w / 2 + 0.8, Math.min(room.x + room.w / 2 - 0.8, tx));
+        ty = Math.max(room.y - room.d / 2 + 0.8, Math.min(room.y + room.d / 2 - 0.8, ty));
         const dx = tx - a.x, dy = ty - a.y, d = Math.hypot(dx, dy);
         a.followSpeed = 0; // drives the render clip (walk/run) — see _clipFor
         if (d > 0.5) {
