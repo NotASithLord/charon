@@ -128,9 +128,15 @@ export class Agents3D {
       // pixel diff — but the infection form's feeler paddles and tentacles
       // are open single-sided fins that vanish from behind, so it keeps
       // DoubleSide.
+      // FLOOD SETS STAY DoubleSide (user report on Chrome: some combat forms
+      // lost their bodies but kept their SHADOW — a reverse-wound part is
+      // culled by FrontSide in the main pass while the shadow pass draws
+      // BackSide, leaving a black silhouette with no caster). The humanoid
+      // crew/marine shells verified clean under FrontSide and keep the win.
+      const flood = name === 'infection' || name === 'combat_civ' || name === 'combat_odst';
       const mat = new THREE.MeshStandardMaterial({
         map: p.texture, roughness: 0.78, metalness: 0.06,
-        side: name === 'infection' ? THREE.DoubleSide : THREE.FrontSide,
+        side: flood ? THREE.DoubleSide : THREE.FrontSide,
       });
       const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
       mesh.count = 0;

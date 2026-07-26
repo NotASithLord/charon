@@ -1395,9 +1395,20 @@ function stepFrags(dt) {
         audio.play('bounce', { x: p.x, z: p.z }, 0.7, 'bounce', 60);
       } else { p.set(nx, ny, nz); }
     }
-    // floor bounce
-    const floor = elevOf(f.deck) + 0.09;
-    if (p.y < floor) {
+    // floor bounce — unless the frag is over a REAL opening (a ladder hatch
+    // hole or the grand stair well): the holes are genuinely cut through the
+    // deck, so a grenade drops through to the deck below (user: toss grenades
+    // through them to the next floor)
+    const overHatch = f.deck < 5 && world.trunks.some((t) => t.vertical && f.deck === t.upperDeck
+      && Math.abs(p.x - t.x) < 0.85 && Math.abs(p.z - t.z) < 0.85);
+    if (overHatch && p.y < elevOf(f.deck)) {
+      f.deck = world.trunks.find((t) => t.vertical && f.deck === t.upperDeck
+        && Math.abs(p.x - t.x) < 0.85 && Math.abs(p.z - t.z) < 0.85).lowerDeck;
+    }
+    // the stair well descends within its own room — groundHeightAt returns
+    // the flight surface under the frag, so it rolls/bounces DOWN the stairs
+    const floor = world.groundHeightAt(f.deck, p.x, p.z, p.y - 0.09) + 0.09;
+    if (p.y < floor && !overHatch) {
       p.y = floor;
       if (Math.abs(f.vy) > 1.2) audio.play('bounce', { x: p.x, z: p.z }, 0.6, 'bounce', 60);
       f.vy = -f.vy * FRAG.bounce;
