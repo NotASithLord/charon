@@ -173,6 +173,9 @@ const player = new Player(canvas, world, sim, sim.graph.byId.get('cic'));
 let physics = null;
 initRapier().then(() => {
   physics = new PhysicsWorld({ staticBoxes: world.collisionBoxes() });
+  // door colliders are DYNAMIC (doors jam/unjam mid-session, and the armory
+  // seal releases): one parked/placed fixed box per door, toggled below
+  physics.setDoorBoxes(world.doorBoxes());
   player.attachPhysics(physics);
 }).catch((e) => console.error('[charon] Rapier physics failed to initialise:', e));
 agents.playerId = player.agent.id;
@@ -1936,6 +1939,11 @@ function frame(now) {
     nMovers++;
   }
   world.updateDoors(dtReal, doorMovers, nMovers);
+  // keep the door colliders on the sim's lock state (setDoorClosed is a
+  // dirty-checked no-op when nothing changed — ~60 cheap comparisons)
+  if (physics) for (let i = 0; i < world.doors.length; i++) {
+    physics.setDoorClosed(i, !!world.doors[i].edge.locked);
+  }
 
   // camera: your eyes — or the eyes of what you became
   const ghost = player.dead ? ghostAlive() : null;

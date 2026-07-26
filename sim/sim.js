@@ -107,6 +107,7 @@ export class Sim {
       for (let i = 0; i < count; i++) {
         const e = brokenDoors.splice(this.rng.int(brokenDoors.length), 1)[0];
         e.burning = true; // the renderer tints the panel; pathing already blocks it (locked)
+        e.fireSite = true; // authored damage — the jam/unjam rotation never touches it
         this.fires.push({ deck: graph.node(e.a).deck, node: e.a, x: e.door.x, y: e.door.y, scale: 0.9 });
       }
       // nobody SPAWNS inside a blaze (the initial swarm lands at the breach,
@@ -514,6 +515,7 @@ export class Sim {
       this._checkLastStand();
       this._lastStandStragglers();
       this._armoryWatch();
+      this._doorShiftTick();
       this.stats.conversionsRound = 0;
       this._expireCalls();
     }
@@ -668,6 +670,63 @@ export class Sim {
 
   _expireCalls() {
     this.calls = this.calls.filter((c) => this.t - c.t < this.P.radio.callFadeSec * 2);
+  }
+
+  // DOOR ROTATION (user: some doors suddenly jam, others unjam over a
+  // session — the damaged ship keeps shifting — but never in a way that
+  // cuts anyone off from the rest of the ship). Deterministic: seeded RNG,
+  // fired on the strategic cadence. Excluded: the armory seal (event gate)
+  // and the authored fire-site doors (they ARE the damage).
+  _doorShiftTick() {
+    const every = this.P.door.shiftEverySec ?? 110;
+    if (this._nextDoorShiftAt === undefined) {
+      this._nextDoorShiftAt = every * (0.7 + this.rng.range(0, 0.6));
+    }
+    if (this.t < this._nextDoorShiftAt) return;
+    this._nextDoorShiftAt = this.t + every * (0.7 + this.rng.range(0, 0.6));
+    const cand = this.graph.edges.filter((e) =>
+      e.door && e.lockable && !e.armorySeal && !e.fireSite
+      && this.graph.node(e.a).deck === this.graph.node(e.b).deck);
+    const jammed = cand.filter((e) => e.locked);
+    const open = cand.filter((e) => !e.locked);
+    // bias toward jamming while below the seed's initial jam count, toward
+    // freeing when above — the ship stays roughly as broken as it started
+    const doJam = this.rng.chance(jammed.length < open.length * 0.25 ? 0.6 : 0.35);
+    if (doJam && open.length) {
+      // take the first candidate that leaves its two rooms mutually
+      // reachable by another route (single-edge removal: e.b reachable from
+      // e.a with the edge locked ⇒ the component is unchanged)
+      for (let tries = 0; tries < 6 && open.length; tries++) {
+        const e = open.splice(this.rng.int(open.length), 1)[0];
+        e.locked = true;
+        if (this._reachableStd(e.a, e.b)) {
+          this.log('radio', `a door mechanism seizes between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name}`, e.a);
+          return;
+        }
+        e.locked = false; // would cut the ship — leave it working
+      }
+    } else if (jammed.length) {
+      const e = jammed[this.rng.int(jammed.length)];
+      e.locked = false;
+      this.log('radio', `the jammed door between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name} grinds free`, e.a);
+    }
+  }
+
+  // is `to` reachable from `from` over unlocked std edges?
+  _reachableStd(from, to) {
+    if (from === to) return true;
+    const seen = new Set([from]);
+    const q = [from];
+    while (q.length) {
+      const n = q.pop();
+      for (const { to: nx, link } of this.graph.adj.std[n] ?? []) {
+        if (link.locked || seen.has(nx)) continue;
+        if (nx === to) return true;
+        seen.add(nx);
+        q.push(nx);
+      }
+    }
+    return false;
   }
 
   // REAL SPACE LOGIC (user note): occupancy — who is IN a room for sensing,

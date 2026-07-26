@@ -108,17 +108,20 @@ export class World {
   collisionBoxes() {
     // boxes were cached from the pristine per-mesh geometry BEFORE the
     // static merge collapsed it (the merged buffers have no box params)
-    const out = [...(this._collBoxCache ?? [])];
-    for (const d of this.doors) {
-      if (!d.edge.locked) continue;
-      // one box spanning the whole closed opening (locked doors never open)
-      out.push({
-        cx: d.x, cy: d.elev + this._doorPH / 2, cz: d.z,
-        hx: DOOR_W / 2 + 0.06, hy: this._doorPH / 2, hz: 0.08,
-        ry: -d.phi,
-      });
-    }
-    return out;
+    // locked-door boxes are NOT here anymore — doors jam and unjam
+    // mid-session now, so their colliders are dynamic (doorBoxes below,
+    // toggled through PhysicsWorld.setDoorClosed)
+    return [...(this._collBoxCache ?? [])];
+  }
+
+  // one collider box per door, spanning the closed opening; `closed` follows
+  // the sim's lock state and the physics layer parks open doors far below
+  doorBoxes() {
+    return this.doors.map((d) => ({
+      cx: d.x, cy: d.elev + this._doorPH / 2, cz: d.z,
+      hx: DOOR_W / 2 + 0.06, hy: this._doorPH / 2, hz: 0.08,
+      ry: -d.phi, closed: !!d.edge.locked,
+    }));
   }
 
   // STATIC MERGE (perf): group every plain static Mesh in the scene by
@@ -1481,8 +1484,10 @@ export class World {
 
   _setLamp(d) {
     const c = (this._dc ??= new THREE.Color());
-    if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber
-    else if (d.edge.locked) c.setHex(0xe03424);       // sealed: red
+    // muted status colors (user: the bright red sealed doors were too
+    // obvious — the buckle/scorch and a dim ember lamp carry it now)
+    if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber gutter
+    else if (d.edge.locked) c.setHex(0x7d1d12);       // sealed: dim ember
     else c.setHex(0x38d06a);                          // powered track: green
     for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
   }
@@ -1656,13 +1661,17 @@ export class World {
     }
     const flick = Math.sin(performance.now() * 0.013) * Math.sin(performance.now() * 0.0037);
     for (const d of this.doors) {
-      // a door whose lock RELEASED mid-game (the armory seal) flips its
-      // status lamp red -> green
+      // doors change lock state MID-GAME now (armory seal release, and the
+      // sim's jam/unjam rotation) — flip the status lamp both ways
       if (!d.edge.locked && d._lampLocked !== false) {
         d._lampLocked = false;
         this._setLamp(d);
         this.doorLamps.instanceColor.needsUpdate = true;
-      } else if (d.edge.locked && d._lampLocked === undefined) d._lampLocked = true;
+      } else if (d.edge.locked && d._lampLocked !== true) {
+        d._lampLocked = true;
+        this._setLamp(d);
+        this.doorLamps.instanceColor.needsUpdate = true;
+      }
       // jammed doors gutter — the amber lamp flickers with the damage
       if (d.bad && (performance.now() & 63) < 16) {
         const c = (this._dc ??= new THREE.Color());

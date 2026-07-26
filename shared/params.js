@@ -70,7 +70,11 @@ export const PARAMS = {
     reanimateTimeSec: 2,
   },
   flamethrower: { fuelUnits: 100, dps: 50, fuelPerSec: 2, fuelPerCorpse: 1, burnNodeSec: 12 },
-  door: { lockedFraction: 0.25 },   // PLACEHOLDER, per-run graph mutation (visible variety run to run)
+  // lockedFraction: per-run graph mutation (visible variety run to run).
+  // shiftEverySec: the damaged ship keeps shifting — every ~2 min (jittered)
+  // a working door jams or a jammed one grinds free, connectivity-guarded
+  // (user: rotate jams, but never cut anyone off from the rest of the ship)
+  door: { lockedFraction: 0.25, shiftEverySec: 110 },
   vent: { blockedFraction: 0.30 },  // PLACEHOLDER, per-run
   ambush: { firstStrikeMult: 3.0 }, // PLACEHOLDER, applies to both sides
   motionTracker: { rangeHops: 1 },  // reveals a moving infection form in a vent
