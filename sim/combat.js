@@ -156,6 +156,28 @@ export function resolveCombat(sim, dt) {
           if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; }
         }
         if (!best) break;
+        // FIRETEAM AMMO ECONOMY (user): your escorts burn real magazines.
+        // A dry marine keeps his boot (stomps below) but the rifle is out
+        // until you hand him a mag (G key, sim.giveMag).
+        if (s.escort && s.mags !== undefined) {
+          if (s.rounds <= 0) {
+            if (s.mags > 0) {
+              s.mags--;
+              s.rounds = 32;
+              if (s.mags === 1 && !s.lowCalled) {
+                s.lowCalled = true;
+                sim.log('radio', `fireteam: ${s.callsign ? s.callsign.rank + ' ' + s.callsign.name : 'a marine'} is running dry — last mag`, s.node);
+              }
+            } else {
+              if (!s.dryCalled) {
+                s.dryCalled = true;
+                sim.log('radio', `fireteam: ${s.callsign ? s.callsign.rank + ' ' + s.callsign.name : 'a marine'} is BLACK on ammo — pass a mag!`, s.node);
+              }
+              continue;
+            }
+          }
+          s.rounds--;
+        }
         const gun = s.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
         s.nextShotAt = sim.t + 1 / gun.rof;
         const range = Math.hypot(best.x - s.x, best.y - s.y);

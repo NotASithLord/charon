@@ -817,6 +817,24 @@ const VOICES = {
     () => 'weapons free for all hands — the racks are stripped',
     () => 'every adult on this deck is carrying now. no more bystanders',
   ],
+  coDown: [
+    () => 'command net silent. the CO is down. say again — the CO is down',
+    () => 'we lost the commander. CIC is not answering',
+    () => 'the old man\'s channel just went dead. nobody is running this net now',
+    () => 'be advised: command is gone. we are on our own',
+    () => 'no more orders coming. the CO didn\'t make it',
+    () => 'CIC has gone quiet. assume command casualties. hold where you are',
+  ],
+  cdrOrder: [
+    (sq, r) => `squad ${sq}, push to ${r} — contact reported, sweep and clear`,
+    (sq, r) => `squad ${sq}, this is actual — move to ${r} and engage`,
+    (sq, r) => `re-tasking squad ${sq}: ${r}, weapons free`,
+    (sq, r) => `squad ${sq}, we have a confirmed report at ${r}. take it back`,
+    (sq, r) => `all units copy — squad ${sq} moves on ${r}`,
+    (sq, r) => `squad ${sq}, ${r}, double-time. don't let it dig in`,
+    (sq, r) => `squad ${sq}, break off and clear ${r} — report when done`,
+    (sq, r) => `contact logged at ${r}. squad ${sq}, it's yours`,
+  ],
   respond: [
     (r) => `we are responding to distress in ${r}`,
     (r) => `copy the mayday — moving to ${r} now`,
@@ -911,6 +929,19 @@ function gameLogView(e) {
       if (msg.includes('(you)') || msg.startsWith('your fireteam') || msg.startsWith('fireteam:')) return e;
       if (msg.startsWith('ARMORY SEAL RELEASED')) {
         return rx(e, odstSpeaker(), 'armory seal released — ODST reserve deploying. racks are open', { always: true });
+      }
+      if (msg.startsWith('command net silent')) {
+        // the whole net notices the command channel drop — always lands
+        return rx(e, null, say('coDown'), { always: true, spk: 'NET' });
+      }
+      if (msg.startsWith('CDR orders')) {
+        const m2 = msg.match(/^CDR orders squad (\d+) to (.+) — /);
+        const cdr = sim.cdrId !== undefined ? sim.byId.get(sim.cdrId) : null;
+        if (m2 && cdr) {
+          const p = VOICES.cdrOrder;
+          return rx(e, cdr, p[(Math.random() * p.length) | 0](m2[1], m2[2]));
+        }
+        return e;
       }
       if (msg.startsWith('distress call')) {
         const w = witnessNear(e.node);
@@ -1088,6 +1119,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') meleePressed = true;
   if (e.code === 'KeyG') fragPressed = true;
   if (e.code === 'KeyM') toggleMap();
+  // AMMO ECONOMY (user): T hands a mag from your reserve to the neediest
+  // fireteam marine in reach — they burn real magazines now (combat.js)
+  if (e.code === 'KeyT' && !player.dead && weapon.reserve >= 32) {
+    const took = sim.giveMag(player.agent);
+    if (took) weapon.reserve -= 32;
+  }
   // FIRETEAM ORDERS (review P1): the sim's command layer, on your keys
   if (!player.dead && player.locked) {
     if (e.code === 'Digit1') setOrder('follow');
@@ -1095,6 +1132,28 @@ window.addEventListener('keydown', (e) => {
     else if (e.code === 'Digit3') setOrder('advance');
   }
 });
+
+// the neediest fireteam marine in hand-off reach, throttled to ~3Hz —
+// drives the "T — hand a mag" hint (ammo economy)
+let _dryNear = null, _dryNearAt = 0;
+function dryEscortName() {
+  if (performance.now() - _dryNearAt > 300) {
+    _dryNearAt = performance.now();
+    _dryNear = null;
+    let bd = Infinity;
+    for (const id of fireteam.members) {
+      const m = sim.byId.get(id);
+      if (!m || m.dead || m.hp <= 0 || m.mags === undefined) continue;
+      if (m.mags * 32 + m.rounds > 40) continue; // only when genuinely low
+      if (m.deck !== player.agent.deck) continue;
+      const d = Math.hypot(m.x - player.agent.x, m.y - player.agent.y);
+      if (d > 3.5 || d >= bd) continue;
+      bd = d;
+      _dryNear = m.callsign ? `${m.callsign.rank} ${m.callsign.name}`.toUpperCase() : 'your marine';
+    }
+  }
+  return _dryNear;
+}
 
 function setOrder(kind) {
   const lead = fireteam.members.map((id) => sim.byId.get(id)).find((m) => m && !m.dead);
@@ -1803,6 +1862,9 @@ function frame(now) {
     setStyle('hint', 'display', 'block');
   } else if (player.climb) {
     setText('hint', player.climb.toDeck < player.climb.fromDeck ? 'climbing up…' : 'climbing down…');
+    setStyle('hint', 'display', 'block');
+  } else if (!player.dead && weapon.reserve >= 32 && dryEscortName()) {
+    setText('hint', `T — hand a mag to ${dryEscortName()}`);
     setStyle('hint', 'display', 'block');
   } else {
     const trunk = player.dead ? null : world.trunkAt(player.deck, player.x, player.z);

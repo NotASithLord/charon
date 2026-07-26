@@ -3930,6 +3930,25 @@ function resolveCombat(sim2, dt) {
           }
         }
         if (!best) break;
+        if (s.escort && s.mags !== void 0) {
+          if (s.rounds <= 0) {
+            if (s.mags > 0) {
+              s.mags--;
+              s.rounds = 32;
+              if (s.mags === 1 && !s.lowCalled) {
+                s.lowCalled = true;
+                sim2.log("radio", `fireteam: ${s.callsign ? s.callsign.rank + " " + s.callsign.name : "a marine"} is running dry — last mag`, s.node);
+              }
+            } else {
+              if (!s.dryCalled) {
+                s.dryCalled = true;
+                sim2.log("radio", `fireteam: ${s.callsign ? s.callsign.rank + " " + s.callsign.name : "a marine"} is BLACK on ammo — pass a mag!`, s.node);
+              }
+              continue;
+            }
+          }
+          s.rounds--;
+        }
         const gun = s.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
         s.nextShotAt = sim2.t + 1 / gun.rof;
         const range = Math.hypot(best.x - s.x, best.y - s.y);
@@ -4584,6 +4603,8 @@ var Sim = class {
       m.hasRadio = true;
       m.squad = squad.id;
       m.escort = true;
+      m.mags = 4;
+      m.rounds = 32;
       squad.members.push(m.id);
       this.spawn(m);
     }
@@ -4593,6 +4614,28 @@ var Sim = class {
     if (lead?.callsign) lead.callsign.rank = "Cpl";
     this.log("radio", `your fireteam forms up — ${size} marines on you`);
     return squad;
+  }
+  // the player hands a magazine to the neediest fireteam escort in reach
+  // (G key). Returns the receiving marine, or null if nobody can take one.
+  giveMag(playerAgent, maxDistM = 3.5) {
+    let best = null, bd = Infinity;
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || !a.escort || a.mags === void 0) continue;
+      if (a.deck !== playerAgent.deck) continue;
+      if (Math.hypot(a.x - playerAgent.x, a.y - playerAgent.y) > maxDistM) continue;
+      const total = a.mags * 32 + a.rounds;
+      if (total >= 4 * 32) continue;
+      if (total < bd) {
+        bd = total;
+        best = a;
+      }
+    }
+    if (!best) return null;
+    best.mags++;
+    best.dryCalled = false;
+    if (best.mags > 1) best.lowCalled = false;
+    this.log("radio", `fireteam: ${best.callsign ? best.callsign.rank + " " + best.callsign.name : "a marine"} takes your mag — back in the fight`, best.node);
+    return best;
   }
   // the player takes up a rifle — from the armory rack or from a corpse
   // that died holding one (game rule: the survivor can fight back)
@@ -4682,6 +4725,46 @@ var Sim = class {
     for (let i = 0; i < officers.length && i < seated.length; i++) {
       seated[i].a.callsign.rank = officers[i];
     }
+    if (seated.length) this.cdrId = seated[0].a.id;
+  }
+  // CDR COMMAND LAYER (user: periodic directives over the net + CO-death
+  // consequences). Runs on the strategic cadence. While the CO lives, every
+  // couple of minutes he re-tasks the idlest line squad onto the freshest
+  // squad-reported contact (radio-known intel only — the same blackboard
+  // the squads themselves share). When he dies, the command net goes quiet
+  // and the last-stand call carries HALF its normal reach (degraded
+  // coordination — see _checkLastStand).
+  _commandTick() {
+    if (this.cdrId === void 0) return;
+    if (!this.cdrDead) {
+      const c = this.byId.get(this.cdrId);
+      if (!c || c.dead || c.hp <= 0 || c.faction > 2) {
+        this.cdrDead = true;
+        this.log("radio", "command net silent — the CO is down", c && !c.dead ? c.node : -1);
+        return;
+      }
+    }
+    if (this.cdrDead || this.lastStand) return;
+    if (this.t - (this._lastDirectiveT ?? -60) < 120) return;
+    let freshest = null;
+    for (const s of this.squads) {
+      if (s.contactNode === void 0) continue;
+      if (!freshest || s.contactTick > freshest.contactTick) freshest = s;
+    }
+    if (!freshest || this.tickCount - freshest.contactTick > 60 * 10) return;
+    const node = freshest.contactNode;
+    for (const s of this.squads) {
+      if (s.broken || s.patrol || s === freshest || s.order) continue;
+      const k = s.objective?.kind;
+      if (k !== "hold" && k !== "sweep" && s.objective) continue;
+      const lead = s.members.map((id) => this.byId.get(id)).find((m) => m && !m.dead && m.hp > 0);
+      if (!lead) continue;
+      s.objective = { kind: "order", node };
+      s.holdUntil = void 0;
+      this._lastDirectiveT = this.t;
+      this.log("radio", `CDR orders squad ${s.id + 1} to ${this.graph.node(node).name} — reported contact`, this.byId.get(this.cdrId).node);
+      break;
+    }
   }
   removeAgent(a) {
     a.dead = true;
@@ -4756,6 +4839,7 @@ var Sim = class {
       this._computeInfluence();
       this.hive.strategicTick();
       strategicSquads(this);
+      this._commandTick();
       this._checkSelfArming();
       this._checkLastStand();
       this._lastStandStragglers();
@@ -4795,19 +4879,20 @@ var Sim = class {
     const line = g.byId.get("d1corr");
     const shelters = [g.byId.get("officer"), g.byId.get("cic"), g.byId.get("signal"), g.byId.get("bridge")];
     this.log("radio", `FALL BACK — all remaining hands to the command deck (${alive} marines left)`);
+    const hear = this.P.lastStand.hearChance * (this.cdrDead ? 0.55 : 1);
     for (const squad of this.squads) {
       const members = squad.members.map((id) => this.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
       if (!members.length) continue;
-      if (!squad.broken && this.rng.chance(this.P.lastStand.hearChance)) squad.lastStandBound = true;
+      if (!squad.broken && this.rng.chance(hear)) squad.lastStandBound = true;
       else if (squad.broken) {
-        for (const m of members) if (this.rng.chance(this.P.lastStand.hearChance)) m.fallbackNode = line;
+        for (const m of members) if (this.rng.chance(hear)) m.fallbackNode = line;
       }
     }
     let heard = 0, missed = 0;
     for (const a of this.agents) {
       if (a.dead || a.hp <= 0 || a.helpless || a.garrison) continue;
       if (a.faction !== FACTION.CIVILIAN && a.faction !== FACTION.ARMED) continue;
-      if (!this.rng.chance(this.P.lastStand.hearChance)) {
+      if (!this.rng.chance(hear)) {
         missed++;
         continue;
       }

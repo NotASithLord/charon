@@ -30,6 +30,12 @@ export class MarineMap {
     this.liveObs = new Uint8Array(n);
     this._corpseScratch = new Uint16Array(n);
     this._floodScratch = new Float32Array(n); // VISIBLE forms only — vent transit excluded
+    // RADIO-TRUE STALENESS (user: the map should obey the receipt rules):
+    // off-deck teams only reach your board via periodic sitreps that roll
+    // the same cross-deck dice as every other transmission — between
+    // received reports their rooms and their own markers age on the board.
+    this._rep = new Map();       // agentId -> { next, ok, burst }
+    this._marineRep = new Map(); // agentId -> { x, y, deck, hp, maxHp, heading, t }
     this._panelAt = 0;
     this.marines0 = sim.agents.filter((a) => a.faction === FACTION.MARINE).length;
     this.s = 1;
@@ -55,9 +61,33 @@ export class MarineMap {
         continue;
       }
       // eyes on the net: living marines, and the player (armed or not — the
-      // ODST rig reports either way)
+      // ODST rig reports either way). Your own eyes, your fireteam and
+      // same-deck teams feed the board LIVE; a team on another deck only
+      // lands intel when its sitrep gets through (ODST gear always does).
       if ((a.faction === FACTION.MARINE && a.hp > 0) || a.id === this.playerAgentId) {
-        this.liveObs[a.node] = 1;
+        const pd = sim.byId.get(this.playerAgentId)?.deck;
+        let live = a.id === this.playerAgentId || a.deck === pd || a.squad === this.fireteamId;
+        if (!live) {
+          let r = this._rep.get(a.id);
+          if (!r) { r = { next: sim.t + 4 + (a.id % 7), ok: false, burst: -99 }; this._rep.set(a.id, r); }
+          if (sim.t >= r.next) {
+            r.next = sim.t + 9 + (a.id % 5);
+            r.ok = a.odst ? true : Math.random() < 0.45;
+            if (r.ok) r.burst = sim.t;
+          }
+          live = sim.t - r.burst < 1.2; // a landed sitrep stamps a brief window
+        }
+        if (live) {
+          this.liveObs[a.node] = 1;
+          this._marineRep.set(a.id, {
+            x: a.x, y: a.y, deck: a.deck, hp: a.hp, maxHp: a.maxHp, heading: a.heading, t: sim.t,
+          });
+        } else if (a.faction === FACTION.MARINE && !this._marineRep.has(a.id)) {
+          // muster report: start positions are known to everyone
+          this._marineRep.set(a.id, {
+            x: a.x, y: a.y, deck: a.deck, hp: a.hp, maxHp: a.maxHp, heading: a.heading, t: sim.t,
+          });
+        }
       }
     }
     for (let n = 0; n < sim.graph.n; n++) {
@@ -290,29 +320,38 @@ export class MarineMap {
         ctx.beginPath(); ctx.arc(a.x, a.y, this._rr(0.4, 2), 0, Math.PI * 2); ctx.fill();
       }
     }
-    // marines: live over the squad net everywhere — tag + health bar each
+    // marines: drawn at their LAST-RECEIVED report, not their live position
+    // (user: the map obeys the radio rules) — an off-deck team that hasn't
+    // gotten a sitrep through sits where it last reported, fading with age
     ctx.font = this._font(8.5);
     for (const a of sim.agents) {
       if (a.dead || a.hp <= 0 || a.faction !== FACTION.MARINE) continue;
+      const rep = this._marineRep.get(a.id);
+      if (!rep) continue;
+      const age = sim.t - rep.t;
+      const alpha = age < 4 ? 1 : Math.max(0.3, 1 - (age - 4) / 90);
       const r = this._rr(0.6, 3.2);
       const mine = a.squad === this.fireteamId;
+      ctx.globalAlpha = alpha;
       ctx.fillStyle = mine ? '#7fd1a0' : '#4d8ef0';
       ctx.save();
-      ctx.translate(a.x, a.y); ctx.rotate(a.heading);
+      ctx.translate(rep.x, rep.y); ctx.rotate(rep.heading);
       ctx.fillRect(-r * 0.7, -r, r * 1.4, r * 2);
       ctx.restore();
-      // squad tag above
+      // squad tag above — with the report's age once it's gone stale
       ctx.fillStyle = mine ? '#a8e8c4' : '#8fb5e8';
       ctx.textAlign = 'center';
-      ctx.fillText(this._squadTag(a), a.x, a.y - r - this._lw(3));
+      const tag = this._squadTag(a);
+      ctx.fillText(age > 12 ? `${tag} ·${Math.round(age)}s` : tag, rep.x, rep.y - r - this._lw(3));
       ctx.textAlign = 'left';
-      // health bar below
+      // health bar below (as of the last report)
       const hw = this._rr(1.8, 9), hh = this._lw(2);
-      const frac = Math.max(0, Math.min(1, a.hp / a.maxHp));
+      const frac = Math.max(0, Math.min(1, rep.hp / rep.maxHp));
       ctx.fillStyle = 'rgba(10,14,20,0.8)';
-      ctx.fillRect(a.x - hw / 2, a.y + r + this._lw(2), hw, hh);
+      ctx.fillRect(rep.x - hw / 2, rep.y + r + this._lw(2), hw, hh);
       ctx.fillStyle = frac > 0.66 ? '#5fd88a' : frac > 0.33 ? '#e8c840' : '#ff5a48';
-      ctx.fillRect(a.x - hw / 2, a.y + r + this._lw(2), hw * frac, hh);
+      ctx.fillRect(rep.x - hw / 2, rep.y + r + this._lw(2), hw * frac, hh);
+      ctx.globalAlpha = 1;
     }
     // you: a white chevron pointing your heading
     if (playerAgent && !playerDead) {
@@ -336,7 +375,10 @@ export class MarineMap {
     const { sim } = this;
     const alive = (ids) => ids.map((id) => sim.byId.get(id)).filter((m) => m && !m.dead && m.hp > 0);
     const pips = (members) => members.map((m) => {
-      const f = m.hp / m.maxHp;
+      // vitals as of the last-received report (a flatline is known instantly
+      // — the transponder dies with the man — but wounds age with the radio)
+      const rep = this._marineRep.get(m.id);
+      const f = (rep?.hp ?? m.hp) / m.maxHp;
       const c = f > 0.66 ? '#5fd88a' : f > 0.33 ? '#e8c840' : '#ff5a48';
       return `<i style="background:${c}"></i>`;
     }).join('');
