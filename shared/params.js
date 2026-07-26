@@ -199,6 +199,23 @@ export const PARAMS = {
     podAccMult: 0.45,          // a skittering pod is a small fast rifle target
     rifleFalloffM: 12,         // full NPC rifle effect inside this — beyond it, a dark
     rifleFarFactor: 0.5,       // ship and a sprinting target halve effective fire
+    // MARINE DEFANG (user: a form entering a long hallway drew instant,
+    // synchronized, pinpoint fire from every marine wall-to-wall).
+    // Sight-limited engagement: shooters can only ACQUIRE a target inside
+    // these ranges (lit / dead-mains / flickering / flood-dark rooms; spore
+    // fog multiplies on top). Big and long rooms are no longer one free
+    // fire lane — the flood closes distance in the dark before the guns open.
+    sightLitM: 26, sightUnlitM: 13, sightFlickerM: 18, sightDarkM: 9,
+    fogSightMult: 0.6,
+    // Staggered human reaction on a FRESH acquisition (>lull since a target
+    // was last in sight): base + per-roll scatter, plus a big penalty when
+    // the contact appears outside the shooter's ~70° facing cone (they have
+    // to hear it, turn, and re-acquire).
+    reactBaseSec: 0.35, reactScatterSec: 0.75, reactBehindSec: 0.9,
+    reactLullSec: 4, reactConeRad: 1.2,
+    // per-marine marksmanship spread: acc multiplier in [1-spread, 1+spread]
+    // hashed off the agent id — squads have a good shot and a poor one
+    marksmanSpread: 0.25,
   },
   // FLOOD DARKNESS (user rule): a room the flood holds ALONE goes dark at
   // 60 s (biomass overgrows the fixtures) and fills with spore fog at

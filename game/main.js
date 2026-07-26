@@ -532,37 +532,40 @@ const overlay = el('overlay');
 // done, a click deploys you (that click doubles as the pointer-lock and
 // audio gesture). The sim runs cold underneath — by the time you hit the
 // deck, the ship's log already has a history.
+// ATMOSPHERE FIRST (user): the briefing opens on the ship's CURRENT state —
+// what you are about to step into — then backfills the lore as a mission log.
 const INTRO_BODY = [
   'UNSC FLEETCOM — PRIORITY TRAFFIC // EYES ONLY',
   'FROM: CENTCOM SOL / MARS DEFENSE COORDINATION',
   'TO:   FFG-201 UNSC SATURN DEVOURING — MARS HIGH ANCHOR',
   'DATE: OCTOBER 2552 // LOCAL 0347',
   '',
-  'SITUATION FOLLOWS.',
+  'STATUS:',
+  'Primary power offline. Secondary systems unstable.',
+  'Ship heavily damaged. Radiation and electromagnetic interference',
+  'disrupting radar and communications.',
+  // the contact names the ACTUAL breach room this seed rolled
+  `Contact in ${sim.graph.node(sim.graph.breachNode).name} — an object of`,
+  'unknown type, originating from the Covenant holy city HIGH CHARITY.',
+  'Fireteams mustering.',
   '',
+  'MISSION LOG:',
   'Sol has been a war of attrition since the day the Covenant first',
   'appeared off Earth. Every week they probe the anchorages, every',
   'week we push them back, at a high and bleeding cost. There are',
   'little less of us left to do the bleeding. This Charon class',
   'frigate has held the Mars sector through all of it.',
   '',
-  'Two transmissions reached this station in the past week.',
-  'The first: an outbreak on Earth. Not Covenant. Something else,',
+  'One transmission reached this station in the past week:',
+  'an outbreak on Earth. Not Covenant. Something else,',
   'loose near Voi — something that eats the dead and wears them.',
-  'The second, stranger: a faction of the Covenant has broken from',
-  'their own fleet and offered us alliance against it.',
   '',
-  'At 0331 local, HOLY CHARITY — the Covenant holy city itself —',
+  'At 0331 local, HIGH CHARITY — the Covenant holy city itself —',
   'exited slipspace directly on top of the Mars anchorage.',
   'At 0339 it tore open a slipspace rupture larger and more violent',
-  'than anything on record, and was gone into it.',
-  '',
-  'The collapse wave killed the reactor, primary systems, and comms.',
-  'Emergency power only. Every ship and station around Mars is likely',
+  'than anything on record, and was gone into it. The collapse wave',
+  'killed the reactor. Every ship and station around Mars is likely',
   'as dark as we are. You have no way of knowing.',
-  '',
-  // the impact names the ACTUAL breach room this seed rolled
-  `Moments before the rupture, something impacted the ${sim.graph.node(sim.graph.breachNode).name} deck.`,
   '',
   'Internal sensors are down. The crew is at stations.',
   'You are not alone in the dark.',
@@ -788,6 +791,23 @@ const VOICES = {
     (r) => `${r} — man down, man down, MAN DOWN`,
     (r) => `lost another one in ${r}. that's on me`,
   ],
+  // FIRST CONTACT (user): the first squads to see the flood don't call in a
+  // clean contact report — they call in confusion. Nobody briefed them for
+  // this, and the one thing they know for sure is that it isn't Covenant.
+  firstContact: [
+    (r) => `contact in ${r} — be advised, these are NOT Covenant`,
+    (r) => `what the hell are these things?! ${r}, we are engaging!`,
+    (r) => `${r}, contact, type... unknown. it's not Covenant. say again, NOT Covenant`,
+    (r) => `visual on hostiles in ${r} — they're wearing our uniforms. god, they used to be crew`,
+    (r) => `something is very wrong in ${r} — they're not stopping, they're NOT STOPPING`,
+    (r) => `unknown hostiles in ${r}. no shields, no plasma — they just keep walking at us`,
+    (r) => `it took a full burst center mass and kept coming! ${r}!`,
+    (r) => `these aren't elites, they aren't grunts, they aren't anything we were briefed on — ${r}!`,
+    (r) => `eyes on ${r} — hostile bio, type unknown. it moves like something's puppeting it`,
+    (r) => `what IS that?! ${r} — I need somebody to tell me what I'm shooting at!`,
+    (r) => `${r} — whatever came off that thing from HIGH CHARITY, it's in here with us`,
+    (r) => `they came out of the dark all wrong — ${r}, that is not a Covenant boarding party`,
+  ],
   distress: [
     (r) => `taking fire in ${r}! anyone copy?`,
     (r) => `contact in ${r}! we are engaged!`,
@@ -878,6 +898,7 @@ const VOICES = {
   ],
 };
 const say = (key, r) => { const p = VOICES[key]; return p[(Math.random() * p.length) | 0](r); };
+let _firstContacts = 0; // the first few flood calls read as confusion, not procedure
 function gameLogView(e) {
   const room = e.node >= 0 ? sim.graph.node(e.node).name : null;
   const throttle = (key, sec = 20) => {
@@ -964,6 +985,13 @@ function gameLogView(e) {
       }
       if (msg.startsWith('distress call')) {
         const w = witnessNear(e.node);
+        // the first few contact calls of the run are CONFUSION, not procedure
+        // — nobody knows what these things are yet (user: "what the hell are
+        // these things", "it's not Covenant")
+        if (_firstContacts < 3) {
+          _firstContacts++;
+          return rx(e, w, say('firstContact', room ?? 'here'), { type: 'combat' });
+        }
         return rx(e, w, say('distress', room ?? 'here'), { type: 'combat' });
       }
       if (msg.startsWith('FALL BACK')) {

@@ -240,8 +240,12 @@
     <h2>SHIP ACTIVITY</h2>
     <div id="log"></div>
   </div>
+  <!-- static markup paints on the FIRST frame, before any module loads —
+       the boot (three.js + world build) hides behind it; main.js replaces
+       the text the moment the type roll starts (user: first render must be
+       a Loading… in the intro typeface) -->
   <div id="intro">
-    <div id="introText"></div>
+    <div id="introText">Loading…</div>
     <div id="introMission"></div>
     <div id="introHint">any key or click — skip</div>
   </div>

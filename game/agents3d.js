@@ -10,8 +10,15 @@ import { carryGeometry } from './rifle-model.js';
 import { characterParts } from './characters.js';
 import { RagdollSystem } from '../engine/physics/ragdoll.js';
 import { TASK } from '../sim/hive.js';
+import { sightRangeAt } from '../sim/combat.js';
 
 const CAP = 512;
+// deterministic per-(shooter, tick, salt) jitter in [-1, 1] for tracer spread
+function shotJitter(id, tick, salt) {
+  let h = (id * 374761393 + tick * 668265263 + salt * 2246822519) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (((h ^ (h >>> 16)) >>> 0) / 0xffffffff) * 2 - 1;
+}
 // shadow-caster curation (swarm finding): the torch's shadow camera reaches
 // 32m — an instance beyond ~34m of the eye can't cast into the beam, so a
 // part-set with no stamped instance that close skips the depth pass entirely
@@ -723,6 +730,7 @@ export class Agents3D {
       const targets = occ.filter((a) => !a.dead && a.hp > 0 && !a.downed &&
         (a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER || a.faction === FACTION.INFECTION));
       if (!shooters.length || !targets.length) continue;
+      const sight = sightRangeAt(sim, n);
       for (const sh of shooters) {
         if (seg >= 250) break;
         if ((sh.id + sim.tickCount) % 3 === 0) continue;
@@ -730,8 +738,22 @@ export class Agents3D {
         const sr = this.rpos.get(sh.id), tr = this.rpos.get(t.id);
         if (!sr || !tr) continue;
         const [sx, sz] = this.world.simToWorld(sr.x, sr.y, sr.deck);
-        const [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
-        const ey = elevOf(sr.deck) + 1.3, ty = elevOf(tr.deck) + 0.7;
+        let [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
+        const ey = elevOf(sr.deck) + 1.3;
+        let ty = elevOf(tr.deck) + 0.7;
+        // the render honors the same sight limit as the sim (user: marines
+        // visibly lasering a form they couldn't possibly see in the dark)
+        const range = Math.hypot(tx - sx, tz - sz);
+        if (range > sight) continue;
+        // PER-SHOT SPREAD (user: every tracer from every marine converged on
+        // the exact same point) — deterministic jitter around the target,
+        // wider at range and for the squad's worse shots; misses visibly miss
+        const sp = (0.22 + range * 0.05) * (0.7 + 0.7 * ((sh.id * 7) % 5) / 4);
+        const inv = 1 / (range || 1);
+        const px = -(tz - sz) * inv, pz = (tx - sx) * inv;
+        const j1 = shotJitter(sh.id, sim.tickCount, 1) * sp;
+        const j2 = shotJitter(sh.id, sim.tickCount, 2) * sp * 0.6;
+        tx += px * j1; tz += pz * j1; ty += j2;
         pos.setXYZ(seg * 2, sx, ey, sz);
         pos.setXYZ(seg * 2 + 1, tx, ty, tz);
         seg++;
@@ -779,8 +801,18 @@ export class Agents3D {
         const sr = this.rpos.get(sh.id), tr = this.rpos.get(t.id);
         if (!sr || !tr) continue;
         const [sx, sz] = this.world.simToWorld(sr.x, sr.y, sr.deck);
-        const [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
-        const ey = elevOf(sr.deck) + 1.05, ty = elevOf(tr.deck) + 0.9;
+        let [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
+        const ey = elevOf(sr.deck) + 1.05;
+        let ty = elevOf(tr.deck) + 0.9;
+        // a host's weapon fired one-handed sprays WIDE (lore: suppressive
+        // noise, not marksmanship) — big visible scatter
+        const fdx = tx - sx, fdz = tz - sz;
+        const frange = Math.hypot(fdx, fdz) || 1;
+        const fsp = 0.5 + frange * 0.07;
+        const finv = 1 / frange;
+        const fj1 = shotJitter(sh.id, sim.tickCount, 3) * fsp;
+        const fj2 = shotJitter(sh.id, sim.tickCount, 4) * fsp * 0.7;
+        tx += -fdz * finv * fj1; tz += fdx * finv * fj1; ty += fj2;
         fpos.setXYZ(fseg * 2, sx, ey, sz);
         fpos.setXYZ(fseg * 2 + 1, tx, ty, tz);
         fseg++;

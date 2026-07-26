@@ -6,6 +6,28 @@ import { FACTION } from '../shared/agentBuffer.js';
 import { STATE, makeAgent } from './init.js';
 import { explodeCarrier } from './floodExec.js';
 
+// deterministic per-agent marksmanship in [1-spread, 1+spread] — squads have
+// a good shot and a poor one, hashed off the id so replay/lockstep hold
+function marksman01(id) {
+  let h = (id | 0) ^ 0x2c1b3c6d;
+  h = Math.imul(h ^ (h >>> 15), 0x297a2d39);
+  h ^= h >>> 13;
+  return (h >>> 0) / 0xffffffff;
+}
+
+// how far a shooter can ACQUIRE a target in this room's light (user: no more
+// wall-to-wall instant fire lanes down long dark hallways)
+export function sightRangeAt(sim, node) {
+  const P = sim.P.combat;
+  let m;
+  if (sim.darkAt(node)) m = P.sightDarkM;
+  else {
+    const lm = sim.graph.lightMode[node];
+    m = lm === 3 ? P.sightUnlitM : (lm === 1 || lm === 2) ? P.sightFlickerM : P.sightLitM;
+  }
+  return sim.fogAt(node) ? m * P.fogSightMult : m;
+}
+
 export function resolveCombat(sim, dt) {
   const P = sim.P;
 
@@ -119,11 +141,15 @@ export function resolveCombat(sim, dt) {
     if (!shooters.length && !anyFlood) continue;
 
     if (shooters.length && anyFlood) {
-      sim.gunfireAt(node);
+      // gunfire only rings when someone actually FIRES — with sight limits
+      // and reaction delays, a form sharing a dark room no longer makes the
+      // room sound like a range the instant it steps in
+      let anyFire = false;
       // flamethrower: a continuous stream — kills are permanent, the node burns
       const flamer = shooters.find((s) => s.flamer && s.fuel > 0);
       const targets = [...combatForms, ...carriers].sort((a, b) => a.id - b.id);
       if (flamer && targets.length) {
+        anyFire = true;
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
         sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
@@ -145,17 +171,40 @@ export function resolveCombat(sim, dt) {
       // form in transit at all — pods only ever died to point-blank stomps).
       // They rank behind combat forms (the bigger threat draws the fire),
       // ahead of carriers, and they're small fast targets: accuracy penalty.
+      // sight-limited engagement (user: marines lasered a form the instant it
+      // entered a 40m dark hallway) — a shooter can only acquire inside the
+      // room's light-dependent sight range; the flood needs no light
+      const sight = sightRangeAt(sim, node);
       for (const s of shooters) {
         if (s === flamer) continue;
         if (sim.t < (s.nextShotAt ?? 0)) continue;
-        let best = null, bestD = Infinity;
+        let best = null, bestD = Infinity, bestRange = 0;
         for (const t of [...targets, ...infForms]) {
           if (t.hp <= 0 || t.dead) continue;
+          const rd = Math.hypot(t.x - s.x, t.y - s.y);
+          if (rd > sight) continue; // out in the dark — can't see it to shoot it
           const bias = t.faction === FACTION.CARRIER ? 1000 : t.faction === FACTION.INFECTION ? 500 : 0;
-          const d = Math.hypot(t.x - s.x, t.y - s.y) + bias;
-          if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; }
+          const d = rd + bias;
+          if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; bestRange = rd; }
         }
-        if (!best) break;
+        if (!best) continue; // sight ranges differ per shooter position — keep checking the rest
+        // STAGGERED REACTION (user: every marine opened up the same instant,
+        // like one organism): a FRESH acquisition — nothing in sight for the
+        // last lull window — rolls a human reaction delay, anchored on facing:
+        // a contact outside the shooter's forward cone costs extra time to
+        // hear, turn, and re-acquire. During a sustained fight there's no
+        // re-roll, so suppression stays continuous.
+        if (sim.t - (s._sawThreatT ?? -99) > P.combat.reactLullSec) {
+          const bearing = Math.atan2(best.y - s.y, best.x - s.x);
+          let off = Math.abs(bearing - (s.heading ?? 0));
+          if (off > Math.PI) off = 2 * Math.PI - off;
+          const behind = off > P.combat.reactConeRad;
+          s._reactUntil = sim.t + P.combat.reactBaseSec
+            + sim.rng.range(0, P.combat.reactScatterSec)
+            + (behind ? P.combat.reactBehindSec * (0.6 + 0.8 * (off / Math.PI)) : 0);
+        }
+        s._sawThreatT = sim.t;
+        if (sim.t < (s._reactUntil ?? 0)) continue; // still turning / registering it
         // FIRETEAM AMMO ECONOMY (user): your escorts burn real magazines.
         // A dry marine keeps his boot (stomps below) but the rifle is out
         // until you hand him a mag (G key, sim.giveMag).
@@ -180,8 +229,12 @@ export function resolveCombat(sim, dt) {
         }
         const gun = s.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
         s.nextShotAt = sim.t + 1 / gun.rof;
-        const range = Math.hypot(best.x - s.x, best.y - s.y);
+        anyFire = true;
+        const range = bestRange;
         let acc = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
+        // per-marine marksmanship (user: every shot from every marine landed
+        // like a laser) — each shooter is a better or worse shot for life
+        acc *= 1 + (marksman01(s.id) * 2 - 1) * P.combat.marksmanSpread;
         if (best.faction === FACTION.INFECTION) acc *= P.combat.podAccMult;
         // FLOOD DARKNESS (user rule): humans fight the held rooms by
         // flashlight — accuracy suffers, and spore fog stacks on top.
@@ -217,6 +270,7 @@ export function resolveCombat(sim, dt) {
         if (sim.rng.chance(Math.min(1, stomps))) { sim.removeAgent(f); sim.stats.infectionFormsKilled++; }
         stomps -= 1;
       }
+      if (anyFire) sim.gunfireAt(node);
     } else if (sim.marinesKnowRevive && shooters.length && downedForms.length) {
       // no live threat: marines put confirming rounds into downed forms.
       // GATED (user): early on the marines don't know the downed get back

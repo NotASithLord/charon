@@ -336,8 +336,31 @@ var PARAMS = {
     // a skittering pod is a small fast rifle target
     rifleFalloffM: 12,
     // full NPC rifle effect inside this — beyond it, a dark
-    rifleFarFactor: 0.5
+    rifleFarFactor: 0.5,
     // ship and a sprinting target halve effective fire
+    // MARINE DEFANG (user: a form entering a long hallway drew instant,
+    // synchronized, pinpoint fire from every marine wall-to-wall).
+    // Sight-limited engagement: shooters can only ACQUIRE a target inside
+    // these ranges (lit / dead-mains / flickering / flood-dark rooms; spore
+    // fog multiplies on top). Big and long rooms are no longer one free
+    // fire lane — the flood closes distance in the dark before the guns open.
+    sightLitM: 26,
+    sightUnlitM: 13,
+    sightFlickerM: 18,
+    sightDarkM: 9,
+    fogSightMult: 0.6,
+    // Staggered human reaction on a FRESH acquisition (>lull since a target
+    // was last in sight): base + per-roll scatter, plus a big penalty when
+    // the contact appears outside the shooter's ~70° facing cone (they have
+    // to hear it, turn, and re-acquire).
+    reactBaseSec: 0.35,
+    reactScatterSec: 0.75,
+    reactBehindSec: 0.9,
+    reactLullSec: 4,
+    reactConeRad: 1.2,
+    // per-marine marksmanship spread: acc multiplier in [1-spread, 1+spread]
+    // hashed off the agent id — squads have a good shot and a poor one
+    marksmanSpread: 0.25
   },
   // FLOOD DARKNESS (user rule): a room the flood holds ALONE goes dark at
   // 60 s (biomass overgrows the fixtures) and fills with spore fog at
@@ -3835,6 +3858,22 @@ function factionName(f) {
 }
 
 // sim/combat.js
+function marksman01(id) {
+  let h = (id | 0) ^ 739982445;
+  h = Math.imul(h ^ h >>> 15, 695872825);
+  h ^= h >>> 13;
+  return (h >>> 0) / 4294967295;
+}
+function sightRangeAt(sim2, node) {
+  const P = sim2.P.combat;
+  let m;
+  if (sim2.darkAt(node)) m = P.sightDarkM;
+  else {
+    const lm = sim2.graph.lightMode[node];
+    m = lm === 3 ? P.sightUnlitM : lm === 1 || lm === 2 ? P.sightFlickerM : P.sightLitM;
+  }
+  return sim2.fogAt(node) ? m * P.fogSightMult : m;
+}
 function resolveCombat(sim2, dt) {
   const P = sim2.P;
   const groups = /* @__PURE__ */ new Map();
@@ -3912,10 +3951,11 @@ function resolveCombat(sim2, dt) {
     const anyFlood = combatForms.length + infForms.length + carriers.length > 0;
     if (!shooters.length && !anyFlood) continue;
     if (shooters.length && anyFlood) {
-      sim2.gunfireAt(node);
+      let anyFire = false;
       const flamer = shooters.find((s) => s.flamer && s.fuel > 0);
       const targets = [...combatForms, ...carriers].sort((a, b) => a.id - b.id);
       if (flamer && targets.length) {
+        anyFire = true;
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim2.graph.burningUntil[node] = sim2.t + P.flamethrower.burnNodeSec;
         sim2.graph.invalidatePathCache();
@@ -3927,20 +3967,33 @@ function resolveCombat(sim2, dt) {
           hurtFloodForm(sim2, t, d, true);
         }
       }
+      const sight = sightRangeAt(sim2, node);
       for (const s of shooters) {
         if (s === flamer) continue;
         if (sim2.t < (s.nextShotAt ?? 0)) continue;
-        let best = null, bestD = Infinity;
+        let best = null, bestD = Infinity, bestRange = 0;
         for (const t of [...targets, ...infForms]) {
           if (t.hp <= 0 || t.dead) continue;
+          const rd = Math.hypot(t.x - s.x, t.y - s.y);
+          if (rd > sight) continue;
           const bias = t.faction === FACTION.CARRIER ? 1e3 : t.faction === FACTION.INFECTION ? 500 : 0;
-          const d = Math.hypot(t.x - s.x, t.y - s.y) + bias;
+          const d = rd + bias;
           if (d < bestD - 1e-9 || Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity)) {
             bestD = d;
             best = t;
+            bestRange = rd;
           }
         }
-        if (!best) break;
+        if (!best) continue;
+        if (sim2.t - (s._sawThreatT ?? -99) > P.combat.reactLullSec) {
+          const bearing = Math.atan2(best.y - s.y, best.x - s.x);
+          let off = Math.abs(bearing - (s.heading ?? 0));
+          if (off > Math.PI) off = 2 * Math.PI - off;
+          const behind = off > P.combat.reactConeRad;
+          s._reactUntil = sim2.t + P.combat.reactBaseSec + sim2.rng.range(0, P.combat.reactScatterSec) + (behind ? P.combat.reactBehindSec * (0.6 + 0.8 * (off / Math.PI)) : 0);
+        }
+        s._sawThreatT = sim2.t;
+        if (sim2.t < (s._reactUntil ?? 0)) continue;
         if (s.escort && s.mags !== void 0) {
           if (s.rounds <= 0) {
             if (s.mags > 0) {
@@ -3962,8 +4015,10 @@ function resolveCombat(sim2, dt) {
         }
         const gun = s.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
         s.nextShotAt = sim2.t + 1 / gun.rof;
-        const range = Math.hypot(best.x - s.x, best.y - s.y);
+        anyFire = true;
+        const range = bestRange;
         let acc2 = range <= P.combat.rifleFalloffM ? gun.accNear : gun.accFar;
+        acc2 *= 1 + (marksman01(s.id) * 2 - 1) * P.combat.marksmanSpread;
         if (best.faction === FACTION.INFECTION) acc2 *= P.combat.podAccMult;
         if (sim2.darkAt(node)) acc2 *= P.darkness.darkAccMult;
         if (sim2.fogAt(node)) acc2 *= P.darkness.fogAccMult;
@@ -3989,6 +4044,7 @@ function resolveCombat(sim2, dt) {
         }
         stomps -= 1;
       }
+      if (anyFire) sim2.gunfireAt(node);
     } else if (sim2.marinesKnowRevive && shooters.length && downedForms.length) {
       const marines = shooters.filter((s) => s.faction === FACTION.MARINE);
       if (marines.length) {
