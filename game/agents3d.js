@@ -338,9 +338,27 @@ export class Agents3D {
       if (!pivot) { mesh.setMatrixAt(i, this._m); continue; }
       const part = mesh.userData.part;
       const k = part === 'armL' ? 0 : part === 'armR' ? 1 : part === 'legL' ? 2 : part === 'legR' ? 3 : 4;
-      const h = Math.sin(id * 37.11 + k * 13.7) + Math.sin(id * 11.7 + k * 5.3) * 0.5;
-      const ang = (part === 'head' ? h * 0.25 : h * 0.45 + (k < 2 ? 0.25 : 0.1)) * ease;
-      this._mRot.makeRotationZ(ang);
+      // TWO INDEPENDENT HASHES so a body's left and right don't mirror each
+      // other — one arm can end up tucked under the ribs while the other is
+      // thrown wide.
+      const u = (Math.sin(id * 17.3 + k * 3.1) + 1) / 2;
+      const v = (Math.sin(id * 5.77 + k * 9.4) + 1) / 2;
+      // ADDUCTION about model X. With the body laid on its BACK (see the base
+      // matrix) that axis points at the ceiling, so this sweep runs ACROSS the
+      // plating and can never dig a limb in — and it is the ONLY axis that
+      // closes the bind-pose T. The old Z sweep rotated in a vertical plane:
+      // it slid outstretched arms forward and back but never brought them
+      // down to the body, so every corpse kept its arms straight out (user:
+      // "T posing posture still a problem").
+      const ang = (part === 'armR' ? 0.35 + u * 0.95
+        : part === 'armL' ? -(0.35 + v * 0.95)
+        : part === 'legR' ? 0.08 + u * 0.34
+        : part === 'legL' ? -(0.08 + v * 0.34)
+        : (u - 0.5) * 0.5) * ease;
+      // a little sway in the perpendicular plane so limbs aren't all coplanar
+      this._eSpr ??= new THREE.Euler();
+      this._eSpr.set(ang, 0, (u - 0.5) * (part === 'head' ? 0.3 : 0.5) * ease);
+      this._mRot.makeRotationFromEuler(this._eSpr);
       this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
         .multiply(this._mRot)
         .multiply(this._mOut.makeTranslation(-pivot[0], -pivot[1], -pivot[2]));
@@ -543,7 +561,12 @@ export class Agents3D {
           // ON the plating instead of sunk into it. The armed dead keep
           // their rifle beside them, so the scavenge prompt points at
           // something you can see.
-          this._e.set(-Math.PI / 2, lieAng, 0);
+          // ON ITS BACK, not its side. Rx(-90) put the model's LATERAL axis
+          // vertical, so a bind-pose T threw one arm at the ceiling and drove
+          // the other through the deck. Rz(+90) stands the chest up instead:
+          // the body lies face-up, both arms rest in the floor plane, and the
+          // sprawl above can tuck them.
+          this._e.set(0, lieAng, Math.PI / 2);
           this._q.setFromEuler(this._e);
           this._m.compose(this._p.set(bx, bElev + 0.16, bz), this._q, this._s.set(1, 1, 1));
           if (flags & FLAG.ARMED_HOST) {
@@ -575,7 +598,9 @@ export class Agents3D {
         const ease = 1 - (1 - p) * (1 - p);
         const bx = rest ? rest[0] : wx, bz = rest ? rest[2] : wz;
         const bElev = rest ? world.groundHeightAt(deck, bx, bz) : elev;
-        this._e.set(-Math.PI / 2 * ease, heading, 0);
+        // falls ONTO ITS BACK (same axis the settled corpse lies on, so the
+        // blend lands exactly where the static render expects it)
+        this._e.set(0, heading, (Math.PI / 2) * ease);
         this._q.setFromEuler(this._e);
         this._m.compose(this._p.set(bx, bElev + 0.16 * ease, bz), this._q, this._s.set(1, 1, 1));
         // sprawl grows in as it falls — flat is a settled sprawl, not a T

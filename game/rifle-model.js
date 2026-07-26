@@ -16,7 +16,10 @@ export const RIFLE_MUZZLE = new THREE.Vector3(0, 0.015, 0.515);
 // first-strike js/main.js gunTune, viewmodel placement in CAMERA-local space.
 // Their engine's local +Z is forward; Three's camera-local forward is -Z, so
 // z is negated when applied (see wireViewmodel below).
-export const GUN_TUNE = { x: 0.165, y: -0.235, z: 0.235, ry: -0.08, rx: -0.045, rz: 0.02, s: 1.15 };
+// x/z pulled in 10% from first-strike's CE reference placement (user): the
+// rifle sat a touch too far right and too far out in front of the eye. The
+// muzzle flash and tracer origin ride rifleMesh.matrixWorld, so they follow.
+export const GUN_TUNE = { x: 0.1485, y: -0.235, z: 0.2115, ry: -0.08, rx: -0.045, rz: 0.02, s: 1.15 };
 
 function geometryFor(part) {
   const src = RIFLE_MESHES[part];
