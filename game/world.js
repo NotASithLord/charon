@@ -95,6 +95,29 @@ export class World {
     }
     return best;
   }
+  // ONE PLACARD AT A TIME: the nearest room sign on the player's deck, within
+  // range. Anything else stays hidden, so signs can never overlap or stack.
+  showRoomSign(deck, px, pz, maxM = 26) {
+    const signs = this.roomSigns;
+    if (!signs) return;
+    let best = -1, bestD = maxM * maxM;
+    for (let i = 0; i < signs.length; i++) {
+      const s = signs[i];
+      if (!s) continue;
+      if (s.visible && i !== this._signShown) s.visible = false;
+      const nd = this.graph.node(i);
+      if (nd.deck !== deck) continue;
+      const dx = s.position.x - px, dz = s.position.z - pz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD) { bestD = d2; best = i; }
+    }
+    if (this._signShown !== undefined && this._signShown !== best && signs[this._signShown]) {
+      signs[this._signShown].visible = false;
+    }
+    if (best >= 0) signs[best].visible = true;
+    this._signShown = best;
+  }
+
   simToWorld(sx, sy, deck) { return [sx, sy - this.bandCenter(deck)]; }
   worldToSim(wx, wz, deck) { return [wx, wz + this.bandCenter(deck)]; }
 
@@ -421,7 +444,9 @@ export class World {
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.95 }));
-    spr.scale.set(4.6, 0.86, 1);
+    // smaller than it was: at 4.6 m wide a sign a few metres away filled the
+    // screen and ran off its edge (user)
+    spr.scale.set(3.0, 0.56, 1);
     return spr;
   }
 
@@ -516,6 +541,11 @@ export class World {
       }
       const sign = this._label(n.name);
       sign.position.set(wx, elev + roomH - 0.45, wz);
+      // EVERY room hung one of these and every one of them was visible, so any
+      // view across a room boundary stacked two or three huge overlapping
+      // placards (user: "this ... tag doesnt make any sense"). They start
+      // hidden; showRoomSign picks exactly one per frame.
+      sign.visible = false;
       this.scene.add(sign);
       (this.roomSigns ??= [])[n.idx] = sign;
 
@@ -1011,7 +1041,9 @@ export class World {
     // treads/landing/spine share the deck-plate material (tinted), with the
     // plate texture scaled onto each box via the same UV helper the floors
     // use — zero new textures, batches with the floors.
-    const matStep = this._mkFloorMat(0x9aa6ba);
+    // darker than the deck plating: lit from across a dark room the old light
+    // tint read as bare white planks floating at an angle (user screenshot)
+    const matStep = this._mkFloorMat(0x5d6879);
     const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.45, metalness: 0.7 });
     const fmat = this._mkFloorMat(0x93a1b8);
     // entry floor at deck level, with the well cut out (walk all the way round)

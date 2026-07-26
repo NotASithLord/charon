@@ -2034,6 +2034,7 @@ function frame(now) {
   // volume-scoped rendering (user: don't draw the whole ship): decks beyond
   // ±1 and fore/aft thirds beyond full fog are hidden — both pixel-exact
   world.setActiveVolume(player.deck, player.x);
+  world.showRoomSign(player.deck, player.x, player.z);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
