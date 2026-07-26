@@ -69,9 +69,15 @@ export class Agents3D {
       // pixel diff — but the infection form's feeler paddles and tentacles
       // are open single-sided fins that vanish from behind, so it keeps
       // DoubleSide.
+      // FLOOD SETS STAY DoubleSide (user report on Chrome: some combat forms
+      // lost their bodies but kept their SHADOW — a reverse-wound part is
+      // culled by FrontSide in the main pass while the shadow pass draws
+      // BackSide, leaving a black silhouette with no caster). The humanoid
+      // crew/marine shells verified clean under FrontSide and keep the win.
+      const flood = name === 'infection' || name === 'combat_civ' || name === 'combat_odst';
       const mat = new THREE.MeshStandardMaterial({
         map: p.texture, roughness: 0.78, metalness: 0.06,
-        side: name === 'infection' ? THREE.DoubleSide : THREE.FrontSide,
+        side: flood ? THREE.DoubleSide : THREE.FrontSide,
       });
       const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
       mesh.count = 0;
@@ -257,8 +263,12 @@ export class Agents3D {
     // left arm crossed further to the fore-stock — matching _rifleAt's held
     // pose — raised toward level when fighting, with a soft bob when walking.
     if (hold && (part === 'armL' || part === 'armR')) {
-      const base = part === 'armR' ? -0.6 : -0.86;
-      const aim = clip === CLIP.ATTACK ? -0.3 : clip === CLIP.RUN ? -0.12 : 0;
+      // POSITIVE swing = forward on this rig (the old negative bases pitched
+      // the arms BACKWARD ~40° — the "awk stuff" in the user's screenshot;
+      // verified by candidate-grid renders). Right hand to the grip, left
+      // crossed further up the fore-stock — Halo low-ready.
+      const base = part === 'armR' ? 0.75 : 1.0;
+      const aim = clip === CLIP.ATTACK ? 0.3 : clip === CLIP.RUN ? 0.12 : 0;
       const bob = clip === CLIP.WALK || clip === CLIP.RUN
         ? Math.sin(ph * 2) * 0.05
         : Math.sin(ph * 0.35 + (part === 'armR' ? 0.6 : 0)) * 0.03; // breathing
@@ -280,9 +290,10 @@ export class Agents3D {
         if (part === 'head') return 0.08;
         return 0;
       case CLIP.ATTACK:
-        // raised, flailing swipes — claws up and hammering
-        if (part === 'armL') return -1.0 + Math.sin(ph * 1.7) * 0.55;
-        if (part === 'armR') return -1.0 + Math.sin(ph * 1.7 + 2.1) * 0.55;
+        // raised, flailing swipes — claws up and hammering (positive =
+        // forward on this rig, same sign fix as the rifle hold)
+        if (part === 'armL') return 1.0 + Math.sin(ph * 1.7) * 0.55;
+        if (part === 'armR') return 1.0 + Math.sin(ph * 1.7 + 2.1) * 0.55;
         if (part === 'legL') return s * 0.25;
         if (part === 'legR') return -s * 0.25;
         if (part === 'head') return Math.sin(ph) * 0.1;
@@ -307,6 +318,29 @@ export class Agents3D {
         if (part === 'legR') return -set2 * 0.05;
         return 0;
       }
+    }
+  }
+
+  // dead-sprawl stamp for bodies lying flat: limbs splayed at deterministic
+  // per-body angles instead of the bind-pose T (user: corpses read as
+  // cardboard cutouts half-sunk in the deck). The swing plane IS the lying
+  // plane once the base matrix pitches the body flat, so no angle can dig a
+  // limb into the floor. `ease` grows the sprawl in as a downed body falls.
+  _stampSprawl(set, i, id, ease = 1) {
+    if (this._curD2 < CAST_NEAR2) this._castNear.add(set);
+    for (const mesh of set) {
+      const pivot = mesh.userData.pivot;
+      if (!pivot) { mesh.setMatrixAt(i, this._m); continue; }
+      const part = mesh.userData.part;
+      const k = part === 'armL' ? 0 : part === 'armR' ? 1 : part === 'legL' ? 2 : part === 'legR' ? 3 : 4;
+      const h = Math.sin(id * 37.11 + k * 13.7) + Math.sin(id * 11.7 + k * 5.3) * 0.5;
+      const ang = (part === 'head' ? h * 0.25 : h * 0.45 + (k < 2 ? 0.25 : 0.1)) * ease;
+      this._mRot.makeRotationZ(ang);
+      this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
+        .multiply(this._mRot)
+        .multiply(this._mOut.makeTranslation(-pivot[0], -pivot[1], -pivot[2]));
+      this._mOut.multiplyMatrices(this._m, this._mPart);
+      mesh.setMatrixAt(i, this._mOut);
     }
   }
 
@@ -452,6 +486,14 @@ export class Agents3D {
       // hangar level renders pushed out through the nearest face instead
       // of walking through its walls (user report)
       [wx, wz] = world.clampStairTower(deck, wx, wz);
+      // and one crossing the GRAND stair well at entry level slides around
+      // the balustrade instead of through it (user: NPCs clopped through the
+      // railings onto the flights) — unless it is genuinely on the stairwell
+      // edge descending, which is the one legal way into the well footprint
+      const simAg = sim.byId.get(id);
+      if (simAg?.move?.link?.type !== 'stairwell') {
+        [wx, wz] = world.clampStairWell(deck, wx, wz);
+      }
       // feet on the ground surface — in a stairwell room that follows the
       // mezzanine/ramp/hall, so bodies walk the stairs instead of floating
       // at one deck level (user: navigable stairwell room)
@@ -478,20 +520,21 @@ export class Agents3D {
           this.corpse.setMatrixAt(counts.corpse++, this._m);
         } else {
           // a REAL body lying where it fell (user note: render bodies
-          // appropriately, not grey boxes) — the character mesh laid flat,
-          // same pose math as the downed-form fall. The armed dead keep
+          // appropriately, not grey boxes) — laid flat WITH a per-body limb
+          // sprawl (user: the bind-pose T read as a cardboard cutout), resting
+          // ON the plating instead of sunk into it. The armed dead keep
           // their rifle beside them, so the scavenge prompt points at
           // something you can see.
           this._e.set(-Math.PI / 2, lieAng, 0);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(bx, bElev + 0.25, bz), this._q, this._s.set(1, 1, 1));
+          this._m.compose(this._p.set(bx, bElev + 0.16, bz), this._q, this._s.set(1, 1, 1));
           if (flags & FLAG.ARMED_HOST) {
-            stamp(this.armedSet, counts.armed++);
+            this._stampSprawl(this.armedSet, counts.armed++, id);
             this._rifleAt(bx + Math.cos(lieAng + 1.2) * 0.55, bElev + 0.12,
               bz + Math.sin(lieAng + 1.2) * 0.55, lieAng * 1.7);
             this.rifle.setMatrixAt(counts.rifle++, this._m);
           } else {
-            stamp(this.civSet, counts.civ++);
+            this._stampSprawl(this.civSet, counts.civ++, id);
           }
         }
         continue;
@@ -516,9 +559,10 @@ export class Agents3D {
         const bElev = rest ? world.groundHeightAt(deck, bx, bz) : elev;
         this._e.set(-Math.PI / 2 * ease, heading, 0);
         this._q.setFromEuler(this._e);
-        this._m.compose(this._p.set(bx, bElev + 0.25 * ease, bz), this._q, this._s.set(1, 1, 1));
-        if (flags & FLAG.ARMED_HOST) stamp(this.combatOdstSet, counts.combatOdst++);
-        else stamp(this.combatCivSet, counts.combatCiv++);
+        this._m.compose(this._p.set(bx, bElev + 0.16 * ease, bz), this._q, this._s.set(1, 1, 1));
+        // sprawl grows in as it falls — flat is a settled sprawl, not a T
+        if (flags & FLAG.ARMED_HOST) this._stampSprawl(this.combatOdstSet, counts.combatOdst++, id, ease);
+        else this._stampSprawl(this.combatCivSet, counts.combatCiv++, id, ease);
         continue;
       }
       // REVIVE TELEGRAPH (user note: forms "getting back up just happen
@@ -865,15 +909,15 @@ export class Agents3D {
   }
 
   _rifleAt(x, y, z, rotY) {
-    // HELD, not floating (user note: "not even holding a weapon correctly"):
-    // offset to the grip point — forward and into the right hand — and
-    // pitched to a two-hand low-ready instead of hovering level mid-chest
+    // HALO LOW-READY (user: "holding rifles in a pose similar to halo
+    // games"): across the chest, muzzle angled down and slightly across the
+    // body, sitting in the raised hands — candidate C of the pose grid
     const fx = Math.cos(rotY), fz = -Math.sin(rotY); // +X-forward after rotY
     const rx = -fz, rz = fx;                          // right-hand direction
-    this._e.set(0, rotY, -0.16);
+    this._e.set(0, rotY + 0.35, -0.35);
     this._q.setFromEuler(this._e);
     this._m.compose(
-      this._p.set(x + fx * 0.26 + rx * 0.15, y - 0.06, z + fz * 0.26 + rz * 0.15),
+      this._p.set(x + fx * 0.30 + rx * 0.05, y - 0.09, z + fz * 0.30 + rz * 0.05),
       this._q, this._s.set(1, 1, 1));
   }
 

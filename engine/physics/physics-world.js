@@ -170,6 +170,31 @@ export class PhysicsWorld {
     }
   }
 
+  // Door colliders: fixed cuboids spanning each closed opening, parked far
+  // below the map while the door is open/unlocked. Doors change lock state
+  // rarely (a seal release, a jam), so a teleporting fixed body is the
+  // cheapest correct shape — no per-step sync, no kinematic velocity.
+  setDoorBoxes(boxes) {
+    this._doors = boxes.map((b) => {
+      const body = this.world.createRigidBody(
+        this.R.RigidBodyDesc.fixed()
+          .setTranslation(b.cx, b.closed ? b.cy : b.cy - 1000, b.cz)
+          .setRotation(quatY(b.ry || 0)));
+      this.world.createCollider(
+        this.R.ColliderDesc.cuboid(Math.max(b.hx, 1e-3), Math.max(b.hy, 1e-3), Math.max(b.hz, 1e-3)),
+        body);
+      return { body, cy: b.cy, closed: !!b.closed };
+    });
+  }
+
+  setDoorClosed(i, closed) {
+    const d = this._doors?.[i];
+    if (!d || d.closed === closed) return;
+    d.closed = closed;
+    const t = d.body.translation();
+    d.body.setTranslation({ x: t.x, y: closed ? d.cy : d.cy - 1000, z: t.z }, true);
+  }
+
   step() {
     this.world.step();
   }

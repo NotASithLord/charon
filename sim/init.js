@@ -166,7 +166,7 @@ export function initRun(seed, rng, P) {
   {
     const armoryIdx = graph.byId.get('armory');
     const door = graph.edges.find((e) => (e.a === armoryIdx || e.b === armoryIdx) && e.lockable);
-    if (door) door.locked = true;
+    if (door) { door.locked = true; door.armorySeal = true; } // the seal is an EVENT gate — never jam/unjam rotation
     const squad = {
       id: squads.length, members: [], objective: null, morale: 1,
       respondingTo: null, phase1: true, odst: true, // phase1 done — no opening sweep

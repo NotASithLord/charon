@@ -173,6 +173,9 @@ const player = new Player(canvas, world, sim, sim.graph.byId.get('cic'));
 let physics = null;
 initRapier().then(() => {
   physics = new PhysicsWorld({ staticBoxes: world.collisionBoxes() });
+  // door colliders are DYNAMIC (doors jam/unjam mid-session, and the armory
+  // seal releases): one parked/placed fixed box per door, toggled below
+  physics.setDoorBoxes(world.doorBoxes());
   player.attachPhysics(physics);
 }).catch((e) => console.error('[charon] Rapier physics failed to initialise:', e));
 agents.playerId = player.agent.id;
@@ -1024,15 +1027,22 @@ function gameLogView(e) {
   }
 }
 function renderLog() {
+  // lastEvent is an ABSOLUTE counter matched against sim.eventTotal, with
+  // sim.eventBase mapping into the (splice-capped) events array — the old
+  // array-length compare wedged the log for 200 events every time the 1600
+  // cap hit, then silently skipped them (user report: log stuck at min 12)
+  const total = sim.eventTotal ?? sim.events.length;
   // no new events -> touch NOTHING (swarm finding: the scroll-metric reads
   // below force a synchronous reflow, and they ran every frame)
-  if (lastEvent >= sim.events.length) return;
+  if (lastEvent >= total) return;
+  const base = sim.eventBase ?? 0;
+  if (lastEvent < base) lastEvent = base; // events already aged off the buffer
   const log = el('log');
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   let added = false;
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  while (lastEvent < sim.events.length) {
-    const raw = sim.events[lastEvent++];
+  while (lastEvent < total) {
+    const raw = sim.events[lastEvent++ - base];
     // PHYSICAL side-effects of raw events, independent of radio receipt:
     // blood marks where people are taken or fall, the 1MC PA for shipwide
     // orders (the speakers are in every compartment — no radio needed)
@@ -1388,9 +1398,20 @@ function stepFrags(dt) {
         audio.play('bounce', { x: p.x, z: p.z }, 0.7, 'bounce', 60);
       } else { p.set(nx, ny, nz); }
     }
-    // floor bounce
-    const floor = elevOf(f.deck) + 0.09;
-    if (p.y < floor) {
+    // floor bounce — unless the frag is over a REAL opening (a ladder hatch
+    // hole or the grand stair well): the holes are genuinely cut through the
+    // deck, so a grenade drops through to the deck below (user: toss grenades
+    // through them to the next floor)
+    const overHatch = f.deck < 5 && world.trunks.some((t) => t.vertical && f.deck === t.upperDeck
+      && Math.abs(p.x - t.x) < 0.85 && Math.abs(p.z - t.z) < 0.85);
+    if (overHatch && p.y < elevOf(f.deck)) {
+      f.deck = world.trunks.find((t) => t.vertical && f.deck === t.upperDeck
+        && Math.abs(p.x - t.x) < 0.85 && Math.abs(p.z - t.z) < 0.85).lowerDeck;
+    }
+    // the stair well descends within its own room — groundHeightAt returns
+    // the flight surface under the frag, so it rolls/bounces DOWN the stairs
+    const floor = world.groundHeightAt(f.deck, p.x, p.z, p.y - 0.09) + 0.09;
+    if (p.y < floor && !overHatch) {
       p.y = floor;
       if (Math.abs(f.vy) > 1.2) audio.play('bounce', { x: p.x, z: p.z }, 0.6, 'bounce', 60);
       f.vy = -f.vy * FRAG.bounce;
@@ -1600,7 +1621,8 @@ function soundSweep(now) {
     const nd = g.node(n);
     const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
     if (nd.deck === player.deck) {
-      audio.play('scream', { x: wx, z: wz }, 0.7, `scr${n}`, 700);
+      // 2.8s per room (was 700ms — a metronome of screams during any panic)
+      audio.play('scream', { x: wx, z: wz }, 0.65, `scr${n}`, 2800);
     } else if (Math.abs(nd.deck - player.deck) === 1) {
       // someone dying one deck away — a faint cry through the plating
       audio.playFar('deathScream', { x: wx, z: wz }, 1, 0.5, `fscr${n}`, 4000);
@@ -1614,7 +1636,7 @@ function soundSweep(now) {
     if (a.move?.hidden) continue; // in the ducts — heard via duct log, not here
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
     const d = Math.hypot(wx - player.x, wz - player.z);
-    if (a.faction === 3 && d < 18 && now - chitterAt > 900) { audio.play('chitter', { x: wx, z: wz }, 0.8); chitterAt = now; }
+    if (a.faction === 3 && d < 18 && now - chitterAt > 1600 + Math.random() * 1200) { audio.play('chitter', { x: wx, z: wz }, 0.55); chitterAt = now; }
     if (a.faction === 4) {
       if (!nearCombat || d < nearCombat.d) nearCombat = { wx, wz, d };
       if (a.charging && d < 26 && (!charging || d < charging.d)) charging = { wx, wz, d };
@@ -1917,6 +1939,11 @@ function frame(now) {
     nMovers++;
   }
   world.updateDoors(dtReal, doorMovers, nMovers);
+  // keep the door colliders on the sim's lock state (setDoorClosed is a
+  // dirty-checked no-op when nothing changed — ~60 cheap comparisons)
+  if (physics) for (let i = 0; i < world.doors.length; i++) {
+    physics.setDoorClosed(i, !!world.doors[i].edge.locked);
+  }
 
   // camera: your eyes — or the eyes of what you became
   const ghost = player.dead ? ghostAlive() : null;

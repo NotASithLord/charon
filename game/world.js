@@ -108,17 +108,20 @@ export class World {
   collisionBoxes() {
     // boxes were cached from the pristine per-mesh geometry BEFORE the
     // static merge collapsed it (the merged buffers have no box params)
-    const out = [...(this._collBoxCache ?? [])];
-    for (const d of this.doors) {
-      if (!d.edge.locked) continue;
-      // one box spanning the whole closed opening (locked doors never open)
-      out.push({
-        cx: d.x, cy: d.elev + this._doorPH / 2, cz: d.z,
-        hx: DOOR_W / 2 + 0.06, hy: this._doorPH / 2, hz: 0.08,
-        ry: -d.phi,
-      });
-    }
-    return out;
+    // locked-door boxes are NOT here anymore — doors jam and unjam
+    // mid-session now, so their colliders are dynamic (doorBoxes below,
+    // toggled through PhysicsWorld.setDoorClosed)
+    return [...(this._collBoxCache ?? [])];
+  }
+
+  // one collider box per door, spanning the closed opening; `closed` follows
+  // the sim's lock state and the physics layer parks open doors far below
+  doorBoxes() {
+    return this.doors.map((d) => ({
+      cx: d.x, cy: d.elev + this._doorPH / 2, cz: d.z,
+      hx: DOOR_W / 2 + 0.06, hy: this._doorPH / 2, hz: 0.08,
+      ry: -d.phi, closed: !!d.edge.locked,
+    }));
   }
 
   // STATIC MERGE (perf): group every plain static Mesh in the scene by
@@ -757,9 +760,12 @@ export class World {
       return [bx, bz];
     };
     const matLadder = new THREE.MeshStandardMaterial({ color: 0x8a97a8, roughness: 0.5, metalness: 0.7 });
+    // SUBTLE MARKERS (user: the glowing color blocks were the last jarring
+    // low-res read) — collars are worn steel with only a faint status tint;
+    // the red battery lamps above each hatch already carry the wayfinding
     const matCollar = (lift) => new THREE.MeshStandardMaterial({
-      color: lift ? 0x1e4b56 : 0x54401e,
-      emissive: lift ? 0x2fd7f0 : 0xf0a52f, emissiveIntensity: 0.55,
+      color: 0x59626f, roughness: 0.55, metalness: 0.6,
+      emissive: lift ? 0x1a4a55 : 0x4a3a16, emissiveIntensity: 0.18,
     });
     // NO TWO PADS ON TOP OF EACH OTHER (user report: a lift collar and a
     // ladder collar landed practically overlapping in the same corridor,
@@ -856,15 +862,40 @@ export class World {
         for (const p of [pl, pu]) {
           const [msx, msy] = this.worldToSim(p.x, p.z, p.deck);
           this._addMouth(p.node, msx, msy);
-          const well = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.95, 0.95, CLEAR_H, 14, 1, true),
-            new THREE.MeshStandardMaterial({
-              color: lift ? 0x2fd7f0 : 0xf0a52f,
-              emissive: lift ? 0x1a7b8a : 0x8a5c1a, emissiveIntensity: 0.5,
-              transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false,
-            }));
-          well.position.set(p.x, elevOf(p.deck) + CLEAR_H / 2, p.z);
-          this.scene.add(well);
+          // STAIR KIOSK (user: the glowing cylinder was an egregious low-res
+          // marker): a real steel enclosure with an open dark doorway facing
+          // the room — reads as the head of an enclosed stairwell, built from
+          // the same wall material as everything else. Top-level meshes with
+          // world transforms (Y-rotation only) so the physics box cache and
+          // the static merge see them exactly like every other wall.
+          const nd = g.node(p.node);
+          const [ncx, ncz] = this.simToWorld(nd.x, nd.y, nd.deck);
+          const face = Math.atan2(ncx - p.x, ncz - p.z); // doorway toward room centre
+          const kw = 2.0, kd = 2.0, kh = CLEAR_H - 0.25, dw = 1.0, dh = 2.15;
+          const cf = Math.cos(face), sf = Math.sin(face);
+          const base = elevOf(p.deck);
+          const addK = (w, h, d, lx, ly, lz, solid = true) => {
+            const wx2 = p.x + lx * cf + lz * sf;
+            const wz2 = p.z - lx * sf + lz * cf;
+            const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), this._matWall);
+            m.position.set(wx2, base + ly, wz2);
+            m.rotation.y = face;
+            this.scene.add(m);
+            if (solid) this.wallMeshes.push(m);
+          };
+          addK(kw, kh, 0.12, 0, kh / 2, -kd / 2);                                   // back
+          addK(0.12, kh, kd, -kw / 2, kh / 2, 0);                                   // left
+          addK(0.12, kh, kd, kw / 2, kh / 2, 0);                                    // right
+          addK((kw - dw) / 2, kh, 0.12, -(dw / 2 + (kw - dw) / 4), kh / 2, kd / 2); // door jambs
+          addK((kw - dw) / 2, kh, 0.12, dw / 2 + (kw - dw) / 4, kh / 2, kd / 2);
+          addK(kw, kh - dh, 0.12, 0, dh + (kh - dh) / 2, kd / 2, false);            // header (walk under)
+          addK(kw, 0.1, kd, 0, kh + 0.05, 0, false);                               // cap
+          // the dark descent inside the doorway — an unlit void you step into
+          const voidM = new THREE.Mesh(new THREE.PlaneGeometry(dw + 0.7, dh - 0.05),
+            new THREE.MeshBasicMaterial({ color: 0x04060a }));
+          voidM.position.set(p.x, base + dh / 2, p.z);
+          voidM.rotation.y = face;
+          this.scene.add(voidM);
           const collar = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.07, 16), matCollar(lift));
           collar.position.set(p.x, elevOf(p.deck) + 0.035, p.z);
           this.scene.add(collar);
@@ -950,7 +981,11 @@ export class World {
     const g = this._stairGeom(n);
     (this.stairRooms ??= []).push({ deck: n.deck, node: n.idx, ...g });
     const { cx, cz, hx, hz, hiElev, loElev, midElev, wellCx, wellCz, wellHx, wellHz } = g;
-    const matStep = new THREE.MeshStandardMaterial({ color: 0x6c7789, roughness: 0.75, metalness: 0.4 });
+    // REAL TEXTURES, CHEAPLY (user: the staircase read as untextured flats):
+    // treads/landing/spine share the deck-plate material (tinted), with the
+    // plate texture scaled onto each box via the same UV helper the floors
+    // use — zero new textures, batches with the floors.
+    const matStep = this._mkFloorMat(0x9aa6ba);
     const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.45, metalness: 0.7 });
     const fmat = this._mkFloorMat(0x93a1b8);
     // entry floor at deck level, with the well cut out (walk all the way round)
@@ -969,7 +1004,8 @@ export class World {
       for (let i = 0; i < steps; i++) {
         const zc = frontToBack ? (wellCz - wellHz) + (i + 0.5) * dz : (wellCz + wellHz) - (i + 0.5) * dz;
         const yc = yStart - (i + 0.5) * dy;
-        const tread = new THREE.Mesh(new THREE.BoxGeometry(xHi - xLo, 0.13, dz + 0.03), matStep);
+        const tread = new THREE.Mesh(
+          this._scaleFloorUV(new THREE.BoxGeometry(xHi - xLo, 0.13, dz + 0.03), xHi - xLo, dz + 0.03), matStep);
         tread.position.set((xLo + xHi) / 2, yc, zc);
         this.scene.add(tread);
       }
@@ -977,11 +1013,13 @@ export class World {
     mkFlight(wellCx - wellHx, wellCx, hiElev, midElev, true);   // flight A (left)
     mkFlight(wellCx, wellCx + wellHx, midElev, loElev, false);  // flight B (right)
     // mid landing (at the back, both halves)
-    const land = new THREE.Mesh(new THREE.BoxGeometry(2 * wellHx, 0.14, 2.0), matStep);
+    const land = new THREE.Mesh(
+      this._scaleFloorUV(new THREE.BoxGeometry(2 * wellHx, 0.14, 2.0), 2 * wellHx, 2.0), matStep);
     land.position.set(wellCx, midElev - 0.07, wellCz + wellHz - 1.0);
     this.scene.add(land);
-    // switchback spine wall between the two flights, with a bright cap rail
-    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.14, hiElev - loElev, 2 * wellHz - 2.2), matStep);
+    // switchback spine wall between the two flights, with a bright cap rail —
+    // the spine is a WALL: it wears the wall plating like every other wall
+    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.14, hiElev - loElev, 2 * wellHz - 2.2), this._matWall);
     spine.position.set(wellCx, (hiElev + loElev) / 2, wellCz - 1.0);
     this.scene.add(spine); this.wallMeshes.push(spine);
     const spineCap = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 2 * wellHz - 2.2), matRail);
@@ -991,7 +1029,12 @@ export class World {
     // GUARD SYSTEM (user: the old railings floated and looked like crap).
     // Solid balustrade panels with a bright cap rail, all REAL collision —
     // you take the stairs because the panels physically stop everything else.
-    const matPanel = new THREE.MeshStandardMaterial({ color: 0x39404b, roughness: 0.55, metalness: 0.65 });
+    // balustrade panels wear the wall plating (tinted darker) instead of a
+    // flat color — same texture, zero extra cost
+    const matPanel = new THREE.MeshStandardMaterial({
+      map: this._matWall.map, bumpMap: this._matWall.bumpMap, bumpScale: 0.4,
+      color: 0x6d7889, roughness: 0.55, metalness: 0.65,
+    });
     const matHazard = new THREE.MeshStandardMaterial({ color: 0xc79a1f, roughness: 0.6, metalness: 0.3 });
     const guard = (px, py, pz, w, h, d, solid = true) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matPanel);
@@ -1120,6 +1163,30 @@ export class World {
       else if (min === dS) wz = g.wellCz + g.wellHz + 0.45;
       else if (min === dW) wx = g.wellCx - g.wellHx - 0.45;
       else wx = g.wellCx + g.wellHx + 0.45;
+    }
+    return [wx, wz];
+  }
+
+  // Same dodge for the GRAND STAIR WELL at entry level (user: NPCs clop
+  // straight through the balustrade panels and pop onto the flights): a
+  // body in the stair ROOM whose sim position crosses the well rect — park
+  // slots, combat repositioning, straight-line room transits — slides out
+  // through the nearest rail line. Bodies genuinely DESCENDING (their move
+  // is the stairwell edge, following _stairWaypoints) are exempt — the
+  // caller checks that and skips the clamp.
+  clampStairWell(deck, wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (deck !== g.deck) continue;
+      const m = 0.3;
+      if (wx < g.wellCx - g.wellHx - m || wx > g.wellCx + g.wellHx + m
+        || wz < g.wellCz - g.wellHz - m || wz > g.wellCz + g.wellHz + m) continue;
+      const dW = wx - (g.wellCx - g.wellHx), dE = (g.wellCx + g.wellHx) - wx;
+      const dN = wz - (g.wellCz - g.wellHz), dS = (g.wellCz + g.wellHz) - wz;
+      const min = Math.min(dW, dE, dN, dS);
+      if (min === dN) wz = g.wellCz - g.wellHz - 0.5;
+      else if (min === dS) wz = g.wellCz + g.wellHz + 0.5;
+      else if (min === dW) wx = g.wellCx - g.wellHx - 0.5;
+      else wx = g.wellCx + g.wellHx + 0.5;
     }
     return [wx, wz];
   }
@@ -1441,8 +1508,10 @@ export class World {
 
   _setLamp(d) {
     const c = (this._dc ??= new THREE.Color());
-    if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber
-    else if (d.edge.locked) c.setHex(0xe03424);       // sealed: red
+    // muted status colors (user: the bright red sealed doors were too
+    // obvious — the buckle/scorch and a dim ember lamp carry it now)
+    if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber gutter
+    else if (d.edge.locked) c.setHex(0x7d1d12);       // sealed: dim ember
     else c.setHex(0x38d06a);                          // powered track: green
     for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
   }
@@ -1616,13 +1685,17 @@ export class World {
     }
     const flick = Math.sin(performance.now() * 0.013) * Math.sin(performance.now() * 0.0037);
     for (const d of this.doors) {
-      // a door whose lock RELEASED mid-game (the armory seal) flips its
-      // status lamp red -> green
+      // doors change lock state MID-GAME now (armory seal release, and the
+      // sim's jam/unjam rotation) — flip the status lamp both ways
       if (!d.edge.locked && d._lampLocked !== false) {
         d._lampLocked = false;
         this._setLamp(d);
         this.doorLamps.instanceColor.needsUpdate = true;
-      } else if (d.edge.locked && d._lampLocked === undefined) d._lampLocked = true;
+      } else if (d.edge.locked && d._lampLocked !== true) {
+        d._lampLocked = true;
+        this._setLamp(d);
+        this.doorLamps.instanceColor.needsUpdate = true;
+      }
       // jammed doors gutter — the amber lamp flickers with the damage
       if (d.bad && (performance.now() & 63) < 16) {
         const c = (this._dc ??= new THREE.Color());

@@ -107,6 +107,7 @@ export class Sim {
       for (let i = 0; i < count; i++) {
         const e = brokenDoors.splice(this.rng.int(brokenDoors.length), 1)[0];
         e.burning = true; // the renderer tints the panel; pathing already blocks it (locked)
+        e.fireSite = true; // authored damage — the jam/unjam rotation never touches it
         this.fires.push({ deck: graph.node(e.a).deck, node: e.a, x: e.door.x, y: e.door.y, scale: 0.9 });
       }
       // nobody SPAWNS inside a blaze (the initial swarm lands at the breach,
@@ -296,7 +297,15 @@ export class Sim {
 
   log(type, msg, node = -1) {
     this.events.push({ t: this.t, type, msg, node });
-    if (this.events.length > 1600) this.events.splice(0, 200);
+    this.eventTotal = (this.eventTotal ?? 0) + 1; // monotonic — never rewinds
+    if (this.events.length > 1600) {
+      this.events.splice(0, 200);
+      // consumers track ABSOLUTE event indices; the splice shifts the array,
+      // so publish the offset (user report: the ship-activity log wedged at
+      // minute ~12 — the cap hit and the renderer's index overshot the array,
+      // silencing it until 200 skipped events re-accumulated)
+      this.eventBase = (this.eventBase ?? 0) + 200;
+    }
   }
 
   spawn(a) {
@@ -506,6 +515,7 @@ export class Sim {
       this._checkLastStand();
       this._lastStandStragglers();
       this._armoryWatch();
+      this._doorShiftTick();
       this.stats.conversionsRound = 0;
       this._expireCalls();
     }
@@ -660,6 +670,63 @@ export class Sim {
 
   _expireCalls() {
     this.calls = this.calls.filter((c) => this.t - c.t < this.P.radio.callFadeSec * 2);
+  }
+
+  // DOOR ROTATION (user: some doors suddenly jam, others unjam over a
+  // session — the damaged ship keeps shifting — but never in a way that
+  // cuts anyone off from the rest of the ship). Deterministic: seeded RNG,
+  // fired on the strategic cadence. Excluded: the armory seal (event gate)
+  // and the authored fire-site doors (they ARE the damage).
+  _doorShiftTick() {
+    const every = this.P.door.shiftEverySec ?? 110;
+    if (this._nextDoorShiftAt === undefined) {
+      this._nextDoorShiftAt = every * (0.7 + this.rng.range(0, 0.6));
+    }
+    if (this.t < this._nextDoorShiftAt) return;
+    this._nextDoorShiftAt = this.t + every * (0.7 + this.rng.range(0, 0.6));
+    const cand = this.graph.edges.filter((e) =>
+      e.door && e.lockable && !e.armorySeal && !e.fireSite
+      && this.graph.node(e.a).deck === this.graph.node(e.b).deck);
+    const jammed = cand.filter((e) => e.locked);
+    const open = cand.filter((e) => !e.locked);
+    // bias toward jamming while below the seed's initial jam count, toward
+    // freeing when above — the ship stays roughly as broken as it started
+    const doJam = this.rng.chance(jammed.length < open.length * 0.25 ? 0.6 : 0.35);
+    if (doJam && open.length) {
+      // take the first candidate that leaves its two rooms mutually
+      // reachable by another route (single-edge removal: e.b reachable from
+      // e.a with the edge locked ⇒ the component is unchanged)
+      for (let tries = 0; tries < 6 && open.length; tries++) {
+        const e = open.splice(this.rng.int(open.length), 1)[0];
+        e.locked = true;
+        if (this._reachableStd(e.a, e.b)) {
+          this.log('radio', `a door mechanism seizes between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name}`, e.a);
+          return;
+        }
+        e.locked = false; // would cut the ship — leave it working
+      }
+    } else if (jammed.length) {
+      const e = jammed[this.rng.int(jammed.length)];
+      e.locked = false;
+      this.log('radio', `the jammed door between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name} grinds free`, e.a);
+    }
+  }
+
+  // is `to` reachable from `from` over unlocked std edges?
+  _reachableStd(from, to) {
+    if (from === to) return true;
+    const seen = new Set([from]);
+    const q = [from];
+    while (q.length) {
+      const n = q.pop();
+      for (const { to: nx, link } of this.graph.adj.std[n] ?? []) {
+        if (link.locked || seen.has(nx)) continue;
+        if (nx === to) return true;
+        seen.add(nx);
+        q.push(nx);
+      }
+    }
+    return false;
   }
 
   // REAL SPACE LOGIC (user note): occupancy — who is IN a room for sensing,
@@ -1498,14 +1565,19 @@ export class Sim {
   // ONE BODY ON THE LADDER (user rule): is this cross-deck link held by a
   // live climber other than `selfId`? Stale claims (holder died, or was
   // yanked off the move by combat) self-heal — a claim only counts while
-  // the holder is genuinely in transit on this link.
+  // the holder is genuinely in transit on this link. APPROACH DOESN'T
+  // COUNT (user: the ladder "jams" with nobody visibly on it): a cross-deck
+  // leg claims at leg START, but the holder may still be walking across the
+  // room to the pad (move.appT marks where the approach ends) — the rungs
+  // only read busy once the holder is at the pad about to mount, or on them.
   vertBusy(link, selfId = -1) {
     const id = link.occupiedBy;
     if (id === undefined || id === selfId) return false;
     const h = this.byId.get(id);
     if (!h || h.dead) return false;
     if (h.isPlayer) return h.climbingLink === link;
-    return !!(h.move && h.move.link === link);
+    if (!h.move || h.move.link !== link) return false;
+    return h.move.appT === undefined || h.move.t >= h.move.appT * 0.85;
   }
 
   // next-in-line reservation (player queueing): while the reserver lives,
@@ -1523,8 +1595,18 @@ export class Sim {
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
     const [tx, ty] = this._parkSlot(a, nd);
-    a.x += (tx - a.x) * Math.min(1, dt * 3);
-    a.y += (ty - a.y) * Math.min(1, dt * 3);
+    const dx = tx - a.x, dy = ty - a.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      // HUMAN SPEEDS (user: marines "flying" across big holds to reposition
+      // after a fight): the old proportional pull moved 20% of the REMAINING
+      // distance per tick — ~90 m/s across a hangar. Ease in near the slot,
+      // but never cover ground faster than a brisk jog.
+      const step = Math.min(d * Math.min(1, dt * 3), 3.6 * dt);
+      a.x += (dx / d) * step;
+      a.y += (dy / d) * step;
+      a.followSpeed = step / dt; // render picks walk/jog clip from real speed
+    } else a.followSpeed = 0;
     a.animTime += dt;
   }
 
@@ -1634,8 +1716,16 @@ export class Sim {
     const room = this.graph.node(a.pnode ?? a.node);
     const slot = this._firingSlot(a, room);
     if (!slot) { a.animTime += dt; return; }
-    a.x += (slot[0] - a.x) * Math.min(1, dt * 2.2);
-    a.y += (slot[1] - a.y) * Math.min(1, dt * 2.2);
+    // same human-speed cap as _parkDrift (user: shooters "flying" to their
+    // stance across big rooms) — a combat shuffle, quick but legged
+    const dx = slot[0] - a.x, dy = slot[1] - a.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      const step = Math.min(d * Math.min(1, dt * 2.2), 4.2 * dt);
+      a.x += (dx / d) * step;
+      a.y += (dy / d) * step;
+      a.followSpeed = step / dt;
+    } else a.followSpeed = 0;
     this._clampToRoom(a, room);
     a.heading = Math.atan2(slot[3], slot[2]); // face the threat
     a.animTime += dt;
