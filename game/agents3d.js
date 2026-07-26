@@ -532,6 +532,14 @@ export class Agents3D {
       // hangar level renders pushed out through the nearest face instead
       // of walking through its walls (user report)
       [wx, wz] = world.clampStairTower(deck, wx, wz);
+      // and one crossing the GRAND stair well at entry level slides around
+      // the balustrade instead of through it (user: NPCs clopped through the
+      // railings onto the flights) — unless it is genuinely on the stairwell
+      // edge descending, which is the one legal way into the well footprint
+      const simAg = sim.byId.get(id);
+      if (simAg?.move?.link?.type !== 'stairwell') {
+        [wx, wz] = world.clampStairWell(deck, wx, wz);
+      }
       // feet on the ground surface — in a stairwell room that follows the
       // mezzanine/ramp/hall, so bodies walk the stairs instead of floating
       // at one deck level (user: navigable stairwell room)

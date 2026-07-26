@@ -5880,8 +5880,14 @@ var Sim = class {
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
     const [tx, ty] = this._parkSlot(a, nd);
-    a.x += (tx - a.x) * Math.min(1, dt * 3);
-    a.y += (ty - a.y) * Math.min(1, dt * 3);
+    const dx = tx - a.x, dy = ty - a.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      const step = Math.min(d * Math.min(1, dt * 3), 3.6 * dt);
+      a.x += dx / d * step;
+      a.y += dy / d * step;
+      a.followSpeed = step / dt;
+    } else a.followSpeed = 0;
     a.animTime += dt;
   }
   // STABLE SLOTS (user note: jerky movement): each body's parking spot is
@@ -5987,8 +5993,14 @@ var Sim = class {
       a.animTime += dt;
       return;
     }
-    a.x += (slot[0] - a.x) * Math.min(1, dt * 2.2);
-    a.y += (slot[1] - a.y) * Math.min(1, dt * 2.2);
+    const dx = slot[0] - a.x, dy = slot[1] - a.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      const step = Math.min(d * Math.min(1, dt * 2.2), 4.2 * dt);
+      a.x += dx / d * step;
+      a.y += dy / d * step;
+      a.followSpeed = step / dt;
+    } else a.followSpeed = 0;
     this._clampToRoom(a, room);
     a.heading = Math.atan2(slot[3], slot[2]);
     a.animTime += dt;

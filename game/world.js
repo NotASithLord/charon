@@ -1167,6 +1167,30 @@ export class World {
     return [wx, wz];
   }
 
+  // Same dodge for the GRAND STAIR WELL at entry level (user: NPCs clop
+  // straight through the balustrade panels and pop onto the flights): a
+  // body in the stair ROOM whose sim position crosses the well rect — park
+  // slots, combat repositioning, straight-line room transits — slides out
+  // through the nearest rail line. Bodies genuinely DESCENDING (their move
+  // is the stairwell edge, following _stairWaypoints) are exempt — the
+  // caller checks that and skips the clamp.
+  clampStairWell(deck, wx, wz) {
+    for (const g of (this.stairRooms ?? [])) {
+      if (deck !== g.deck) continue;
+      const m = 0.3;
+      if (wx < g.wellCx - g.wellHx - m || wx > g.wellCx + g.wellHx + m
+        || wz < g.wellCz - g.wellHz - m || wz > g.wellCz + g.wellHz + m) continue;
+      const dW = wx - (g.wellCx - g.wellHx), dE = (g.wellCx + g.wellHx) - wx;
+      const dN = wz - (g.wellCz - g.wellHz), dS = (g.wellCz + g.wellHz) - wz;
+      const min = Math.min(dW, dE, dN, dS);
+      if (min === dN) wz = g.wellCz - g.wellHz - 0.5;
+      else if (min === dS) wz = g.wellCz + g.wellHz + 0.5;
+      else if (min === dW) wx = g.wellCx - g.wellHx - 0.5;
+      else wx = g.wellCx + g.wellHx + 0.5;
+    }
+    return [wx, wz];
+  }
+
   // ---- sliding doors (user note): panels that open for ANY movement near
   // them and close behind it; locked doors stay shut and read red ----
   // COVER & CLUTTER (review P1): crates, consoles and tables sized to the

@@ -1595,8 +1595,18 @@ export class Sim {
   _parkDrift(a, dt) {
     const nd = this.graph.node(a.node);
     const [tx, ty] = this._parkSlot(a, nd);
-    a.x += (tx - a.x) * Math.min(1, dt * 3);
-    a.y += (ty - a.y) * Math.min(1, dt * 3);
+    const dx = tx - a.x, dy = ty - a.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      // HUMAN SPEEDS (user: marines "flying" across big holds to reposition
+      // after a fight): the old proportional pull moved 20% of the REMAINING
+      // distance per tick — ~90 m/s across a hangar. Ease in near the slot,
+      // but never cover ground faster than a brisk jog.
+      const step = Math.min(d * Math.min(1, dt * 3), 3.6 * dt);
+      a.x += (dx / d) * step;
+      a.y += (dy / d) * step;
+      a.followSpeed = step / dt; // render picks walk/jog clip from real speed
+    } else a.followSpeed = 0;
     a.animTime += dt;
   }
 
@@ -1706,8 +1716,16 @@ export class Sim {
     const room = this.graph.node(a.pnode ?? a.node);
     const slot = this._firingSlot(a, room);
     if (!slot) { a.animTime += dt; return; }
-    a.x += (slot[0] - a.x) * Math.min(1, dt * 2.2);
-    a.y += (slot[1] - a.y) * Math.min(1, dt * 2.2);
+    // same human-speed cap as _parkDrift (user: shooters "flying" to their
+    // stance across big rooms) — a combat shuffle, quick but legged
+    const dx = slot[0] - a.x, dy = slot[1] - a.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      const step = Math.min(d * Math.min(1, dt * 2.2), 4.2 * dt);
+      a.x += (dx / d) * step;
+      a.y += (dy / d) * step;
+      a.followSpeed = step / dt;
+    } else a.followSpeed = 0;
     this._clampToRoom(a, room);
     a.heading = Math.atan2(slot[3], slot[2]); // face the threat
     a.animTime += dt;
