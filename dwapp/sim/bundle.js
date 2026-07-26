@@ -501,6 +501,11 @@ var PARAMS = {
     limbDamp: 3,
     limbLimit: 1.4,
     limbKick: 7,
+    // limb-tip contact (user: limbs folded into the torso / clipped into the
+    // deck): tips ride a limbRadius above the floor and outside a keep-out
+    // cylinder of limbKeepOut x bodyRadius around the torso axis
+    limbRadius: 0.08,
+    limbKeepOut: 0.8,
     // internal fixed step: 1/120, the tuned reference (a 1/60 experiment
     // halved the cost but coincided with folded-looking settles in play —
     // user report — so the flop keeps its authored integration rate)

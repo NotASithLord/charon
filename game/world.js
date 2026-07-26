@@ -249,9 +249,11 @@ export class World {
       // only reaches 32m and never crosses an opaque deck — statics on other
       // decks or in a third whose near edge is beyond the cone stay VISIBLE
       // but drop out of the depth-only shadow pass (3-5x fewer shadow verts).
+      // ?nosc=1 disables it (A/B lever while the real-WebGPU incident is live).
       const cast = deck === playerDeck && nearEdge < 40;
       for (const o of list) {
         o.visible = vis;
+        if (this.shadowCull === false) continue;
         if (o._castBase === undefined) o._castBase = o.castShadow === true;
         o.castShadow = o._castBase && cast;
       }

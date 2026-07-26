@@ -36,13 +36,16 @@
 // (game/characters.js): torso is the root body itself, these swing about their
 // joint pivots. `axis` is the limb's rest direction in model space (unit
 // vector from the pivot toward the limb's far end) — legs and arms hang down,
-// the head rides up — used to sag each limb toward gravity.
+// the head rides up — used to sag each limb toward gravity. `pivot` and `len`
+// are the joint position and pivot→tip reach of the standard 1.7 m rig (the
+// converted JMS pivots), used by the limb-tip contact constraints below;
+// override via params.limbGeom for a different rig.
 export const RAGDOLL_LIMBS = [
-  { part: 'head', axis: [0, 1, 0] },
-  { part: 'armL', axis: [0, -1, 0] },
-  { part: 'armR', axis: [0, -1, 0] },
-  { part: 'legL', axis: [0, -1, 0] },
-  { part: 'legR', axis: [0, -1, 0] },
+  { part: 'head', axis: [0, 1, 0], pivot: [0.03, 1.36, 0], len: 0.30 },
+  { part: 'armL', axis: [0, -1, 0], pivot: [0.03, 1.29, -0.03], len: 0.72 },
+  { part: 'armR', axis: [0, -1, 0], pivot: [0.03, 1.29, 0.03], len: 0.72 },
+  { part: 'legL', axis: [0, -1, 0], pivot: [0.03, 0.92, -0.09], len: 0.92 },
+  { part: 'legR', axis: [0, -1, 0], pivot: [0.03, 0.92, 0.09], len: 0.92 },
 ];
 
 // --- tiny vec3 / quat kit (arrays; no allocation-heavy library) ------------
@@ -144,6 +147,11 @@ const DEFAULTS = {
   sleepLin: 0.16, sleepAng: 0.4, sleepSec: 0.5,
   inertia: 1.2,
   limbGrav: 9, limbBind: 2.5, limbDamp: 3.0, limbLimit: 1.4, limbKick: 7.0,
+  // limb-tip contact (user: limbs folded through the torso and clipped into
+  // the deck): tips are kept a limbRadius above the floor and outside a
+  // keep-out cylinder around the torso capsule's axis.
+  limbRadius: 0.08, limbKeepOut: 0.8, // keepOut × bodyRadius + limbRadius
+  limbGeom: null, // { part: { pivot: [x,y,z], len } } rig override
   subDt: 1 / 120, maxSubSteps: 8, dtCap: 0.05,
 };
 
@@ -413,6 +421,67 @@ export class RagdollSystem {
         const s = p.limbLimit / sa;
         st.q = qAxisAngle(sv, p.limbLimit);
         st.omega[0] *= s * 0.5; st.omega[1] *= s * 0.5; st.omega[2] *= s * 0.5;
+      }
+
+      // LIMB-TIP CONTACT (user: limbs folded through the torso and clipped
+      // into the deck — the flop had no self-collision). Two position-level
+      // constraints on the limb TIP, both pure corrective rotations about the
+      // pivot (no energy injected, unconditionally stable like the root's
+      // post-stabilisation):
+      const geom = (p.limbGeom && p.limbGeom[part]) || RAGDOLL_LIMBS[k];
+      if (geom.pivot) {
+        const reach = geom.len;
+        // tip in TORSO-LOCAL space: pivot + swing·(axis·len)
+        const dLocal = qrot(st.q, axis);
+        let tipL = [
+          geom.pivot[0] + dLocal[0] * reach,
+          geom.pivot[1] + dLocal[1] * reach,
+          geom.pivot[2] + dLocal[2] * reach,
+        ];
+        // (a) torso keep-out: the torso capsule runs up local Y — a tip that
+        // swings inside its radius is a limb folded INTO the body; rotate it
+        // straight back out to the keep-out cylinder.
+        if (tipL[1] > rr * 0.5 && tipL[1] < p.bodyLen - rr * 0.5) {
+          const keep = p.bodyRadius * p.limbKeepOut + p.limbRadius;
+          const h = Math.hypot(tipL[0], tipL[2]);
+          if (h < keep && h > 1e-6) {
+            const out = [tipL[0] / h, 0, tipL[2] / h];
+            const axc = cross3(dLocal, out);
+            const al = len3(axc);
+            if (al > 1e-6) {
+              const th = Math.min(0.6, (keep - h) / reach);
+              st.q = qnorm(qmul(qAxisAngle(axc, th), st.q));
+              st.omega[0] *= 0.8; st.omega[1] *= 0.8; st.omega[2] *= 0.8;
+              const d2 = qrot(st.q, axis);
+              tipL = [
+                geom.pivot[0] + d2[0] * reach,
+                geom.pivot[1] + d2[1] * reach,
+                geom.pivot[2] + d2[2] * reach,
+              ];
+            }
+          }
+        }
+        // (b) floor: the tip never sinks below the deck under the body. The
+        // corrective rotation is applied in the torso frame (world axis
+        // conjugated in), so the render — which composes root × limb — sees
+        // the tip exactly on the floor.
+        const tipOff = qrot(r.rootQuat, tipL);
+        const tipW = [r.rootPos[0] + tipOff[0], r.rootPos[1] + tipOff[1], r.rootPos[2] + tipOff[2]];
+        const tipFloor = r.groundYAt(tipW[0], tipW[2]) + p.limbRadius;
+        if (tipW[1] < tipFloor) {
+          const pvOff = qrot(r.rootQuat, geom.pivot);
+          const dW = [tipOff[0] - pvOff[0], tipOff[1] - pvOff[1], tipOff[2] - pvOff[2]];
+          const axw = cross3(dW, [0, 1, 0]);
+          const al = len3(axw);
+          if (al > 1e-6) {
+            const th = Math.min(0.6, (tipFloor - tipW[1]) / reach);
+            // world-axis correction, conjugated into the torso frame
+            const qw = qAxisAngle(axw, th);
+            const ql = qmul(qmul(qconj(r.rootQuat), qw), r.rootQuat);
+            st.q = qnorm(qmul(ql, st.q));
+            st.omega[0] *= 0.7; st.omega[1] *= 0.7; st.omega[2] *= 0.7;
+          }
+        }
       }
       r.limbs[part] = st.q;
     }

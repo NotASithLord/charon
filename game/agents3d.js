@@ -802,16 +802,17 @@ export class Agents3D {
     // whether 3 or 300 instances were live). Only the used range goes to
     // the GPU now; slots past `count` are never drawn, so they never need
     // uploading.
+    const cull = this.shadowCull !== false; // ?nosc=1 pins every set casting
     for (const [set, c] of [[this.civSet, counts.civ], [this.armedSet, counts.armed],
     [this.marineSet, counts.marine], [this.odstSet, counts.odst], [this.infectionSet, counts.infection],
     [this.combatCivSet, counts.combatCiv], [this.combatOdstSet, counts.combatOdst]]) {
-      const cast = this._castNear.has(set);
+      const cast = !cull || this._castNear.has(set);
       for (const mesh of set) { mesh.castShadow = cast; commitInstanced(mesh, c); }
     }
     // a carried rifle is only ever within torch reach when its carrier is
-    this.rifle.castShadow = this._castNear.has(this.armedSet) || this._castNear.has(this.marineSet)
+    this.rifle.castShadow = !cull || this._castNear.has(this.armedSet) || this._castNear.has(this.marineSet)
       || this._castNear.has(this.odstSet) || this._castNear.has(this.combatOdstSet);
-    this.carrier.castShadow = this._castNear.has(this.carrier);
+    this.carrier.castShadow = !cull || this._castNear.has(this.carrier);
     for (const [mesh, c] of [[this.carrier, counts.carrier],
     [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash],
     [this.beams, counts.beam]]) {

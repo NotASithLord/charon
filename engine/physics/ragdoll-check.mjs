@@ -137,11 +137,14 @@ let ok = true;
     `worst penetration=${r.worstPen.toFixed(4)} m`);
 }
 
-// 4) joint limits respected — no limb ever exceeds the configured limit (+slack)
+// 4) joint limits respected — no limb ever exceeds the configured limit plus
+//    the tip-contact allowance (the floor / torso keep-out constraints may
+//    push a limb past the generic limit by up to their 0.6 rad/substep
+//    correction — deliberate: never-through-the-floor wins over the limit)
 {
   const r = drive({ steps: 3000 });
-  ok &= assert('limbs stay within the joint limit', r.maxLimbSwing <= RP.limbLimit + 0.05,
-    `max swing=${r.maxLimbSwing.toFixed(3)} vs limit=${RP.limbLimit}`);
+  ok &= assert('limbs stay within the joint limit', r.maxLimbSwing <= RP.limbLimit + 0.65,
+    `max swing=${r.maxLimbSwing.toFixed(3)} vs limit=${RP.limbLimit}+0.65 contact slack`);
 }
 
 // 5) settles — a body comes to rest (asleep) within a few seconds, lying FLAT
@@ -227,6 +230,49 @@ let ok = true;
   ok &= assert('grenade re-fling wakes a settled body, stays stable, re-settles',
     wasAsleep && missing === false && woke && finite && worstPen < 0.08 && reSettled,
     `wasAsleep=${wasAsleep} wokeUnknown=${missing} woke=${woke} finite=${finite} pen=${worstPen.toFixed(4)} reSettled=${reSettled}`);
+}
+
+// 10) limb tips never clip into the floor (user report: settled bodies had
+//     arms/legs buried in the deck). Checked at rest — the tip constraint
+//     holds them a limbRadius above the plating, minus a small tolerance.
+// 11) limb tips stay outside the torso keep-out (user report: limbs folded
+//     INTO the body) — no settled tip inside the keep-out cylinder while
+//     alongside the torso capsule.
+{
+  const sys = new RagdollSystem(RP);
+  const geomOf = (k) => (RP.limbGeom && RP.limbGeom[RAGDOLL_LIMBS[k].part]) || RAGDOLL_LIMBS[k];
+  for (let i = 0; i < 6; i++) {
+    sys.spawn(100 + i, { x: i * 3, y: 1.0, z: 0, heading: i * 1.1, deck: 1 },
+      { dirX: Math.cos(i), dirZ: Math.sin(i), speed: 6 + i * 2, up: 3 + (i % 3), spin: 8 + i * 2, kick: 6 + i * 2 },
+      () => 0);
+  }
+  for (let s = 0; s < 1200; s++) sys.step(1 / 60);
+  let worstTipPen = -1, worstKeepIn = 1e9, allAsleep = true;
+  const rr = sys.p.bodyRadius, limbR = sys.p.limbRadius ?? 0.08;
+  const keep = rr * (sys.p.limbKeepOut ?? 0.8) + limbR;
+  for (const id of [...sys.ids()]) {
+    const r = sys.get(id);
+    if (!r.asleep) allAsleep = false;
+    for (let k = 0; k < RAGDOLL_LIMBS.length; k++) {
+      const { part, axis } = RAGDOLL_LIMBS[k];
+      const g = geomOf(k);
+      const d = rotY(r.limbs[part], axis);
+      const tipL = [g.pivot[0] + d[0] * g.len, g.pivot[1] + d[1] * g.len, g.pivot[2] + d[2] * g.len];
+      const tw = rotY(r.rootQuat, tipL);
+      const tipY = r.rootPos[1] + tw[1];
+      const pen = (0 + limbR) - tipY; // floor at 0
+      if (pen > worstTipPen) worstTipPen = pen;
+      if (tipL[1] > rr * 0.5 && tipL[1] < sys.p.bodyLen - rr * 0.5) {
+        const h = Math.hypot(tipL[0], tipL[2]);
+        if (h < worstKeepIn) worstKeepIn = h;
+      }
+    }
+  }
+  ok &= assert('settled limb tips never clip into the floor', worstTipPen < 0.04,
+    `worst tip penetration=${worstTipPen.toFixed(4)} m (allAsleep=${allAsleep})`);
+  ok &= assert('settled limb tips stay outside the torso keep-out',
+    worstKeepIn === 1e9 || worstKeepIn > keep - 0.04,
+    `closest tip-to-axis=${worstKeepIn === 1e9 ? 'n/a' : worstKeepIn.toFixed(3)} vs keep-out=${keep.toFixed(3)}`);
 }
 
 console.log(ok ? '\nragdoll-check OK' : '\nragdoll-check FAILED');

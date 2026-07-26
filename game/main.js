@@ -64,6 +64,28 @@ try {
   throw err;
 }
 
+// WEBGPU DIAGNOSTICS (live incident: black screen / vanishing draws on real
+// WebGPU while the WebGL2 harness path is clean). Validation errors are
+// normally swallowed into the console — surface the first few ON SCREEN so a
+// playtest screenshot carries the actual GPU error text.
+{
+  const gpuDev = renderer.backend?.device;
+  if (gpuDev?.addEventListener) {
+    let shown = 0;
+    gpuDev.addEventListener('uncapturederror', (e) => {
+      if (shown >= 4) return;
+      shown++;
+      const div = document.createElement('div');
+      div.style.cssText = 'position:fixed;left:10px;top:' + (40 + shown * 64) + 'px;z-index:98;'
+        + 'max-width:46em;background:rgba(60,10,10,0.92);color:#ffb0a0;font:11px monospace;'
+        + 'padding:6px 8px;border:1px solid #a05040;white-space:pre-wrap;pointer-events:none';
+      div.textContent = 'WEBGPU ERROR: ' + String(e.error?.message ?? e.error).slice(0, 500);
+      document.body.appendChild(div);
+      console.error('[charon webgpu]', e.error);
+    });
+  }
+}
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070a);
 scene.fog = new THREE.Fog(0x05070a, 18, 60);
@@ -139,6 +161,9 @@ installDeviceLostReload(renderer, {
 const sim = new Sim(seed);
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
+// ?nosc=1: disable the shadow-caster curation (A/B lever for the live
+// real-WebGPU incident — webgl2 validates clean, webgpu can't run headless)
+world.shadowCull = agents.shadowCull = !QP.has('nosc');
 
 // spawn: CIC on the command deck (user tuning) — an ODST detail with a fireteam.
 // Created synchronously WITHOUT physics so the intro/UI never blocks on the
