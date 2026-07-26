@@ -904,6 +904,26 @@ const VOICES = {
     (r) => `on our way to ${r} — watch your crossfire when we come in`,
     (r) => `hang on ${r}, we are inbound`,
   ],
+  // the door rotation, heard as the crew hears it (user: the raw sim line
+  // "a door mechanism seizes between X and Y" read as third-person leftover)
+  doorJam: [
+    (a, b) => `the door between ${a} and ${b} just slammed itself shut — it won't budge`,
+    (a, b) => `door mechanism's seized between ${a} and ${b}. we're cut off that way`,
+    (a, b) => `that door between ${a} and ${b} just ground shut on its own. it's stuck fast`,
+    (a, b) => `lost the door between ${a} and ${b} — motor's dead, panel's dark`,
+    (a, b) => `the ${a} door just froze mid-track on the ${b} side. it is NOT opening`,
+    (a, b) => `door's stuck between ${a} and ${b}. find another way around`,
+    (a, b) => `great. the door between ${a} and ${b} picked NOW to die`,
+    (a, b) => `something in the track let go — ${a} to ${b} is sealed tight`,
+  ],
+  doorFree: [
+    (a, b) => `the jammed door between ${a} and ${b} just popped free`,
+    (a, b) => `door between ${a} and ${b} is moving again — must've shaken itself loose`,
+    (a, b) => `that stuck door between ${a} and ${b} finally gave. it's open`,
+    (a, b) => `the ${a} door ground back open on its own. I don't trust it`,
+    (a, b) => `door's cycling again between ${a} and ${b}`,
+    (a, b) => `whatever seized the ${a} door let go — it just slid open`,
+  ],
   confirmKill: [
     (r) => `making sure the downed one in ${r} stays down`,
     (r) => `double-tap on the body in ${r}. learned that the hard way`,
@@ -915,7 +935,7 @@ const VOICES = {
     (r) => `securing the downed contact in ${r} before it decides otherwise`,
   ],
 };
-const say = (key, r) => { const p = VOICES[key]; return p[(Math.random() * p.length) | 0](r); };
+const say = (key, ...args) => { const p = VOICES[key]; return p[(Math.random() * p.length) | 0](...args); };
 let _firstContacts = 0; // the first few flood calls read as confusion, not procedure
 function gameLogView(e) {
   const room = e.node >= 0 ? sim.graph.node(e.node).name : null;
@@ -1000,6 +1020,12 @@ function gameLogView(e) {
           return rx(e, cdr, p[(Math.random() * p.length) | 0](m2[1], m2[2]));
         }
         return e;
+      }
+      {
+        const dj = msg.match(/^a door mechanism seizes between (.+) and (.+)$/);
+        if (dj) return rx(e, witnessNear(e.node), say('doorJam', dj[1], dj[2]));
+        const df = msg.match(/^the jammed door between (.+) and (.+) grinds free$/);
+        if (df) return rx(e, witnessNear(e.node), say('doorFree', df[1], df[2]));
       }
       if (msg.startsWith('distress call')) {
         const w = witnessNear(e.node);
