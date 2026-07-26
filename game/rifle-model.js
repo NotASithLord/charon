@@ -72,10 +72,16 @@ export function buildRifleViewmodel() {
   const rightNum = new THREE.Mesh(geometryFor('Right_Number'), numberMat(0));
   group.add(leftNum, rightNum);
   group.rotation.y = Math.PI; // authored +Z-forward -> Three's -Z-forward
+  // the ten digit materials are built ONCE and swapped (swarm finding: this
+  // was constructing two fresh emissive materials per frame — ~120 WebGPU
+  // bind-group builds a second, none ever disposed)
+  const digitMats = Array.from({ length: 10 }, (_, d) => numberMat(d));
+  let lastMag = -1;
   group.userData.setAmmoDigits = (mag) => {
-    const tens = Math.floor(mag / 10) % 10, ones = mag % 10;
-    leftNum.material = numberMat(tens);
-    rightNum.material = numberMat(ones);
+    if (mag === lastMag) return;
+    lastMag = mag;
+    leftNum.material = digitMats[Math.floor(mag / 10) % 10];
+    rightNum.material = digitMats[mag % 10];
   };
   return group;
 }

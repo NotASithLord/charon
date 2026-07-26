@@ -975,6 +975,9 @@ function gameLogView(e) {
   }
 }
 function renderLog() {
+  // no new events -> touch NOTHING (swarm finding: the scroll-metric reads
+  // below force a synchronous reflow, and they ran every frame)
+  if (lastEvent >= sim.events.length) return;
   const log = el('log');
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   let added = false;
@@ -1017,9 +1020,33 @@ const _npDir = new THREE.Vector3();
 const _npVec = new THREE.Vector3();
 const _npRay = new THREE.Raycaster();
 let _npSticky = null; // hysteresis: the current target keeps a wider cone
+let _npAt = 0; // target-selection throttle clock (swarm finding: the full
+// agent scan + no-BVH triangle raycast ran every frame; ~15Hz is invisible
+// with the sticky hysteresis, and the cached target reprojects every frame)
+let _npBest = null;
 function updateNameplate() {
   const np = el('nameplate');
   if (player.dead) { np.style.display = 'none'; return; }
+  const nowNp = performance.now();
+  if (nowNp - _npAt > 66) {
+    _npAt = nowNp;
+    _npBest = pickNameplateTarget();
+    _npSticky = _npBest?.a ?? null;
+  }
+  const best = _npBest;
+  if (!best || best.a.dead) { np.style.display = 'none'; return; }
+  const a = best.a;
+  _npVec.set(best.wx, best.labelY, best.wz).project(camera);
+  if (_npVec.z > 1) { np.style.display = 'none'; return; }
+  np.style.left = `${(_npVec.x * 0.5 + 0.5) * canvas.clientWidth}px`;
+  np.style.top = `${Math.max(20, (-_npVec.y * 0.5 + 0.5) * canvas.clientHeight)}px`;
+  np.className = a.faction === 4 || a.faction === 5 ? 'np-flood'
+    : a.faction === 6 ? 'np-corpse'
+      : a.faction === 2 || a.odst ? 'np-marine' : 'np-crew';
+  np.textContent = `${a.callsign.rank} ${a.callsign.name}`.toUpperCase();
+  np.style.display = 'block';
+}
+function pickNameplateTarget() {
   camera.getWorldDirection(_npDir);
   let best = null, bestScore = 1;
   for (const a of sim.agents) {
@@ -1055,18 +1082,7 @@ function updateNameplate() {
     if (_npRay.intersectObjects(world.wallMeshes, false).length
       || _npRay.intersectObjects(world.doorPanelMeshes ?? [], false).length) best = null;
   }
-  _npSticky = best?.a ?? null;
-  if (!best) { np.style.display = 'none'; return; }
-  const a = best.a;
-  _npVec.set(best.wx, best.labelY, best.wz).project(camera);
-  if (_npVec.z > 1) { np.style.display = 'none'; return; }
-  np.style.left = `${(_npVec.x * 0.5 + 0.5) * canvas.clientWidth}px`;
-  np.style.top = `${Math.max(20, (-_npVec.y * 0.5 + 0.5) * canvas.clientHeight)}px`;
-  np.className = a.faction === 4 || a.faction === 5 ? 'np-flood'
-    : a.faction === 6 ? 'np-corpse'
-      : a.faction === 2 || a.odst ? 'np-marine' : 'np-crew';
-  np.textContent = `${a.callsign.rank} ${a.callsign.name}`.toUpperCase();
-  np.style.display = 'block';
+  return best;
 }
 
 // debug: raycast from the camera in a direction, report what's hit
@@ -1573,8 +1589,12 @@ function soundSweep(now) {
     const isHuman = a.faction === 0 || a.faction === 1 || a.faction === 2;
     const alive = isHuman && !a.dead && a.hp > 0 && !a.downed;
     const was = _aliveHumans.get(a.id);
-    if (alive) _aliveHumans.set(a.id, { x: a.x, y: a.y, deck: a.deck });
-    else if (was) {
+    if (alive) {
+      // mutate in place (swarm finding: a fresh record per human per sweep
+      // was ~9k short-lived objects a second)
+      if (was) { was.x = a.x; was.y = a.y; was.deck = a.deck; }
+      else _aliveHumans.set(a.id, { x: a.x, y: a.y, deck: a.deck });
+    } else if (was) {
       _aliveHumans.delete(a.id);
       if (!a.isPlayer && Math.abs(was.deck - player.deck) <= 1) {
         const [wx, wz] = world.simToWorld(was.x, was.y, was.deck);
@@ -1600,23 +1620,31 @@ function soundSweep(now) {
 // obstacle set for the player's capsule: live, standing bodies on the player's
 // deck (dead/downed/other-deck don't block). Radii mirror the old separation
 // pass. Handed to the physics world each fixed step.
+// pooled like doorMovers (swarm finding: a fresh array + record per agent at
+// 60Hz was measurable GC churn on the physics path)
+const _obstacleR = { 3: 0.32, 4: 0.48, 5: 0.75 };
+const _obstacleRecs = [];
+let _obstacleN = 0;
+let _obstacleKey = -1;
 function playerObstacles() {
-  const out = [];
-  const R = { 3: 0.32, 4: 0.48, 5: 0.75 };
   const cy = elevOf(player.deck) + 0.9;
+  let n = 0;
   for (const a of sim.agents) {
     if (a.dead || a.isPlayer || a.deck !== player.deck) continue;
     if (a.faction === 6 || a.downed || a.hp <= 0) continue;
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
-    out.push({ id: a.id, x: wx, y: cy, z: wz, radius: R[a.faction] ?? 0.4, half: 0.5 });
+    const r = _obstacleRecs[n] ?? (_obstacleRecs[n] = { id: 0, x: 0, y: 0, z: 0, radius: 0.4, half: 0.5 });
+    r.id = a.id; r.x = wx; r.y = cy; r.z = wz; r.radius = _obstacleR[a.faction] ?? 0.4;
+    n++;
   }
-  return out;
+  _obstacleN = n;
+  return _obstacleRecs;
 }
 
 // --- main loop ---
 let frameNo = 0;
 let physAcc = 0;
-let _trackerAt = 0, _observeAt = 0; // subsystem throttle clocks (perf pass 2)
+let _trackerAt = 0, _observeAt = 0, _sweepAt = 0; // subsystem throttle clocks (perf pass 2)
 let _smYaw = 0, _smPitch = 0, _bobPhase = 0, _bobAmp = 0; // viewmodel sway/bob (first-strike feel)
 let _fpsEma = 16.7, _fpsWorst = 0, _fpsShownAt = 0; // top-right perf readout
 // sim ticks run OUTSIDE the rAF task (engine/runtime.js TickScheduler):
@@ -1639,7 +1667,14 @@ function frame(now) {
   if (physics) {
     let pSteps = 0;
     while (physAcc >= PHYS_DT && pSteps++ < 6) {
-      physics.syncBodies(playerObstacles());
+      // obstacle positions come from raw sim state, which only changes on the
+      // 15Hz sim tick (or when the player changes decks) — skip the whole
+      // JS→wasm re-sync on the other ~45 physics steps a second
+      const obsKey = sim.tickCount * 8 + player.deck;
+      if (obsKey !== _obstacleKey) {
+        _obstacleKey = obsKey;
+        physics.syncBodies(playerObstacles(), _obstacleN);
+      }
       player.step(PHYS_DT);
       physics.step();
       physAcc -= PHYS_DT;
@@ -1710,7 +1745,9 @@ function frame(now) {
 
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
-  soundSweep(now);
+  // the sweep voices 10-15Hz sim data; every one-shot has a >=220ms throttle
+  // window, so scanning at 15Hz instead of every frame is inaudible (swarm)
+  if (now - _sweepAt > 66) { _sweepAt = now; soundSweep(now); }
   // subsystem throttles (perf pass 2): a 25m sweep display reads perfectly
   // at 20Hz, and the ops board's intel accumulates fine at 6Hz — neither
   // needs to burn canvas/agent-scan time every frame

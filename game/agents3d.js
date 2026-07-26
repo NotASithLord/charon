@@ -12,6 +12,10 @@ import { RagdollSystem } from '../engine/physics/ragdoll.js';
 import { TASK } from '../sim/hive.js';
 
 const CAP = 512;
+// shadow-caster curation (swarm finding): the torch's shadow camera reaches
+// 32m — an instance beyond ~34m of the eye can't cast into the beam, so a
+// part-set with no stamped instance that close skips the depth pass entirely
+const CAST_NEAR2 = 34 * 34;
 
 // CARRIER FORM (user note: "not a blob"): no source mesh exists in the tag
 // dump, so this is a sculpted procedural body — a lumpy two-lobed gas sack
@@ -111,8 +115,15 @@ export class Agents3D {
     // carrier keeps its procedural swelling body (no source mesh exists);
     // corpses are the character meshes laid flat (burned husks stay slabs).
     const mkSet = (name) => characterParts(name).map((p) => {
+      // FrontSide (swarm finding): DoubleSide on the densest textured meshes
+      // in the game doubled raster work in the main AND shadow passes. The
+      // humanoid parts are closed shells — verified by a 4-angle spin-around
+      // pixel diff — but the infection form's feeler paddles and tentacles
+      // are open single-sided fins that vanish from behind, so it keeps
+      // DoubleSide.
       const mat = new THREE.MeshStandardMaterial({
-        map: p.texture, roughness: 0.78, metalness: 0.06, side: THREE.DoubleSide,
+        map: p.texture, roughness: 0.78, metalness: 0.06,
+        side: name === 'infection' ? THREE.DoubleSide : THREE.FrontSide,
       });
       const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
       mesh.count = 0;
@@ -340,6 +351,7 @@ export class Agents3D {
 
   // write base × (pivot-anchored swing) into every part mesh of a set
   _stampAnimated(set, i, clip, animT, id, hold = false) {
+    if (this._curD2 < CAST_NEAR2) this._castNear.add(set);
     for (const mesh of set) {
       const pivot = mesh.userData.pivot;
       const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(mesh.userData.part, clip, animT, id, hold) : 0;
@@ -382,6 +394,9 @@ export class Agents3D {
     const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId, true); // rifle carriers
 
     const seen = new Set();
+    // per-frame per-set "any instance near enough to cast into the torch cone"
+    (this._castNear ??= new Set()).clear();
+    this._curD2 = 0; // stays 0 (always cast) until the camera position is known
     this._emergeAt ??= new Map();
     this._hiddenPrev ??= new Set();
     const hiddenNow = (this._hiddenNow ??= new Set());
@@ -468,7 +483,8 @@ export class Agents3D {
       if (this.viewX !== undefined) {
         const [ax, az] = world.simToWorld(rp.x, rp.y, deck);
         const vdx = ax - this.viewX, vdz = az - this.viewZ;
-        if (vdx * vdx + vdz * vdz > 62 * 62) continue;
+        this._curD2 = vdx * vdx + vdz * vdz;
+        if (this._curD2 > 62 * 62) continue;
       }
       let [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
       // a body whose sim transit crosses the enclosed stair housing at
@@ -678,6 +694,7 @@ export class Agents3D {
           const s = 0.8 + (held / cap) * 0.7 + (held / cap > 0.6 ? Math.sin(sim.t * 5) * 0.04 : 0);
           // the sculpted body has its feet at y=0 — swell grows it upward
           this._pose(wx, elev, wz, heading, s, s, s);
+          if (this._curD2 < CAST_NEAR2) this._castNear.add(this.carrier);
           this.carrier.setMatrixAt(counts.carrier++, this._m);
           break;
         }
@@ -788,8 +805,13 @@ export class Agents3D {
     for (const [set, c] of [[this.civSet, counts.civ], [this.armedSet, counts.armed],
     [this.marineSet, counts.marine], [this.odstSet, counts.odst], [this.infectionSet, counts.infection],
     [this.combatCivSet, counts.combatCiv], [this.combatOdstSet, counts.combatOdst]]) {
-      for (const mesh of set) commitInstanced(mesh, c);
+      const cast = this._castNear.has(set);
+      for (const mesh of set) { mesh.castShadow = cast; commitInstanced(mesh, c); }
     }
+    // a carried rifle is only ever within torch reach when its carrier is
+    this.rifle.castShadow = this._castNear.has(this.armedSet) || this._castNear.has(this.marineSet)
+      || this._castNear.has(this.odstSet) || this._castNear.has(this.combatOdstSet);
+    this.carrier.castShadow = this._castNear.has(this.carrier);
     for (const [mesh, c] of [[this.carrier, counts.carrier],
     [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash],
     [this.beams, counts.beam]]) {
@@ -855,11 +877,24 @@ export class Agents3D {
       const elev = this.world.groundHeightAt(deck, wx, wz);
       const hoverY = rp.hoverY || 0; // a form that died mid-leap starts in the air
       const impulse = this._deathImpulse(id, f, flags, wx, wz, deck, heading);
+      // the ceiling sampler is called for BOTH capsule ends every 1/120s
+      // substep, and ceilHeightAt is a linear all-rooms scan (swarm finding)
+      // — the value only changes when the body crosses a room boundary, so
+      // cache it and re-resolve after >0.5m of lateral travel
+      let ccx = wx, ccz = wz;
+      let ccy = elevOf(deck) + this.world.ceilHeightAt(deck, wx, wz) - 0.15;
       rag = sys.spawn(id,
         { x: wx, y: elev + hoverY, z: wz, heading, deck },
         impulse,
         (x, z) => this.world.groundHeightAt(deck, x, z),
-        (x, z) => elevOf(deck) + this.world.ceilHeightAt(deck, x, z) - 0.15);
+        (x, z) => {
+          const dx = x - ccx, dz = z - ccz;
+          if (dx * dx + dz * dz > 0.25) {
+            ccx = x; ccz = z;
+            ccy = elevOf(deck) + this.world.ceilHeightAt(deck, x, z) - 0.15;
+          }
+          return ccy;
+        });
       if (!rag) return false; // disabled at the system level
       this._ragSeen.add(id);
     }
@@ -958,6 +993,7 @@ export class Agents3D {
   // limb rotation is a full physics quaternion and the base is the tumbling
   // root instead of the upright pose.
   _stampRagdoll(set, i, rag) {
+    if (this._curD2 < CAST_NEAR2) this._castNear.add(set);
     this._q.set(rag.rootQuat[0], rag.rootQuat[1], rag.rootQuat[2], rag.rootQuat[3]);
     this._m.compose(this._p.set(rag.rootPos[0], rag.rootPos[1], rag.rootPos[2]),
       this._q, this._s.set(1, 1, 1));

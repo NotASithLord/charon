@@ -245,7 +245,16 @@ export class World {
       const [deck, third] = k.split(':').map(Number);
       const nearEdge = Math.max(E[third] - playerX, playerX - E[third + 1], 0);
       const vis = Math.abs(deck - playerDeck) <= 1 && nearEdge < 70;
-      for (const o of list) o.visible = vis;
+      // SHADOW CASTER CURATION (swarm finding): the torch's shadow camera
+      // only reaches 32m and never crosses an opaque deck — statics on other
+      // decks or in a third whose near edge is beyond the cone stay VISIBLE
+      // but drop out of the depth-only shadow pass (3-5x fewer shadow verts).
+      const cast = deck === playerDeck && nearEdge < 40;
+      for (const o of list) {
+        o.visible = vis;
+        if (o._castBase === undefined) o._castBase = o.castShadow === true;
+        o.castShadow = o._castBase && cast;
+      }
     }
   }
 
@@ -414,15 +423,29 @@ export class World {
     // MICRO-RELIEF (fidelity pass): the same plate/panel textures double as
     // bump maps, so plate seams, rivets and conduits catch the flashlight as
     // real raised detail sweeping past — the cheapest normal-mapping there is.
-    const mkFloorMat = (w, d, tint) => {
-      const tex = floorTexBase.clone();
-      tex.needsUpdate = true;
-      tex.repeat.set(Math.max(1, w / 4), Math.max(1, d / 4));
-      return new THREE.MeshStandardMaterial({
-        map: tex, color: tint, roughness: 0.85, metalness: 0.35,
-        bumpMap: tex, bumpScale: 0.6,
-      });
+    // One material per TINT, all sharing the one deck-plate texture (swarm
+    // finding: cloning the 512² CanvasTexture per room uploaded ~63 copies —
+    // ~90MB of GPU memory — and the unique materials blocked floor batching).
+    // Tiling that repeat.set() used to provide is baked into each slab's UVs.
+    const floorMats = new Map();
+    const mkFloorMat = (tint) => {
+      let m = floorMats.get(tint);
+      if (!m) {
+        m = new THREE.MeshStandardMaterial({
+          map: floorTexBase, color: tint, roughness: 0.85, metalness: 0.35,
+          bumpMap: floorTexBase, bumpScale: 0.6,
+        });
+        floorMats.set(tint, m);
+      }
+      return m;
     };
+    const scaleFloorUV = (geo, w, d) => {
+      const su = Math.max(1, w / 4), sv = Math.max(1, d / 4);
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+      return geo;
+    };
+    this._scaleFloorUV = scaleFloorUV;
     this._matWall = new THREE.MeshStandardMaterial({
       map: wallTexBase, color: 0xaebdd8, roughness: 0.7, metalness: 0.5,
       bumpMap: wallTexBase, bumpScale: 0.5,
@@ -430,7 +453,7 @@ export class World {
     const matWall = this._matWall;
     // NO self-glow (user: a bright visible ceiling ruins the darkness) — the
     // overhead plating is pitch dark unless an actual light source hits it
-    const matCeil = new THREE.MeshStandardMaterial({ color: 0x10141c, roughness: 1, side: THREE.DoubleSide });
+    const matCeil = new THREE.MeshStandardMaterial({ color: 0x10141c, roughness: 1 }); // closed boxes — FrontSide is pixel-identical
     this._matCeil = matCeil;
     this._mkFloorMat = mkFloorMat; // reused by _buildStairRoom (separate method)
 
@@ -462,7 +485,7 @@ export class World {
       const [wx, wz] = this.simToWorld(n.x, n.y, deck);
       const isBreach = n.idx === g.breachNode;
       const tint = isBreach ? 0xff8866 : g.unpowered[n.idx] ? 0x4a5261 : (n.type === 'corridor' ? 0xbccbe4 : 0x9daabf);
-      const fmat = mkFloorMat(n.w, n.d, tint);
+      const fmat = mkFloorMat(tint);
       const roomH = clearHeightOf(n); // taller in the big holds — leap room
       // GRAND STAIRWELL room: normal deck-3 room, but the floor is built with a
       // central well + switchback by _buildStairRoom (skip the flat floor).
@@ -472,7 +495,7 @@ export class World {
       // floor + ceiling with hatch holes where shafts pierce them
       const fh = floorHoles.get(n.idx) ?? [];
       if (!isStair) for (const [a0, b0, a1, b1] of rectMinusHoles(wx - n.w / 2, wz - n.d / 2, wx + n.w / 2, wz + n.d / 2, fh)) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.12, b1 - b0), fmat);
+        const slab = new THREE.Mesh(scaleFloorUV(new THREE.BoxGeometry(a1 - a0, 0.12, b1 - b0), a1 - a0, b1 - b0), fmat);
         slab.position.set((a0 + a1) / 2, elev - 0.06, (b0 + b1) / 2);
         this.scene.add(slab);
       }
@@ -927,11 +950,11 @@ export class World {
     const { cx, cz, hx, hz, hiElev, loElev, midElev, wellCx, wellCz, wellHx, wellHz } = g;
     const matStep = new THREE.MeshStandardMaterial({ color: 0x6c7789, roughness: 0.75, metalness: 0.4 });
     const matRail = new THREE.MeshStandardMaterial({ color: 0x9aa6b8, roughness: 0.45, metalness: 0.7 });
-    const fmat = this._mkFloorMat(n.w, n.d, 0x93a1b8);
+    const fmat = this._mkFloorMat(0x93a1b8);
     // entry floor at deck level, with the well cut out (walk all the way round)
     const hole = { x: wellCx, z: wellCz, hw: wellHx, hd: wellHz };
     for (const [a0, b0, a1, b1] of rectMinusHoles(cx - hx, cz - hz, cx + hx, cz + hz, [hole])) {
-      const slab = new THREE.Mesh(new THREE.BoxGeometry(a1 - a0, 0.14, b1 - b0), fmat);
+      const slab = new THREE.Mesh(this._scaleFloorUV(new THREE.BoxGeometry(a1 - a0, 0.14, b1 - b0), a1 - a0, b1 - b0), fmat);
       slab.position.set((a0 + a1) / 2, hiElev - 0.07, (b0 + b1) / 2);
       this.scene.add(slab);
     }

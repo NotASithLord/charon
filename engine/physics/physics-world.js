@@ -141,9 +141,14 @@ export class PhysicsWorld {
   // only the agents that actually matter (same deck, alive). Bodies seen before
   // but absent now are parked far below the map rather than destroyed, so their
   // colliders can be reused next time they reappear.
-  syncBodies(bodies) {
-    const seen = new Set();
-    for (const a of bodies) {
+  syncBodies(bodies, count = bodies.length) {
+    // persistent Set + parked flag (swarm finding: a fresh Set per 60Hz step,
+    // and every retired body re-parked at y=-1000 every step forever — once
+    // parked, a kinematic body stays put with zero velocity until reused)
+    const seen = (this._seen ??= new Set());
+    seen.clear();
+    for (let i = 0; i < count; i++) {
+      const a = bodies[i];
       seen.add(a.id);
       let e = this._npc.get(a.id);
       if (!e) {
@@ -151,13 +156,17 @@ export class PhysicsWorld {
           this.R.RigidBodyDesc.kinematicPositionBased().setTranslation(a.x, a.y, a.z));
         const col = this.world.createCollider(
           this.R.ColliderDesc.capsule(a.half ?? 0.5, a.radius ?? 0.4), body);
-        e = { body, col };
+        e = { body, col, parked: false };
         this._npc.set(a.id, e);
       }
+      e.parked = false;
       e.body.setNextKinematicTranslation({ x: a.x, y: a.y, z: a.z });
     }
     for (const [id, e] of this._npc) {
-      if (!seen.has(id)) e.body.setNextKinematicTranslation({ x: 0, y: -1000, z: 0 });
+      if (!seen.has(id) && !e.parked) {
+        e.parked = true;
+        e.body.setNextKinematicTranslation({ x: 0, y: -1000, z: 0 });
+      }
     }
   }
 

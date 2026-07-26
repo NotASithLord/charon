@@ -501,10 +501,13 @@ var PARAMS = {
     limbDamp: 3,
     limbLimit: 1.4,
     limbKick: 7,
-    subDt: 8333333e-9,
-    maxSubSteps: 8,
+    // internal fixed step. 1/60 (swarm finding): the solver is unconditionally
+    // stable by construction (position projection + exponential damping + hard
+    // velocity clamps), and a death flop has no features that need 120Hz
+    // sampling — half the substeps, same look.
+    subDt: 0.016666667,
+    maxSubSteps: 4,
     dtCap: 0.05
-    // internal fixed step (1/120) — stable + deterministic
   }
 };
 function cloneParams() {
@@ -5003,7 +5006,8 @@ var Sim = class {
   // hangar IS in the hangar, even if its "move" hasn't completed yet.
   _refreshOccupancy() {
     const g = this.graph;
-    this._occ = Array.from({ length: g.n }, () => []);
+    if (!this._occ || this._occ.length !== g.n) this._occ = Array.from({ length: g.n }, () => []);
+    else for (let i = 0; i < g.n; i++) this._occ[i].length = 0;
     this._floodAt.fill(0);
     this._humanAt.fill(0);
     this._panicked.fill(0);

@@ -668,7 +668,10 @@ export class Sim {
   // hangar IS in the hangar, even if its "move" hasn't completed yet.
   _refreshOccupancy() {
     const g = this.graph;
-    this._occ = Array.from({ length: g.n }, () => []);
+    // persistent per-node arrays, cleared in place (swarm finding: the old
+    // Array.from(...() => []) allocated ~1,900 throwaway arrays a second)
+    if (!this._occ || this._occ.length !== g.n) this._occ = Array.from({ length: g.n }, () => []);
+    else for (let i = 0; i < g.n; i++) this._occ[i].length = 0;
     this._floodAt.fill(0);
     this._humanAt.fill(0);
     this._panicked.fill(0);
