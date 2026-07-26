@@ -643,6 +643,181 @@ function rx(e, speaker, msg, { always = false, type = 'radio', spk } = {}) {
   if (!delivered(speaker, always)) return null;
   return { t: e.t, type, spk: spk ?? spkName(speaker), msg };
 }
+// DIALOGUE VARIETY (user: dozens of diverse phrasings for every reportable
+// event). Each transmission draws a random line from its pool — Math.random
+// is fine, receipt and phrasing are display-layer; the sim never sees them.
+// `r` is the room name (caller guarantees a fallback).
+const VOICES = {
+  ambush: [
+    (r) => `contact! they were waiting for us in ${r}!`,
+    (r) => `it's a trap — they were dug in at ${r}!`,
+    (r) => `ambush! ambush in ${r}!`,
+    (r) => `they hit us the second we cleared the hatch — ${r} is hot!`,
+    (r) => `hostiles were sitting on ${r} — walked right into it!`,
+    (r) => `they let us walk in. ${r}. everybody down!`,
+    (r) => `contact rear! they were behind the racks in ${r}!`,
+    (r) => `they were WAITING — say again, ${r} was staged!`,
+    (r) => `sprung on us in ${r} — need guns here now!`,
+    (r) => `point man's hit — they boxed us in at ${r}!`,
+    (r) => `out of the dark, all sides — ${r}!`,
+    (r) => `set-piece ambush in ${r}, they knew we were coming!`,
+  ],
+  taken: [
+    (r) => `screams coming from ${r} — someone's in trouble`,
+    (r) => `somebody's screaming in ${r}, we can't get to them`,
+    (r) => `we heard a scream cut off in ${r}. it just stopped`,
+    (r) => `someone in ${r} is yelling for help — who's closest?`,
+    (r) => `they got somebody in ${r}. we heard the whole thing`,
+    (r) => `there's screaming out of ${r} — repeat, screaming`,
+    (r) => `struggle in ${r}. sounded bad. then nothing`,
+    (r) => `we lost voice contact with ${r} mid-sentence`,
+    (r) => `someone was calling for help near ${r} — gone quiet now`,
+    (r) => `people are getting dragged down in ${r}, we can hear it`,
+    (r) => `banging and screaming through the bulkhead from ${r}`,
+    (r) => `that was a human voice in ${r}. was.`,
+  ],
+  strange: [
+    (r) => `strange noises out of ${r}`,
+    (r) => `hearing something wet moving around in ${r}`,
+    (r) => `there's something in ${r}. don't know what`,
+    (r) => `movement in ${r} — doesn't sound like boots`,
+    (r) => `anyone else hearing that from ${r}?`,
+    (r) => `something's scraping along the deck in ${r}`,
+    (r) => `noises out of ${r} again. it's not the ventilation`,
+    (r) => `${r} sounds wrong. requesting someone check it`,
+    (r) => `low sounds from ${r} — like breathing, but not right`,
+    (r) => `we keep hearing movement in ${r} and nobody's posted there`,
+    (r) => `something knocked over a rack in ${r}. nobody's in there`,
+    (r) => `can't explain what we're hearing out of ${r}`,
+  ],
+  rampage: [
+    (r) => `heavy movement near ${r} — multiple contacts`,
+    (r) => `multiple hostiles moving through ${r}!`,
+    (r) => `they're pouring through ${r} — count is double digits`,
+    (r) => `${r} is crawling with them!`,
+    (r) => `mass movement in ${r}, headed our way!`,
+    (r) => `we've got a swarm in ${r} — say again, a SWARM`,
+    (r) => `whatever's in ${r}, it's not one of them, it's a lot`,
+    (r) => `hostiles rampaging through ${r} — they're tearing it apart`,
+    (r) => `stampede through ${r}! get clear of the hatches!`,
+    (r) => `they're moving in force through ${r}`,
+    (r) => `activity spike in ${r} — it's a push, they're pushing!`,
+    (r) => `everything on this deck is converging on ${r}`,
+  ],
+  revive: [
+    (r) => `something's moving in ${r}... it was down a second ago`,
+    (r) => `the one we dropped in ${r} — it's getting up`,
+    (r) => `body in ${r} just moved. bodies don't move`,
+    (r) => `confirm your kills! the dead in ${r} aren't staying dead!`,
+    (r) => `it stood back up. ${r}. it STOOD BACK UP`,
+    (r) => `we put it down in ${r} and it's walking again`,
+    (r) => `casualty in ${r} just... reanimated. engaging again`,
+    (r) => `they don't stay down — another one's up in ${r}`,
+    (r) => `movement from the casualties in ${r}. all of you, eyes on the floor`,
+    (r) => `that thing in ${r} took a full mag and it's up again`,
+    (r) => `dead pile in ${r} is moving. burn them. BURN them`,
+    (r) => `whatever we killed in ${r}, we didn't kill it`,
+  ],
+  duct: [
+    (r) => `hearing something in the ducts near ${r}`,
+    (r) => `movement in the trunking over ${r}`,
+    (r) => `there's something crawling through the vents by ${r}`,
+    (r) => `scratching in the overhead near ${r} — it's in the ductwork`,
+    (r) => `vent noise over ${r}. something heavy. moving fast`,
+    (r) => `the trunking above ${r} just flexed — something's inside it`,
+    (r) => `slithering sounds in the air handling near ${r}`,
+    (r) => `it's in the walls. ${r}. it's IN the walls`,
+    (r) => `duct grate rattling in ${r} — nobody's on maintenance rotation`,
+    (r) => `tell me that's the fans in ${r}. that's not the fans`,
+    (r) => `something's using the vents to move around ${r}`,
+    (r) => `overhead noise tracking across ${r} — it's headed somewhere`,
+  ],
+  manDown: [
+    (r) => `we have a man down in ${r}!`,
+    (r) => `man down! man down in ${r}!`,
+    (r) => `marine down in ${r} — we need help NOW`,
+    (r) => `we lost one in ${r}!`,
+    (r) => `casualty in ${r}! still taking fire!`,
+    (r) => `he's down — ${r} — he's not moving`,
+    (r) => `they got one of ours in ${r}!`,
+    (r) => `KIA in ${r}. we couldn't reach him`,
+    (r) => `one of my people is down in ${r}, request immediate support`,
+    (r) => `we're carrying a casualty out of ${r} — cover the corridor!`,
+    (r) => `${r} — man down, man down, MAN DOWN`,
+    (r) => `lost another one in ${r}. that's on me`,
+  ],
+  distress: [
+    (r) => `taking fire in ${r}! anyone copy?`,
+    (r) => `contact in ${r}! we are engaged!`,
+    (r) => `${r} — we're in it, need backup!`,
+    (r) => `any station, any station — firefight in ${r}!`,
+    (r) => `we are pinned in ${r}! somebody answer!`,
+    (r) => `heavy contact in ${r} — expending fast!`,
+    (r) => `they're on us in ${r}! copy anyone!`,
+    (r) => `mayday from ${r}, we cannot hold this room alone!`,
+    (r) => `who's near ${r}?! we need shooters!`,
+    (r) => `engaged in ${r} — they just keep coming!`,
+    (r) => `${r} is falling, say again ${r} is falling!`,
+    (r) => `does ANYONE copy?! ${r}! now!`,
+  ],
+  burn: [
+    (r) => `burning the bodies in ${r}`,
+    (r) => `torching the casualties in ${r} — orders stand`,
+    (r) => `flame team working through ${r}`,
+    (r) => `putting the dead in ${r} to the torch. all of them`,
+    (r) => `${r} cleared — burning what's left`,
+    (r) => `incinerating remains in ${r}. don't let them lie`,
+    (r) => `it's ugly work but ${r}'s bodies won't get back up`,
+    (r) => `burn detail on ${r}. nothing rises from ash`,
+  ],
+  powerBack: [
+    (r) => `power's coming back in ${r}`,
+    (r) => `${r} just got mains power again`,
+    (r) => `lights back up in ${r}`,
+    (r) => `${r} is lit again — engineering came through`,
+    (r) => `power restored to ${r}, we can see again`,
+    (r) => `breakers reset — ${r} has lighting`,
+  ],
+  airClear: [
+    (r) => `air's finally clearing in ${r}`,
+    (r) => `the fog in ${r} is thinning out`,
+    (r) => `scrubbers caught up — ${r} air is breathable`,
+    (r) => `visibility improving in ${r}`,
+    (r) => `${r} spore count dropping, masks stay ON`,
+    (r) => `you can see across ${r} again`,
+  ],
+  armoryArms: [
+    () => 'civilians drawing rifles off the racks — arming everyone who can hold one',
+    () => 'racks are open — putting weapons in every pair of hands we have',
+    () => 'handing out MA5s to the crew. everyone fights now',
+    () => 'civilians are arming up off the racks. god help us',
+    () => 'weapons free for all hands — the racks are stripped',
+    () => 'every adult on this deck is carrying now. no more bystanders',
+  ],
+  respond: [
+    (r) => `we are responding to distress in ${r}`,
+    (r) => `copy the mayday — moving to ${r} now`,
+    (r) => `en route to ${r}, hold what you've got`,
+    (r) => `we're coming to you — ${r}, two minutes`,
+    (r) => `heard you, ${r}. we're on our way`,
+    (r) => `moving to reinforce ${r}`,
+    (r) => `${r}, help is coming — keep shooting`,
+    (r) => `double-timing it to ${r}`,
+    (r) => `on our way to ${r} — watch your crossfire when we come in`,
+    (r) => `hang on ${r}, we are inbound`,
+  ],
+  confirmKill: [
+    (r) => `making sure the downed one in ${r} stays down`,
+    (r) => `double-tap on the body in ${r}. learned that the hard way`,
+    (r) => `putting another burst in the one we dropped in ${r}`,
+    (r) => `confirming the kill in ${r} — we don't take chances anymore`,
+    (r) => `it doesn't get back up this time. ${r} secure`,
+    (r) => `round in every body in ${r}. new policy`,
+    (r) => `the one in ${r} won't be standing up again`,
+    (r) => `securing the downed contact in ${r} before it decides otherwise`,
+  ],
+};
+const say = (key, r) => { const p = VOICES[key]; return p[(Math.random() * p.length) | 0](r); };
 function gameLogView(e) {
   const room = e.node >= 0 ? sim.graph.node(e.node).name : null;
   const throttle = (key, sec = 20) => {
@@ -660,46 +835,50 @@ function gameLogView(e) {
       return e; // endgame banner, not radio
     case 'ambush': {
       const w = witnessNear(e.node);
-      return room ? rx(e, w, `contact! they were waiting for us in ${room}!`, { type: 'combat' }) : e;
+      return room ? rx(e, w, say('ambush', room), { type: 'combat' }) : e;
     }
     case 'convert': {
       if (!room || !throttle('c' + e.node)) return null;
       const w = witnessNear(e.node);
-      return rx(e, w, msg.includes('taken')
-        ? `screams coming from ${room} — someone's in trouble` : `strange noises out of ${room}`);
+      return rx(e, w, say(msg.includes('taken') ? 'taken' : 'strange', room));
     }
     case 'rampage': {
       if (!room || !throttle('m' + e.node, 15)) return null;
       const w = witnessNear(e.node);
-      return rx(e, w, `heavy movement near ${room} — multiple contacts`, { type: 'combat' });
+      return rx(e, w, say('rampage', room), { type: 'combat' });
     }
     case 'revive': case 'reanimate': {
       if (!room || !throttle('r' + e.node)) return null;
       const w = witnessNear(e.node);
-      return rx(e, w, `something's moving in ${room}... it was down a second ago`);
+      return rx(e, w, say('revive', room));
     }
     case 'duct': {
       // someone has to be close enough to HEAR the ductwork, then transmit,
       // then you have to receive it
       const w = witnessNear(e.node);
-      return rx(e, w, msg.startsWith('noises')
-        ? msg.replace('noises in the ducts', 'hearing something moving in the trunking')
-        : `hearing something in the ducts near ${room ?? 'my position'}`);
+      return rx(e, w, say('duct', room ?? 'my position'));
     }
     case 'combat': {
       if (msg.includes('(you)') || msg.startsWith('you ')) return e; // your own actions, no radio
       if (msg.startsWith('a marine falls')) {
         const w = witnessNear(e.node, (a) => a.faction === 2 || a.faction === 1);
-        return rx(e, w, `we have a man down in ${room ?? 'here'}!`, { type: 'combat' });
+        return rx(e, w, say('manDown', room ?? 'here'), { type: 'combat' });
       }
       if (msg.includes('arms up at the armory')) {
-        return rx(e, odstSpeaker(), 'civilians drawing rifles off the racks — arming everyone who can hold one', { always: !sim.armoryLocked });
+        return rx(e, odstSpeaker(), say('armoryArms'), { always: !sim.armoryLocked });
+      }
+      if (msg.includes('make sure of a downed form')) {
+        // the confirm-kill habit, reported over the same unreliable net —
+        // and throttled: a sweep through a room is one report, not five
+        if (!throttle('k' + e.node, 25)) return null;
+        const w = witnessNear(e.node, (a) => a.faction === 2);
+        return rx(e, w, say('confirmKill', room ?? 'here'));
       }
       return e;
     }
     case 'burn': {
       const w = witnessNear(e.node, (a) => a.faction === 2);
-      return rx(e, w, room ? `burning the bodies in ${room}` : msg);
+      return rx(e, w, room ? say('burn', room) : msg);
     }
     case 'sweep': case 'morale': {
       const s = squadSpeaker(msg);
@@ -712,7 +891,7 @@ function gameLogView(e) {
       }
       if (msg.startsWith('distress call')) {
         const w = witnessNear(e.node);
-        return rx(e, w, `taking fire in ${room ?? 'here'}! anyone copy?`, { type: 'combat' });
+        return rx(e, w, say('distress', room ?? 'here'), { type: 'combat' });
       }
       if (msg.startsWith('FALL BACK')) {
         // CIC all-hands broadcast — strong transmitter, but the same rules:
@@ -728,13 +907,13 @@ function gameLogView(e) {
       if (msg.includes('word of the outbreak')) return null;   // omniscient narration
       if (msg.startsWith('squad') || msg.startsWith('patrol')) {
         const s = squadSpeaker(msg);
+        const dm = msg.match(/responding to distress in (.+)$/);
+        if (dm) return rx(e, s, say('respond', dm[1]));
         return rx(e, s, msg.replace(/^(squad|patrol) \d+ /, 'we are '));
       }
       if (msg.includes('spore fog') || msg.includes('power flickers')) {
         const w = witnessNear(e.node);
-        return rx(e, w, msg.includes('power')
-          ? `power's coming back in ${room ?? 'this section'}`
-          : `air's finally clearing in ${room ?? 'this section'}`);
+        return rx(e, w, say(msg.includes('power') ? 'powerBack' : 'airClear', room ?? 'this section'));
       }
       const w = e.node >= 0 ? witnessNear(e.node) : null;
       return w ? rx(e, w, msg) : e;
