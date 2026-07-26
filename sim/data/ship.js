@@ -48,8 +48,11 @@ export const SHIP = {
     { id: 'sensorStbd', name: 'Sensor Suite Stbd', deck: 1, foreAft: 0.36, type: 'room', capacity: 5, w: 14, d: 10, row: -2, roles: ['systems'] },
 
     // ================= DECK 2 · HABITATION (wide living deck) ===========
-    { id: 'd2corrF', name: 'Hab Corridor Fore', deck: 2, foreAft: 0.32, type: 'corridor', capacity: 8, w: 40, d: 4, row: 0, roles: ['artery'] },
-    { id: 'd2corrA', name: 'Hab Corridor Aft', deck: 2, foreAft: 0.60, type: 'corridor', capacity: 8, w: 44, d: 4, row: 0, roles: ['artery'] },
+    // corridor widths sized so every side room genuinely abuts its artery —
+    // the galley and brig previously fell past the corridor ends, leaving
+    // doorways the geometry could not actually open (sealed-room bug)
+    { id: 'd2corrF', name: 'Hab Corridor Fore', deck: 2, foreAft: 0.32, type: 'corridor', capacity: 8, w: 52, d: 4, row: 0, roles: ['artery'] },
+    { id: 'd2corrA', name: 'Hab Corridor Aft', deck: 2, foreAft: 0.60, type: 'corridor', capacity: 8, w: 56, d: 4, row: 0, roles: ['artery'] },
     { id: 'crewA', name: 'Crew Quarters A', deck: 2, foreAft: 0.28, type: 'room', capacity: 14, w: 18, d: 12, row: 1, roles: ['quarters', 'soft'] },
     { id: 'mess', name: 'Mess Hall', deck: 2, foreAft: 0.38, type: 'open', capacity: 28, w: 20, d: 14, row: 1, roles: ['soft'] },
     { id: 'galley', name: 'Galley', deck: 2, foreAft: 0.46, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['soft'] },
@@ -59,7 +62,7 @@ export const SHIP = {
     { id: 'chapel', name: 'Chapel', deck: 2, foreAft: 0.68, type: 'room', capacity: 6, w: 10, d: 9, row: 1, roles: ['soft'] },
     { id: 'medbay', name: 'Medbay', deck: 2, foreAft: 0.54, type: 'room', capacity: 12, w: 16, d: 12, row: -1, roles: ['medbay', 'helpless', 'corpse_cache', 'soft'] },
     { id: 'cryo', name: 'Cryo Bay', deck: 2, foreAft: 0.64, type: 'room', capacity: 10, w: 16, d: 12, row: -1, roles: ['cryo', 'corpse_cache'] },
-    { id: 'brig', name: 'Brig', deck: 2, foreAft: 0.72, type: 'room', capacity: 4, w: 9, d: 7, row: -1, roles: ['brig', 'helpless'] },
+    { id: 'brig', name: 'Brig', deck: 2, foreAft: 0.70, type: 'room', capacity: 4, w: 9, d: 7, row: -1, roles: ['brig', 'helpless'] },
     // wide berthing halls + support fill out the beam
     { id: 'berthPort', name: 'Port Berthing', deck: 2, foreAft: 0.36, type: 'open', capacity: 24, w: 32, d: 15, row: 2, roles: ['quarters', 'soft'] },
     { id: 'berthStbd', name: 'Starboard Berthing', deck: 2, foreAft: 0.34, type: 'open', capacity: 24, w: 32, d: 15, row: -2, roles: ['quarters', 'soft'] },
@@ -194,7 +197,9 @@ export const SHIP = {
     { a: 'maintF', b: 'pumpRoom', type: 'hatch', lockable: true },
     { a: 'hangar', b: 'hangarCtl', type: 'hatch', lockable: true },
     { a: 'hangar', b: 'hangarA', type: 'hatch', lockable: false },
-    { a: 'hangarA', b: 'hangarCtl', type: 'hatch', lockable: true },
+    // (hangarA <-> hangarCtl removed: the rooms are 30m+ apart — the link
+    // produced a degenerate sealed tube. Control still opens onto Hangar
+    // Fore, which adjoins Hangar Aft.)
     { a: 'hangar', b: 'launchPort', type: 'hatch', lockable: true },
     { a: 'hangar', b: 'launchStbd', type: 'hatch', lockable: true },
     { a: 'hangarA', b: 'vehicle', type: 'hatch', lockable: true },

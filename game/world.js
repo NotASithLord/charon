@@ -537,7 +537,14 @@ export class World {
         if (e.a !== n.idx && e.b !== n.idx) continue;
         const other = g.node(e.a === n.idx ? e.b : e.a);
         if (other.deck !== deck) continue;
-        const [dx, dz] = this.simToWorld(e.door.x, e.door.y, deck);
+        // THE SEALED-ROOM BUG (user: galley entrance completely closed off):
+        // for a non-flush link, e.door is the throat tube's MIDPOINT — out in
+        // the void between the rooms — so long diagonal tubes had their wall
+        // gap clamped to the wrong place (or the wrong side) while the tube
+        // actually meets this room at doorA/doorB. Cut the gap at the true
+        // crossing point for THIS room.
+        const dpt = (e.a === n.idx ? e.doorA : e.doorB) ?? e.door;
+        const [dx, dz] = this.simToWorld(dpt.x, dpt.y, deck);
         const dN = Math.abs((wz - n.d / 2) - dz), dS = Math.abs((wz + n.d / 2) - dz);
         const dW = Math.abs((wx - n.w / 2) - dx), dE = Math.abs((wx + n.w / 2) - dx);
         const m = Math.min(dN, dS, dW, dE);

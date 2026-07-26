@@ -129,6 +129,34 @@ export class GameAudio {
       const env = Math.min(1, t * 8) * Math.exp(-t * 4);
       return (Math.sin(t * 2 * Math.PI * (34 - t * 8)) * 0.6 + rnd() * 0.12) * env;
     });
+    // radio squelch: the static crackle riding in front of a received
+    // transmission (user: the log is a radio net — let it SOUND like one)
+    this.buffers.squelch = mk(0.16, (t) => {
+      const gate = t < 0.025 || (t > 0.06 && t < 0.12) ? 1 : 0.25;
+      return (rnd() - 0.5) * gate * Math.exp(-t * 7) * 0.9;
+    });
+    // ship PA: a two-tone chime, then a voice — garbled past understanding
+    // by the dying speakers, but unmistakably the 1MC (user: PA announcements
+    // at the big beats)
+    this.buffers.pa = mk(3.1, (t) => {
+      if (t < 0.55) {
+        const f = t < 0.26 ? 660 : 880;
+        const seg = t < 0.26 ? t : t - 0.26;
+        return Math.sin(t * 2 * Math.PI * f) * 0.32 * Math.min(1, seg * 40) * Math.exp(-seg * 5);
+      }
+      const tv = t - 0.65;
+      if (tv < 0) return 0;
+      // syllable gate + formant stack + consonant noise = speech-shaped babble
+      const syl = Math.max(0, Math.sin(tv * 2 * Math.PI * 4.6)) ** 0.6;
+      const f0 = 118 + Math.sin(tv * 2.2) * 16;
+      let v = Math.sin(tv * 2 * Math.PI * f0) * 0.5
+        + Math.sin(tv * 2 * Math.PI * f0 * 2) * 0.28
+        + Math.sin(tv * 2 * Math.PI * (520 + Math.sin(tv * 7) * 170)) * 0.33
+        + Math.sin(tv * 2 * Math.PI * (1350 + Math.sin(tv * 3.1) * 280)) * 0.18;
+      v += (rnd() - 0.5) * (syl < 0.3 ? 0.3 : 0.1);
+      const env = Math.min(1, tv * 8) * Math.exp(-Math.max(0, tv - 1.9) * 6);
+      return v * syl * env * 0.34;
+    });
     // far firefight: an irregular burst of dull thumps — rifle fire heard
     // through decks of steel. Played through playFar's lowpass so distance
     // and bulkheads do the muffling.

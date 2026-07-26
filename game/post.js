@@ -123,9 +123,9 @@ export class PostFX {
   get exposure() { return this._uExposure.value; }
   set exposure(v) { this._uExposure.value = v; }
 
-  // low quality tier: the bloom chain runs at quarter instead of half input
-  // resolution (the node's own mip ladder scales with it)
-  set lite(v) { this.bloomNode.setResolutionScale(v ? 0.25 : 0.5); }
+  // quality ladder: the bloom chain's input resolution scale (0.5 full,
+  // stepping down to 0.25 on the lowest rung)
+  setBloomScale(s) { this.bloomNode.setResolutionScale(s); }
 
   // PassNode/BloomNode track renderer size + pixel ratio on their own
   setSize() {}

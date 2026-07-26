@@ -240,6 +240,59 @@ export class FireFX {
   }
 }
 
+// BLOOD MARKS (user: rooms should tell their own story): a dark pool with
+// drag streaks stamped onto the deck where someone was taken or fell.
+// Render-only, ring-buffered so a long run can't accumulate unbounded
+// decals — old marks fade under new ones. One shared texture + material.
+export class BloodFX {
+  constructor(scene) {
+    this.scene = scene;
+    this.pool = [];
+    this.idx = 0;
+    this.max = 44;
+    const c = document.createElement('canvas');
+    c.width = c.height = 96;
+    const x = c.getContext('2d');
+    const g = x.createRadialGradient(48, 48, 4, 48, 48, 44);
+    g.addColorStop(0, 'rgba(70,8,10,0.85)');
+    g.addColorStop(0.6, 'rgba(48,6,8,0.55)');
+    g.addColorStop(1, 'rgba(30,4,6,0)');
+    x.fillStyle = g;
+    x.fillRect(0, 0, 96, 96);
+    // smears: streaks dragged out of the pool
+    for (let i = 0; i < 14; i++) {
+      const a = (i * 2.399) % (Math.PI * 2), r = 20 + (i * 13) % 26;
+      x.strokeStyle = `rgba(56,7,9,${0.25 + (i % 4) * 0.12})`;
+      x.lineWidth = 1.5 + (i % 3);
+      x.beginPath();
+      x.moveTo(48 + Math.cos(a) * 8, 48 + Math.sin(a) * 8);
+      x.lineTo(48 + Math.cos(a) * r, 48 + Math.sin(a) * r);
+      x.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._geo = new THREE.PlaneGeometry(1, 1);
+    this._mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  }
+
+  add(wx, wz, elev, seed = 0) {
+    let m = this.pool[this.idx];
+    if (!m) {
+      m = new THREE.Mesh(this._geo, this._mat);
+      m.renderOrder = 1;
+      this.scene.add(m);
+      this.pool[this.idx] = m;
+    }
+    m.rotation.set(-Math.PI / 2, 0, (seed * 2.399) % (Math.PI * 2));
+    m.scale.setScalar(1.1 + ((seed * 97) % 10) / 8);
+    m.position.set(
+      wx + (((seed * 31) % 7) - 3) * 0.14,
+      elev + 0.014 + (this.idx % 7) * 0.0005, // tiny y-stagger kills z-fighting between marks
+      wz + (((seed * 17) % 7) - 3) * 0.14);
+    this.idx = (this.idx + 1) % this.max;
+  }
+}
+
 // SPARKING PANELS (user: better damage effects through the ship): a damaged
 // junction spits a burst of sparks at random intervals — a crackle of hot
 // points and a hard blue-white stab of light, then dark again. Sites are

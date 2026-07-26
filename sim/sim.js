@@ -63,6 +63,7 @@ export class Sim {
     this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison && !a.odst).length;
     this.armoryStock = this.P.armory.stock; // rifles on the rack, first come first served
     this.armoryLocked = true; // the sealed reserve (init.js locked the blastdoor)
+    this.marinesKnowRevive = false; // flips at the first witnessed revive (reviveWitnessed)
     this.outcome = null;
 
     this.stats = {
@@ -277,6 +278,19 @@ export class Sim {
     this._assignCallsign(a);
     this.agents.push(a);
     this.byId.set(a.id, a);
+  }
+
+  // Downed combat forms get back up (§7) — but the marines don't KNOW that
+  // until they see it happen (user: they learn the hard way). The first
+  // revive witnessed by a living marine flips ship-wide doctrine: from then
+  // on, squads put confirming rounds into the downed (combat.js).
+  reviveWitnessed(node) {
+    if (this.marinesKnowRevive) return;
+    const seen = this.agents.some((m) => !m.dead && m.hp > 0 && m.faction === FACTION.MARINE
+      && (m.node === node || (this.graph.adj.std[node] ?? []).some((e) => e.to === m.node)));
+    if (!seen) return;
+    this.marinesKnowRevive = true;
+    this.log('radio', 'the one we dropped just got back up — CONFIRM YOUR KILLS. make sure of the downed', node);
   }
 
   _assignCallsign(a) {

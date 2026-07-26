@@ -738,6 +738,7 @@ var ShipGraph = class {
             const p = parents[0] ?? spine[0];
             n.x = PADX + n.foreAft * LEN;
             if (p) {
+              n._parent = p;
               n.y = p.y + side * (p.d / 2 + n.d / 2);
               const lo = p.x - p.w / 2 + Math.min(n.w, p.w) / 2;
               const hi = p.x + p.w / 2 - Math.min(n.w, p.w) / 2;
@@ -750,6 +751,18 @@ var ShipGraph = class {
           for (let i = 1; i < row.length; i++) {
             const minX = row[i - 1].x + row[i - 1].w / 2 + row[i].w / 2;
             if (row[i].x < minX) row[i].x = minX;
+          }
+          for (let i = row.length - 1; i >= 0; i--) {
+            const n = row[i], p = n._parent;
+            if (!p) continue;
+            const ov = Math.min(2.5, n.w, p.w);
+            const maxX = p.x + p.w / 2 + n.w / 2 - ov;
+            if (n.x > maxX) n.x = maxX;
+            for (let j = i - 1; j >= 0; j--) {
+              const limit = row[j + 1].x - (row[j + 1].w + row[j].w) / 2;
+              if (row[j].x > limit) row[j].x = limit;
+              else break;
+            }
           }
         }
       }
@@ -978,8 +991,11 @@ var SHIP = {
     { id: "sensorPort", name: "Sensor Suite Port", deck: 1, foreAft: 0.44, type: "room", capacity: 5, w: 14, d: 10, row: 2, roles: ["systems"] },
     { id: "sensorStbd", name: "Sensor Suite Stbd", deck: 1, foreAft: 0.36, type: "room", capacity: 5, w: 14, d: 10, row: -2, roles: ["systems"] },
     // ================= DECK 2 · HABITATION (wide living deck) ===========
-    { id: "d2corrF", name: "Hab Corridor Fore", deck: 2, foreAft: 0.32, type: "corridor", capacity: 8, w: 40, d: 4, row: 0, roles: ["artery"] },
-    { id: "d2corrA", name: "Hab Corridor Aft", deck: 2, foreAft: 0.6, type: "corridor", capacity: 8, w: 44, d: 4, row: 0, roles: ["artery"] },
+    // corridor widths sized so every side room genuinely abuts its artery —
+    // the galley and brig previously fell past the corridor ends, leaving
+    // doorways the geometry could not actually open (sealed-room bug)
+    { id: "d2corrF", name: "Hab Corridor Fore", deck: 2, foreAft: 0.32, type: "corridor", capacity: 8, w: 52, d: 4, row: 0, roles: ["artery"] },
+    { id: "d2corrA", name: "Hab Corridor Aft", deck: 2, foreAft: 0.6, type: "corridor", capacity: 8, w: 56, d: 4, row: 0, roles: ["artery"] },
     { id: "crewA", name: "Crew Quarters A", deck: 2, foreAft: 0.28, type: "room", capacity: 14, w: 18, d: 12, row: 1, roles: ["quarters", "soft"] },
     { id: "mess", name: "Mess Hall", deck: 2, foreAft: 0.38, type: "open", capacity: 28, w: 20, d: 14, row: 1, roles: ["soft"] },
     { id: "galley", name: "Galley", deck: 2, foreAft: 0.46, type: "room", capacity: 8, w: 12, d: 9, row: 1, roles: ["soft"] },
@@ -989,7 +1005,7 @@ var SHIP = {
     { id: "chapel", name: "Chapel", deck: 2, foreAft: 0.68, type: "room", capacity: 6, w: 10, d: 9, row: 1, roles: ["soft"] },
     { id: "medbay", name: "Medbay", deck: 2, foreAft: 0.54, type: "room", capacity: 12, w: 16, d: 12, row: -1, roles: ["medbay", "helpless", "corpse_cache", "soft"] },
     { id: "cryo", name: "Cryo Bay", deck: 2, foreAft: 0.64, type: "room", capacity: 10, w: 16, d: 12, row: -1, roles: ["cryo", "corpse_cache"] },
-    { id: "brig", name: "Brig", deck: 2, foreAft: 0.72, type: "room", capacity: 4, w: 9, d: 7, row: -1, roles: ["brig", "helpless"] },
+    { id: "brig", name: "Brig", deck: 2, foreAft: 0.7, type: "room", capacity: 4, w: 9, d: 7, row: -1, roles: ["brig", "helpless"] },
     // wide berthing halls + support fill out the beam
     { id: "berthPort", name: "Port Berthing", deck: 2, foreAft: 0.36, type: "open", capacity: 24, w: 32, d: 15, row: 2, roles: ["quarters", "soft"] },
     { id: "berthStbd", name: "Starboard Berthing", deck: 2, foreAft: 0.34, type: "open", capacity: 24, w: 32, d: 15, row: -2, roles: ["quarters", "soft"] },
@@ -1127,7 +1143,9 @@ var SHIP = {
     { a: "maintF", b: "pumpRoom", type: "hatch", lockable: true },
     { a: "hangar", b: "hangarCtl", type: "hatch", lockable: true },
     { a: "hangar", b: "hangarA", type: "hatch", lockable: false },
-    { a: "hangarA", b: "hangarCtl", type: "hatch", lockable: true },
+    // (hangarA <-> hangarCtl removed: the rooms are 30m+ apart — the link
+    // produced a degenerate sealed tube. Control still opens onto Hangar
+    // Fore, which adjoins Hangar Aft.)
     { a: "hangar", b: "launchPort", type: "hatch", lockable: true },
     { a: "hangar", b: "launchStbd", type: "hatch", lockable: true },
     { a: "hangarA", b: "vehicle", type: "hatch", lockable: true },
@@ -3287,6 +3305,7 @@ function updateFloodTick(sim2, dt) {
         a.downed = false;
         a.reviveAt = -1;
         a.hp = a.maxHp * sim2.P.combatForm.reviveIntegrityFrac;
+        sim2.reviveWitnessed(a.node);
         a.state = STATE.IDLE;
         sim2.log("revive", `a downed combat form drags itself back up in ${sim2.graph.node(a.node).name}`);
       }
@@ -3540,6 +3559,7 @@ function updateFloodTick(sim2, dt) {
             target.downed = false;
             target.reviveAt = -1;
             target.hp = target.maxHp * sim2.P.combatForm.reanimateIntegrityFrac;
+            sim2.reviveWitnessed(target.node);
             sim2.removeAgent(a);
             sim2.log("reanimate", `the hive spends a form to reanimate a body in ${sim2.graph.node(target.node).name}`);
           }
@@ -3849,7 +3869,7 @@ function resolveCombat(sim2, dt) {
         }
         stomps -= 1;
       }
-    } else if (shooters.length && downedForms.length) {
+    } else if (sim2.marinesKnowRevive && shooters.length && downedForms.length) {
       const marines = shooters.filter((s) => s.faction === FACTION.MARINE);
       if (marines.length) {
         const t = downedForms.sort((a, b) => a.id - b.id)[0];
@@ -4298,6 +4318,7 @@ var Sim = class {
     this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison && !a.odst).length;
     this.armoryStock = this.P.armory.stock;
     this.armoryLocked = true;
+    this.marinesKnowRevive = false;
     this.outcome = null;
     this.stats = {
       conversions: 0,
@@ -4506,6 +4527,17 @@ var Sim = class {
     this._assignCallsign(a);
     this.agents.push(a);
     this.byId.set(a.id, a);
+  }
+  // Downed combat forms get back up (§7) — but the marines don't KNOW that
+  // until they see it happen (user: they learn the hard way). The first
+  // revive witnessed by a living marine flips ship-wide doctrine: from then
+  // on, squads put confirming rounds into the downed (combat.js).
+  reviveWitnessed(node) {
+    if (this.marinesKnowRevive) return;
+    const seen = this.agents.some((m) => !m.dead && m.hp > 0 && m.faction === FACTION.MARINE && (m.node === node || (this.graph.adj.std[node] ?? []).some((e) => e.to === m.node)));
+    if (!seen) return;
+    this.marinesKnowRevive = true;
+    this.log("radio", "the one we dropped just got back up — CONFIRM YOUR KILLS. make sure of the downed", node);
   }
   _assignCallsign(a) {
     if (a.callsign || a.isPlayer || a.faction === FACTION.INFECTION) return;

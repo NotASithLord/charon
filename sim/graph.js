@@ -185,6 +185,7 @@ export class ShipGraph {
             const p = parents[0] ?? spine[0];
             n.x = PADX + n.foreAft * LEN;
             if (p) {
+              n._parent = p; // squeeze-back below needs it
               n.y = p.y + side * (p.d / 2 + n.d / 2);
               // keep the shared wall real: center within the parent's span
               const lo = p.x - p.w / 2 + Math.min(n.w, p.w) / 2;
@@ -199,6 +200,23 @@ export class ShipGraph {
           for (let i = 1; i < row.length; i++) {
             const minX = row[i - 1].x + row[i - 1].w / 2 + row[i].w / 2;
             if (row[i].x < minX) row[i].x = minX;
+          }
+          // SQUEEZE-BACK (sealed-room fix — user: the galley/brig doors had
+          // no wall to open through): the rightward push above can shove the
+          // tail of a row past its parent corridor's end, leaving a door
+          // between rects that never touch. Walk back right-to-left pulling
+          // each room to keep >= 2.5m of shared span with its parent,
+          // shoving predecessors left as needed.
+          for (let i = row.length - 1; i >= 0; i--) {
+            const n = row[i], p = n._parent;
+            if (!p) continue;
+            const ov = Math.min(2.5, n.w, p.w);
+            const maxX = p.x + p.w / 2 + n.w / 2 - ov;
+            if (n.x > maxX) n.x = maxX;
+            for (let j = i - 1; j >= 0; j--) {
+              const limit = row[j + 1].x - (row[j + 1].w + row[j].w) / 2;
+              if (row[j].x > limit) row[j].x = limit; else break;
+            }
           }
         }
       }

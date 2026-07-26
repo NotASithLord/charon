@@ -12,7 +12,7 @@ import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
 import { MA5, FRAG } from './fps-data.js';
 import { GameAudio } from './audio.js';
-import { FireFX, SparkFX } from './fx.js';
+import { FireFX, SparkFX, BloodFX } from './fx.js';
 import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
@@ -27,7 +27,7 @@ const canvas = document.getElementById('c');
 // through the 5-pass HDR pipeline × every light × PCFSoft; at 1.25 + FXAA +
 // grain + bloom the difference on a laptop panel is imperceptible and the
 // fragment bill drops ~2.6x. `?hd=1` opts back into full resolution;
-// `?q=low` / `?q=full` pin the quality tier (see setQuality below).
+// `?q=low` / `?q=full` pin the quality ladder (see RUNGS below).
 const QP = new URLSearchParams(location.search);
 const HD = QP.has('hd');
 const QTIER = QP.get('q');
@@ -181,6 +181,7 @@ canvas.addEventListener('click', () => audio.ensure());
 // that hurt you are exactly the flames you see. The sim's flamethrower
 // burns still light up live below.
 const fire = new FireFX(scene, lightPool);
+const blood = new BloodFX(scene);
 for (let i = 0; i < sim.fires.length; i++) {
   const f = sim.fires[i];
   const [fx2, fz2] = world.simToWorld(f.x, f.y, f.deck);
@@ -252,7 +253,7 @@ const motes = (() => {
   scene.add(pts);
   return {
     pts, p, seeds, HALF, t: 0, count: N,
-    setLow(low) { this.count = low ? 12 : N; this.pts.count = this.count; },
+    setCount(n) { this.count = Math.min(N, n); this.pts.count = this.count; },
   };
 })();
 const _moteM4 = new THREE.Matrix4();
@@ -294,42 +295,56 @@ for (const set of [agents.civSet, agents.armedSet, agents.marineSet, agents.odst
 agents.carrier.castShadow = true;
 agents.rifle.castShadow = true;
 
-// QUALITY TIERS (user: anything low-hanging for weaker hardware?). 'full' is
-// everything the fidelity pass built. 'low' keeps the entire look — HDR,
-// bloom, ACES grade, light pool, materials, IBL — and sheds only the costs
-// integrated/mobile GPUs actually choke on:
-//   - the PCFSoft shadow pass (the single most expensive item on an iGPU),
-//   - 4 of the 10 pool lights (smaller light loop compiled into every shader),
-//   - half the bloom chain's resolution (input scale 0.5 -> 0.25),
-//   - a deeper dynamic-resolution floor (0.55 vs 0.85) with a 1.0 cap.
-// Engaged automatically at boot on known-weak GPUs / low-memory devices, or
-// live by the governor if full tier can't hold frame at its resolution
-// floor. ?q=low forces it, ?q=full pins full and disables the auto-demote.
-let quality = 'full';
-function setQuality(q, staged = false) {
-  if (q === quality) return;
-  quality = q;
-  const low = q === 'low';
-  renderer.shadowMap.enabled = !low;
-  torch.castShadow = !low;
-  if (!low) torch.shadow.needsUpdate = true;
-  // both the shadow flag and the light count sit in the node renderer's
-  // scene cache key — each flip rebuilds every pipeline. A staged (live,
-  // mid-game) switch spaces the two recompile waves ~2.5s apart so one
-  // frame never absorbs both; boot-time switches happen before the first
-  // frame and stay immediate.
-  const shrink = () => lightPool.setActive(low ? 6 : 10);
-  if (staged) setTimeout(shrink, 2500); else shrink();
-  post.lite = low;
-  motes.setLow(low);
-  console.info(`[charon] quality tier: ${q}`);
+// QUALITY LADDER (user: framerate on an M2 Air — accessibility is the
+// target). The old binary full/low tier is now a governed DEGRADATION
+// LADDER: each rung sheds one cost, ordered cheapest-look-loss first, and
+// the governor walks it per machine — resolution first inside a rung, then
+// down a rung when pinned at the floor and still slow, back up after a
+// long stable stretch. Every machine finds its own level; no guessing.
+//   0  full: PCFSoft 1024 shadows @30Hz, 10 lights, bloom 0.5, 36 motes
+//   1  tighter res window, shadow map 768
+//   2  shadow map 512, 8 lights, bloom 0.375        (one recompile)
+//   3  shadows OFF                                  (one recompile)
+//   4  6 lights, bloom 0.25, 12 motes, floor 0.55   (one recompile; = old low)
+// The recompile rungs are PREWARMED behind the intro (compileAsync), so
+// stepping down mid-fight costs a uniform change, not a shader storm.
+// ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
+const RUNGS = [
+  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 10, bloom: 0.5, motes: 36 },
+  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 10, bloom: 0.5, motes: 36 },
+  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 8, bloom: 0.375, motes: 24 },
+  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24 },
+  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12 },
+];
+// whole-frame pixel budget: huge windows can't buy retina supersampling on
+// an integrated GPU — the cap yields before the budget does (HD opts out)
+const PIXEL_BUDGET = 3.0e6;
+let rung = 0, rungPinned = false, _prewarming = false;
+function applyRung(i) {
+  const R = RUNGS[i];
+  rung = i;
+  renderer.shadowMap.enabled = R.shadows;
+  torch.castShadow = R.shadows;
+  if (R.shadows) {
+    if (torch.shadow.mapSize.x !== R.shadowMap) {
+      torch.shadow.mapSize.set(R.shadowMap, R.shadowMap);
+      torch.shadow.map?.dispose();
+      torch.shadow.map = null;
+    }
+    torch.shadow.needsUpdate = true;
+  }
+  lightPool.setActive(R.lights);
+  post.setBloomScale(R.bloom);
+  motes.setCount(R.motes);
 }
-window.__quality = setQuality;
-if (QTIER === 'low') setQuality('low');
-else if (QTIER !== 'full' && !HD) {
+window.__quality = (i) => { rungPinned = false; applyRung(Math.max(0, Math.min(RUNGS.length - 1, i))); };
+if (QTIER === 'low') { applyRung(RUNGS.length - 1); rungPinned = true; }
+else if (QTIER === 'full' || HD) { applyRung(0); rungPinned = true; }
+else {
   try {
     // WebGPU exposes GPUAdapterInfo; the WebGL2 fallback still has the
-    // debug-renderer string. Either way, known-weak silicon starts low.
+    // debug-renderer string. Known-weak silicon starts near the bottom
+    // (still free to climb if it proves fast).
     let gpu = '';
     if (renderer.backend.isWebGPUBackend) {
       // GPUDevice.adapterInfo — the backend stores the device, not the adapter
@@ -342,9 +357,25 @@ else if (QTIER !== 'full' && !HD) {
     }
     const weak = /Mali|Adreno|PowerVR|SwiftShader|llvmpipe|Intel\(R\)? (U?HD|Iris|GMA)|\bgen-9|software/i.test(gpu)
       || (navigator.deviceMemory !== undefined && navigator.deviceMemory <= 4);
-    if (weak) setQuality('low');
+    if (weak) applyRung(3);
   } catch { /* boot heuristic only — the governor still catches slow machines */ }
 }
+
+// PREWARM (perf): compile the recompile-heavy rung variants behind the
+// intro screen, so a mid-fight ladder step is a uniform change instead of
+// a shader storm. Best-effort — a failure just means the old hitch.
+(async () => {
+  if (rungPinned) return;
+  _prewarming = true;
+  const start = rung;
+  try {
+    for (const i of [2, 3, RUNGS.length - 1, start]) {
+      applyRung(i);
+      await renderer.compileAsync(scene, camera);
+    }
+  } catch { applyRung(start); }
+  _prewarming = false;
+})();
 
 // REAL FLICKER SPILL (user: flickering lighting for real in each room): the
 // ceiling strips' flicker used to be emissive-only — visible on the fixture,
@@ -715,7 +746,19 @@ function renderLog() {
   let added = false;
   const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   while (lastEvent < sim.events.length) {
-    const e = gameLogView(sim.events[lastEvent++]);
+    const raw = sim.events[lastEvent++];
+    // PHYSICAL side-effects of raw events, independent of radio receipt:
+    // blood marks where people are taken or fall, the 1MC PA for shipwide
+    // orders (the speakers are in every compartment — no radio needed)
+    if (raw.node >= 0 && (raw.type === 'convert' || (raw.type === 'combat' && raw.msg.startsWith('a marine falls')))) {
+      const nd = sim.graph.node(raw.node);
+      const [bx, bz] = world.simToWorld(nd.x, nd.y, nd.deck);
+      blood.add(bx, bz, elevOf(nd.deck), lastEvent * 7919);
+    }
+    if (raw.type === 'radio' && (raw.msg.startsWith('FALL BACK') || raw.msg.startsWith('ARMORY SEAL'))) {
+      audio.play('pa', null, 0.55, 'pa', 6000);
+    }
+    const e = gameLogView(raw);
     if (!e) continue;
     const div = document.createElement('div');
     div.className = `ev ev-${e.type}`;
@@ -723,6 +766,8 @@ function renderLog() {
     div.innerHTML = `<span class="t">${fmtTime(e.t)}</span> ${spk}${esc(e.msg)}`;
     log.appendChild(div);
     added = true;
+    // the crackle of a transmission landing (not for FLEETCOM framing text)
+    if (e.spk && e.spk !== 'FLEETCOM') audio.play('squelch', null, 0.22, 'squelch', 1400);
   }
   if (added) {
     while (log.childNodes.length > 400) log.removeChild(log.firstChild);
@@ -803,7 +848,7 @@ window.__perf = () => {
   });
   return {
     calls: renderer.info.render.drawCalls, tris: renderer.info.render.triangles,
-    meshes, lights, pr: renderer.getPixelRatio(), quality,
+    meshes, lights, pr: renderer.getPixelRatio(), rung,
     backend: renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2',
   };
 };
@@ -1300,7 +1345,7 @@ function playerObstacles() {
 }
 
 // --- main loop ---
-let _ftEMA = 16, _resAt = 0, frameNo = 0, _slowEvals = 0; // dynamic-resolution governor state
+let _ftEMA = 16, _resAt = 0, frameNo = 0, _slowEvals = 0, _fastEvals = 0, _rungMovedAt = 0; // ladder governor state
 let acc = 0;
 let physAcc = 0;
 let shownLost = false;
@@ -1368,6 +1413,7 @@ function frame(now) {
   if (mapOpen) marineMap.draw(player.agent, player.dead);
   audio.setListener(player.x, player.z, player.yaw);
   audio.alarm(sim.lastStand && !ended);
+  if (sim.lastStand && !window._paLastStand) { window._paLastStand = true; audio.play('pa', null, 0.6); }
   audio.startAmbience(); // no-op until the AudioContext exists (first click)
   audio.ambienceTick();
 
@@ -1569,16 +1615,18 @@ function frame(now) {
     }
   }
 
-  // DYNAMIC RESOLUTION (the console trick): frame-time EMA governs the
-  // pixel ratio between 0.85 and the cap — the game finds each machine's
-  // sweet spot on its own instead of shipping one guess. Re-evaluated every
-  // ~3s so RT reallocation never hitches moment-to-moment play.
+  // LADDER GOVERNOR: frame-time EMA drives resolution WITHIN the rung
+  // (cheap, every 3s), then walks the rung ladder — down when pinned at the
+  // floor and still slow, back up after a long provably-stable stretch.
+  // Re-evaluated every ~3s so RT reallocation never hitches play.
   _ftEMA = _ftEMA * 0.94 + Math.min(50, dtReal * 1000) * 0.06;
   if (now - _resAt > 3000) {
     _resAt = now;
+    const R = RUNGS[rung];
     const cur = renderer.getPixelRatio();
-    const floor = quality === 'low' ? 0.55 : 0.85;
-    const cap = Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1.0 : HD ? 2 : 1.25);
+    const floor = R.res[0];
+    const budgetCap = HD ? 9 : Math.sqrt(PIXEL_BUDGET / ((window.innerWidth * window.innerHeight) || 1));
+    const cap = Math.max(floor, Math.min(window.devicePixelRatio || 1, HD ? 2 : R.res[1], budgetCap));
     let next = cur;
     if (_ftEMA > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
     else if (_ftEMA < 13 && cur < cap) next = Math.min(cap, cur + 0.1);
@@ -1587,12 +1635,27 @@ function frame(now) {
       renderer.setSize(window.innerWidth, window.innerHeight, false);
       post.setSize(window.innerWidth, window.innerHeight);
     }
-    // ESCAPE HATCH: pinned at full tier's resolution floor and still under
-    // ~38fps for two straight evaluations means the machine is below the
-    // tier — drop to low live (unless ?q=full pinned it).
-    if (quality === 'full' && QTIER !== 'full' && !HD && _ftEMA > 26 && cur <= floor + 0.01) {
-      if (++_slowEvals >= 2) setQuality('low', true); // staged: spread the recompiles
-    } else _slowEvals = 0;
+    if (!rungPinned && !_prewarming) {
+      // descend: pinned at the floor and still under ~42fps, twice running
+      if (_ftEMA > 24 && cur <= floor + 0.01 && rung < RUNGS.length - 1) {
+        if (++_slowEvals >= 2) {
+          applyRung(rung + 1);
+          _slowEvals = 0;
+          _rungMovedAt = now;
+          console.info(`[charon] quality rung -> ${rung} (frame ${_ftEMA.toFixed(1)}ms)`);
+        }
+      } else _slowEvals = 0;
+      // ascend: locked-vsync smooth at full rung resolution for ~24s, and no
+      // recent descent — climb one rung and let it prove itself
+      if (_ftEMA < 17.0 && cur >= cap - 0.01 && rung > 0 && now - _rungMovedAt > 90000) {
+        if (++_fastEvals >= 8) {
+          applyRung(rung - 1);
+          _fastEvals = 0;
+          _rungMovedAt = now;
+          console.info(`[charon] quality rung -> ${rung} (headroom)`);
+        }
+      } else _fastEvals = 0;
+    }
   }
   if (renderer.shadowMap.enabled && (frameNo & 1) === 0) torch.shadow.needsUpdate = true; // 30Hz shadows
   frameNo++;

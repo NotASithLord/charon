@@ -194,9 +194,12 @@ export function resolveCombat(sim, dt) {
         if (sim.rng.chance(Math.min(1, stomps))) { sim.removeAgent(f); sim.stats.infectionFormsKilled++; }
         stomps -= 1;
       }
-    } else if (shooters.length && downedForms.length) {
+    } else if (sim.marinesKnowRevive && shooters.length && downedForms.length) {
       // no live threat: marines put confirming rounds into downed forms —
-      // this is what removes bodies from the hive's economy without fire
+      // this is what removes bodies from the hive's economy without fire.
+      // GATED (user): early on the marines don't know the downed get back
+      // up — nobody wastes ammo on a dead thing. The first witnessed revive
+      // (sim.reviveWitnessed) teaches the whole net the hard way.
       const marines = shooters.filter((s) => s.faction === FACTION.MARINE);
       if (marines.length) {
         const t = downedForms.sort((a, b) => a.id - b.id)[0];

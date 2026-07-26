@@ -17,6 +17,7 @@ export function updateFloodTick(sim, dt) {
       if (a.reviveAt >= 0 && sim.t >= a.reviveAt && a.damage < 100) {
         a.downed = false; a.reviveAt = -1;
         a.hp = a.maxHp * sim.P.combatForm.reviveIntegrityFrac;
+        sim.reviveWitnessed(a.node);
         a.state = STATE.IDLE;
         sim.log('revive', `a downed combat form drags itself back up in ${sim.graph.node(a.node).name}`);
       }
@@ -350,6 +351,7 @@ export function updateFloodTick(sim, dt) {
           if (a.taskProgress >= sim.P.combatForm.reanimateTimeSec) {
             target.downed = false; target.reviveAt = -1;
             target.hp = target.maxHp * sim.P.combatForm.reanimateIntegrityFrac;
+            sim.reviveWitnessed(target.node);
             sim.removeAgent(a); // costs 1 infection form (§7)
             sim.log('reanimate', `the hive spends a form to reanimate a body in ${sim.graph.node(target.node).name}`);
           }
