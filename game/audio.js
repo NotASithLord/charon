@@ -31,15 +31,23 @@ export class GameAudio extends PositionalSynth {
       const env = Math.exp(-t * 34);
       return rnd() * 1.2 * env + Math.sin(t * 2 * Math.PI * 70) * Math.exp(-t * 25) * 0.8;
     });
-    // scream: falling squeal
-    this.buffers.scream = mk(0.55, (t) => {
-      const f = 950 - t * 900;
-      return (Math.sin(t * 2 * Math.PI * f) * 0.5 + rnd() * 0.3) * Math.exp(-t * 5) * Math.min(1, t * 30);
+    // panic scream — a human voice, not a slide whistle (user: the old pure
+    // sine falling 950->50Hz read as a cartoon "boing" and ruined the vibe):
+    // harmonic stack with vibrato and a ragged noise breath, pitch holding
+    // high then breaking down only slightly
+    this.buffers.scream = mk(0.6, (t) => {
+      const f = 760 - t * 260 + Math.sin(t * 2 * Math.PI * 7.3) * 38; // vibrato, shallow fall
+      const ph = t * 2 * Math.PI * f;
+      const voice = Math.sin(ph) * 0.42 + Math.sin(ph * 2.01) * 0.22 + Math.sin(ph * 3.02) * 0.1;
+      const rasp = rnd() * 0.3 * (Math.sin(t * 2 * Math.PI * 31) > -0.4 ? 1 : 0.4); // torn edge
+      const env = Math.min(1, t * 22) * Math.exp(-Math.max(0, t - 0.32) * 7);
+      return (voice + rasp) * env * 0.9;
     });
-    // infection chitter: click train
-    this.buffers.chitter = mk(0.35, (t) => {
-      const g = Math.sin(t * 2 * Math.PI * 16) > 0.6 ? 1 : 0;
-      return rnd() * g * Math.exp(-((t * 16) % 1) * 9) * 0.8;
+    // infection chitter: dry skitter — quieter, faster-decaying clicks so it
+    // reads as chitin on deck plate, not a bouncing ball
+    this.buffers.chitter = mk(0.3, (t) => {
+      const c = (t * 19) % 1; // click phase: sharp attack, fast dry decay
+      return rnd() * (c < 0.12 ? 1 : 0) * Math.exp(-c * 40) * 0.6;
     });
     // melee thud
     this.buffers.thud = mk(0.25, (t) =>

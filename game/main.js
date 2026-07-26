@@ -1600,7 +1600,8 @@ function soundSweep(now) {
     const nd = g.node(n);
     const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
     if (nd.deck === player.deck) {
-      audio.play('scream', { x: wx, z: wz }, 0.7, `scr${n}`, 700);
+      // 2.8s per room (was 700ms — a metronome of screams during any panic)
+      audio.play('scream', { x: wx, z: wz }, 0.65, `scr${n}`, 2800);
     } else if (Math.abs(nd.deck - player.deck) === 1) {
       // someone dying one deck away — a faint cry through the plating
       audio.playFar('deathScream', { x: wx, z: wz }, 1, 0.5, `fscr${n}`, 4000);
@@ -1614,7 +1615,7 @@ function soundSweep(now) {
     if (a.move?.hidden) continue; // in the ducts — heard via duct log, not here
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
     const d = Math.hypot(wx - player.x, wz - player.z);
-    if (a.faction === 3 && d < 18 && now - chitterAt > 900) { audio.play('chitter', { x: wx, z: wz }, 0.8); chitterAt = now; }
+    if (a.faction === 3 && d < 18 && now - chitterAt > 1600 + Math.random() * 1200) { audio.play('chitter', { x: wx, z: wz }, 0.55); chitterAt = now; }
     if (a.faction === 4) {
       if (!nearCombat || d < nearCombat.d) nearCombat = { wx, wz, d };
       if (a.charging && d < 26 && (!charging || d < charging.d)) charging = { wx, wz, d };
