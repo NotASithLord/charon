@@ -309,11 +309,10 @@ export const PARAMS = {
     blastFalloff: 0.55, blastRadiusPad: 1.5, blastTtl: 0.5,
     // limbs (the floppy flail about the JMS joint pivots)
     limbGrav: 9, limbBind: 2.5, limbDamp: 3.0, limbLimit: 1.4, limbKick: 7.0,
-    // internal fixed step. 1/60 (swarm finding): the solver is unconditionally
-    // stable by construction (position projection + exponential damping + hard
-    // velocity clamps), and a death flop has no features that need 120Hz
-    // sampling — half the substeps, same look.
-    subDt: 0.016666667, maxSubSteps: 4, dtCap: 0.05,
+    // internal fixed step: 1/120, the tuned reference (a 1/60 experiment
+    // halved the cost but coincided with folded-looking settles in play —
+    // user report — so the flop keeps its authored integration rate)
+    subDt: 0.008333333, maxSubSteps: 8, dtCap: 0.05,
   },
 };
 

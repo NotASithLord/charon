@@ -877,26 +877,42 @@ export class Agents3D {
       const elev = this.world.groundHeightAt(deck, wx, wz);
       const hoverY = rp.hoverY || 0; // a form that died mid-leap starts in the air
       const impulse = this._deathImpulse(id, f, flags, wx, wz, deck, heading);
-      // the ceiling sampler is called for BOTH capsule ends every 1/120s
-      // substep, and ceilHeightAt is a linear all-rooms scan (swarm finding)
-      // — the value only changes when the body crosses a room boundary, so
-      // cache it and re-resolve after >0.5m of lateral travel
-      let ccx = wx, ccz = wz;
-      let ccy = elevOf(deck) + this.world.ceilHeightAt(deck, wx, wz) - 0.15;
+      // the ceiling sampler is called for BOTH capsule ends every substep,
+      // and ceilHeightAt is a linear all-rooms scan (swarm finding) — the
+      // value only changes when the body crosses a room boundary. Two cache
+      // slots (the ends are ~1m apart, so one slot would ping-pong and
+      // re-resolve every call), re-resolved after >0.5m of lateral travel.
+      const cc = [{ x: 1e9, z: 1e9, y: 0 }, { x: 1e9, z: 1e9, y: 0 }];
       rag = sys.spawn(id,
         { x: wx, y: elev + hoverY, z: wz, heading, deck },
         impulse,
         (x, z) => this.world.groundHeightAt(deck, x, z),
         (x, z) => {
-          const dx = x - ccx, dz = z - ccz;
-          if (dx * dx + dz * dz > 0.25) {
-            ccx = x; ccz = z;
-            ccy = elevOf(deck) + this.world.ceilHeightAt(deck, x, z) - 0.15;
-          }
-          return ccy;
+          const da = (x - cc[0].x) ** 2 + (z - cc[0].z) ** 2;
+          const db = (x - cc[1].x) ** 2 + (z - cc[1].z) ** 2;
+          if (Math.min(da, db) <= 0.25) return (da <= db ? cc[0] : cc[1]).y;
+          const s = da <= db ? cc[1] : cc[0]; // miss: evict the farther slot
+          s.x = x; s.z = z;
+          s.y = elevOf(deck) + this.world.ceilHeightAt(deck, x, z) - 0.15;
+          return s.y;
         });
       if (!rag) return false; // disabled at the system level
       this._ragSeen.add(id);
+    }
+
+    // NON-FINITE GUARD: a single NaN instance matrix can corrupt an entire
+    // instanced draw on tile-based GPUs (Apple M-series) — every body sharing
+    // the mesh vanishes, not just the bad one. If a flop ever goes non-finite,
+    // drop the ragdoll and hand the body to the legacy flat render.
+    let finite = Number.isFinite(rag.rootPos[0] + rag.rootPos[1] + rag.rootPos[2] + rag.rootQuat[3]);
+    if (finite) for (const part in rag.limbs) {
+      const q = rag.limbs[part];
+      if (!Number.isFinite(q[0] + q[1] + q[2] + q[3])) { finite = false; break; }
+    }
+    if (!finite) {
+      sys.remove(id);
+      this._ragRest.delete(id);
+      return false;
     }
 
     // record where the body currently rests, so any later handoff to the legacy
