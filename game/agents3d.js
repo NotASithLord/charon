@@ -4,6 +4,7 @@
 // are all driven by sim flags, per the fidelity contract (ROADMAP-3D §4).
 
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
+import * as TSL from '../engine/vendor/three.tsl.module.js';
 import { FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
 import { carryGeometry } from './rifle-model.js';
@@ -146,32 +147,34 @@ export class Agents3D {
     // cone, +X-forward like the carry rifle, one instance per light-bearer
     // standing in a dark room.
     {
-      const beamGeo = new THREE.ConeGeometry(0.55, 7, 12, 6, true);
+      const beamGeo = new THREE.ConeGeometry(0.8, 6, 20, 1, true);
       beamGeo.rotateZ(Math.PI / 2);      // point the cone along +X
-      beamGeo.translate(3.5, 0, 0);      // apex at the carrier's hands
-      // NOT a dumb hard cone (user): a gradient sleeve — hot near the torch,
-      // dissolving with distance and toward the rim, with streaky dust so the
-      // volume reads as light in air rather than solid glowing plastic.
-      const bc = document.createElement('canvas');
-      bc.width = 128; bc.height = 128;
-      const bx = bc.getContext('2d');
-      const grad = bx.createLinearGradient(0, 128, 0, 0); // v=1 (apex) -> v=0 (mouth)
-      grad.addColorStop(0, 'rgba(255,255,255,0)');
-      grad.addColorStop(0.45, 'rgba(255,255,255,0.35)');
-      grad.addColorStop(1, 'rgba(255,255,255,0.9)');
-      bx.fillStyle = grad;
-      bx.fillRect(0, 0, 128, 128);
-      for (let i = 0; i < 26; i++) { // faint dust streaks along the throw
-        bx.fillStyle = `rgba(255,255,255,${0.04 + Math.random() * 0.08})`;
-        bx.fillRect(Math.random() * 128, 0, 1 + Math.random() * 2, 128);
-      }
-      const beamTex = new THREE.CanvasTexture(bc);
-      beamTex.wrapS = THREE.RepeatWrapping;
-      const beamMat = new THREE.MeshBasicMaterial({
-        color: 0xd8e8ff, transparent: true, opacity: 0.16, map: beamTex,
-        alphaMap: beamTex,
-        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      beamGeo.translate(3.0, 0, 0);      // apex at the carrier's hands
+      // A LIGHT SHAFT, NOT A PIPE (user screenshot: an opaque white cylinder
+      // sticking out of a marine's chest). The old material shaded the cone's
+      // lateral surface with an axial gradient only, so the surface itself was
+      // what you saw — hard silhouette, uniform density, solid-looking.
+      //
+      // The fix is view-dependent: fade by how face-on the surface is. Where
+      // you look straight AT the cone wall the view ray passes through the
+      // most air, so it is brightest; at the silhouette the wall is edge-on
+      // and goes to zero, which is what kills the hard outline. DoubleSide
+      // then makes the near and far walls both contribute, so the middle of
+      // the shaft naturally reads denser than its edges — a cheap volumetric
+      // that costs one instanced draw.
+      const beamMat = new THREE.MeshBasicNodeMaterial({
+        transparent: true, blending: THREE.AdditiveBlending,
+        depthWrite: false, side: THREE.DoubleSide, fog: false,
       });
+      beamMat.colorNode = TSL.vec3(0.66, 0.78, 1.0);
+      beamMat.opacityNode = TSL.Fn(() => {
+        const v = TSL.uv().y;                       // 1 at the apex (hands), 0 at the far mouth
+        // hot at the lens, gone by the throw's end, with a touch off the very
+        // apex so it doesn't start on a hard disc
+        const axial = TSL.smoothstep(0.0, 0.55, v).mul(TSL.oneMinus(TSL.smoothstep(0.95, 1.0, v)));
+        const facing = TSL.abs(TSL.dot(TSL.normalize(TSL.normalView), TSL.positionViewDirection));
+        return axial.mul(TSL.pow(facing, 1.7)).mul(0.42);
+      })();
       this.beams = new THREE.InstancedMesh(beamGeo, beamMat, CAP);
       this.beams.count = 0;
       this.beams.frustumCulled = false;
@@ -701,7 +704,7 @@ export class Agents3D {
           this._rifleAt(wx, elev + 1.15, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
-            this._rifleAt(wx, elev + 1.2, wz, heading);
+            this._beamAt(wx, elev + 1.42, wz, heading);
             this.beams.setMatrixAt(counts.beam++, this._m);
             this._addRifleLight(wx, elev, wz, heading);
           }
@@ -714,7 +717,7 @@ export class Agents3D {
           this._rifleAt(wx, elev + 1.25, wz, heading);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
-            this._rifleAt(wx, elev + 1.3, wz, heading);
+            this._beamAt(wx, elev + 1.48, wz, heading);
             this.beams.setMatrixAt(counts.beam++, this._m);
             this._addRifleLight(wx, elev, wz, heading);
           }
@@ -995,6 +998,16 @@ export class Agents3D {
     this._e.set(rx, rotY, 0);
     this._q.setFromEuler(this._e);
     this._m.compose(this._p.set(x, y, z), this._q, this._s.set(sx, sy, sz));
+  }
+
+  // The torch points WHERE HE IS LOOKING. Riding _rifleAt put the cone on the
+  // low-ready rifle, which is held across the chest — so the beam came out of
+  // the marine's sternum and threw off to one side (user screenshot).
+  _beamAt(x, y, z, rotY) {
+    const fx = Math.cos(rotY), fz = -Math.sin(rotY);
+    this._e.set(0, rotY, 0);
+    this._q.setFromEuler(this._e);
+    this._m.compose(this._p.set(x + fx * 0.35, y, z + fz * 0.35), this._q, this._s.set(1, 1, 1));
   }
 
   _rifleAt(x, y, z, rotY) {

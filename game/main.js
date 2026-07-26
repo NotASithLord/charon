@@ -203,6 +203,45 @@ function toggleMap(open = !mapOpen) {
 const audio = new GameAudio();
 canvas.addEventListener('click', () => audio.ensure());
 
+// SOUND BOARD (user: "the sounds are so goofy, create a menu item where i can
+// play each sound one at a time and i can tell you which im talking about").
+// K opens it. It enumerates audio.buffers at runtime rather than a hand-kept
+// list, so it can never drift out of date as the bank changes — every voice
+// the game can make is in here, named exactly as game/audio.js names it, and
+// played non-positionally at full gain with the rate limiter bypassed.
+let soundBoard = null;
+function toggleSoundBoard() {
+  if (soundBoard) { soundBoard.remove(); soundBoard = null; return; }
+  audio.ensure();
+  document.exitPointerLock?.();
+  const names = Object.keys(audio.buffers).sort();
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:60;'
+    + 'width:min(560px,92vw);max-height:82vh;overflow:auto;background:rgba(6,10,16,0.96);'
+    + 'border:1px solid #2a3a4e;padding:14px 16px;font:12px/1.6 ui-monospace,Menlo,monospace;'
+    + 'color:#bfd4f2;box-shadow:0 8px 40px rgba(0,0,0,0.7)';
+  const head = document.createElement('div');
+  head.style.cssText = 'color:#7fe3ff;letter-spacing:0.14em;margin-bottom:10px';
+  head.textContent = `SOUND BOARD — ${names.length} VOICES · K TO CLOSE`;
+  d.appendChild(head);
+  for (const n of names) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:3px 0;border-bottom:1px solid #16202c';
+    const label = document.createElement('span');
+    label.style.cssText = 'flex:1;color:#dce6ff';
+    label.textContent = n;
+    const btn = document.createElement('button');
+    btn.textContent = 'play';
+    btn.style.cssText = 'background:#16283a;color:#9fd8ff;border:1px solid #2f4a63;'
+      + 'padding:2px 14px;font:11px ui-monospace,monospace;cursor:pointer';
+    btn.onclick = () => audio.play(n, null, 1);
+    row.append(label, btn);
+    d.appendChild(row);
+  }
+  soundBoard = d;
+  document.body.appendChild(d);
+}
+
 // FIRE (user rule): fires are SIM objects now — the breach blaze plus the
 // ship's broken (jammed) doors, all seeded in the sim itself so the flames
 // that hurt you are exactly the flames you see. The sim's flamethrower
@@ -1280,6 +1319,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') meleePressed = true;
   if (e.code === 'KeyG') fragPressed = true;
   if (e.code === 'KeyM') toggleMap();
+  if (e.code === 'KeyK') toggleSoundBoard();
   // AMMO ECONOMY (user): T hands a mag from your reserve to the neediest
   // fireteam marine in reach — they burn real magazines now (combat.js)
   if (e.code === 'KeyT' && !player.dead && weapon.reserve >= 32) {
