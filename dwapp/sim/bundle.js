@@ -1432,6 +1432,7 @@ function makeAgent(kind, node, graph) {
     leapDist0: 0,
     leapTX: 0,
     leapTY: 0,
+    leapHeading: 0,
     // Flood leap arc (sim.js _spatialSteer)
     chargeTargetId: -1,
     // sticky spatial-charge target for LOS pursuit (sim.js)
@@ -5729,7 +5730,7 @@ var Sim = class {
       a.chargeTargetId = best.id;
       stopAt = P.combat.meleeRangeM * 0.6;
       a.charging = bestD > P.combat.meleeRangeM;
-      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1) * (a.leaping ? 1.2 : 1);
+      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1) * (a.leaping ? 1.56 : 1);
       a.state = STATE.FIGHT;
     } else if (a.faction === FACTION.INFECTION) {
       if (a.task?.kind !== TASK.GRAB || a.hp <= 0) return false;
@@ -5757,6 +5758,7 @@ var Sim = class {
       a.leapDist0 = gap;
       a.leapTX = target.x;
       a.leapTY = target.y;
+      a.leapHeading = Math.atan2(target.y - a.y, target.x - a.x);
     } else if (a.leaping && !canLeap) {
       a.leaping = false;
       a.leapDist0 = 0;
@@ -5766,7 +5768,7 @@ var Sim = class {
     const hold = a.leaping ? 0 : stopAt;
     const dx = aimX - a.x, dy = aimY - a.y;
     const dist = Math.hypot(dx, dy);
-    a.heading = Math.atan2(dy, dx);
+    a.heading = a.leaping ? a.leapHeading : Math.atan2(dy, dx);
     if (dist > hold) {
       const step = Math.min(dist - hold, mps * dt);
       a.x += dx / dist * step;
@@ -5857,8 +5859,8 @@ var Sim = class {
               dx = 0;
             }
           }
-          const aMoves = !a.isPlayer && a.held !== this.tickCount;
-          const bMoves = !b.isPlayer && b.held !== this.tickCount;
+          const aMoves = !a.isPlayer && a.held !== this.tickCount && !a.leaping;
+          const bMoves = !b.isPlayer && b.held !== this.tickCount && !b.leaping;
           if (!aMoves && !bMoves) continue;
           const push = (need - dist) * relax * (aMoves && bMoves ? 0.5 : 1);
           if (aMoves) {
@@ -6163,6 +6165,7 @@ var Sim = class {
       for (const a of this.agents) {
         if (a.dead || a.isPlayer || a.deck !== f.deck || a.faction === FACTION.CORPSE) continue;
         if (a.held === this.tickCount) continue;
+        if (a.leaping) continue;
         const dx = a.x - f.x, dy = a.y - f.y;
         const d2 = dx * dx + dy * dy;
         if (d2 > R * R || d2 < 1e-6) continue;

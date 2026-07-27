@@ -1866,6 +1866,55 @@ function playerObstacles() {
   return _obstacleRecs;
 }
 
+// MARINE BARKS (user: "weave in very very very sporadically and rarely to
+// earn them and not be repetitive, once per game each at most, needs to come
+// from a specific marine. if they die its interrupted").
+//
+// Four real voice lines, each spent ONCE per run and never repeated. They are
+// earned rather than scheduled: a line only fires in the lull AFTER a fight —
+// a living marine near you, nothing hostile left in his room, but gunfire in
+// that room within the last half minute. On top of that a long enforced gap
+// and a coin flip, so two runs never hear them at the same beats.
+//
+// The line belongs to that marine: it plays from his position, and if he is
+// killed part-way through it is cut off mid-word.
+const BARK_KEYS = ['bark1', 'bark2', 'bark3', 'bark4'];
+const barkState = { unspent: BARK_KEYS.slice(), active: null, lastAt: -1e9, checkAt: 0 };
+function updateBarks(now) {
+  // interrupt: the man saying it just died
+  const a = barkState.active;
+  if (a) {
+    const sp = sim.byId.get(a.id);
+    if (!sp || sp.dead || sp.hp <= 0) {
+      try { a.src.stop(); } catch { /* already ended */ }
+      barkState.active = null;
+    } else if (now >= a.endsAt) barkState.active = null;
+  }
+  if (now < barkState.checkAt) return;
+  barkState.checkAt = now + 3000;
+  if (barkState.active || !barkState.unspent.length) return;
+  if (sim.t < 90 || now - barkState.lastAt < 240000) return;  // earn the first, and space the rest
+  if (Math.random() > 0.35) return;
+  // a living marine near you, in a room that is quiet NOW but was loud recently
+  const quietSince = sim.tickCount - 30 * sim.P.sim.tickHz;
+  let pick = null, bestD = 18 * 18;
+  for (const m of sim.agents) {
+    if (m.dead || m.hp <= 0 || m.faction !== 2 || m.deck !== player.deck) continue;
+    if ((sim.gunfireTick[m.node] ?? -1e9) < quietSince) continue;   // no fight here lately
+    if (sim.floodStrengthAt(m.node) > 0) continue;                  // still hot — not a lull
+    const [mx, mz] = world.simToWorld(m.x, m.y, m.deck);
+    const d2 = (mx - player.x) ** 2 + (mz - player.z) ** 2;
+    if (d2 < bestD) { bestD = d2; pick = { m, x: mx, z: mz }; }
+  }
+  if (!pick) return;
+  const key = barkState.unspent.splice((Math.random() * barkState.unspent.length) | 0, 1)[0];
+  const buf = audio.buffers[key];
+  const src = audio.play(key, { x: pick.x, z: pick.z }, 0.95);
+  if (!src) { barkState.unspent.push(key); return; }              // out of earshot / not loaded
+  barkState.lastAt = now;
+  barkState.active = { src, id: pick.m.id, endsAt: now + (buf ? buf.duration * 1000 : 3000) };
+}
+
 // --- main loop ---
 let frameNo = 0;
 let physAcc = 0;
@@ -2035,6 +2084,7 @@ function frame(now) {
   // ±1 and fore/aft thirds beyond full fog are hidden — both pixel-exact
   world.setActiveVolume(player.deck, player.x);
   world.showRoomSign(player.deck, player.x, player.z);
+  updateBarks(now);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);

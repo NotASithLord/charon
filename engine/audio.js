@@ -84,6 +84,7 @@ export class PositionalSynth {
     if (p) { p.pan.value = pan; src.connect(g).connect(p).connect(this.master); }
     else src.connect(g).connect(this.master);
     src.start();
+    return src; // callers that need to cut a one-shot short (a speaker dying mid-line)
   }
 
   // Far one-shot heard THROUGH the structure: bearing-panned like play(),

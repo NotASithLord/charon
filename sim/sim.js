@@ -1324,9 +1324,10 @@ export class Sim {
       a.chargeTargetId = best.id;
       stopAt = P.combat.meleeRangeM * 0.6;
       a.charging = bestD > P.combat.meleeRangeM; // the whole approach is a sprint (lore)
-      // a leap crosses ~20% faster than a flat charge (user tuning) — a.leaping
+      // a leap crosses ~56% faster than a flat charge — the arc was +20% and
+      // the user asked for another 30% on top: a committed pounce, not a glide
       // persists from the prior tick's arc block
-      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1) * (a.leaping ? 1.2 : 1);
+      mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1) * (a.leaping ? 1.56 : 1);
       a.state = STATE.FIGHT;
     } else if (a.faction === FACTION.INFECTION) {
       if (a.task?.kind !== TASK.GRAB || a.hp <= 0) return false;
@@ -1356,6 +1357,12 @@ export class Sim {
     if (canLeap && !a.leaping && gap > LEAP_MIN) {
       a.leaping = true; a.leapDist0 = gap;
       a.leapTX = target.x; a.leapTY = target.y; // committed landing spot at launch
+      // COMMITTED POUNCE (user: "their body direction and location are both
+      // locked until they land"). The landing spot was already committed, but
+      // the heading was recomputed from the CURRENT position every tick, so a
+      // form nudged sideways in the air kept swivelling to face its target —
+      // it read as steering mid-flight. Freeze the facing at the launch too.
+      a.leapHeading = Math.atan2(target.y - a.y, target.x - a.x);
     } else if (a.leaping && !canLeap) {
       a.leaping = false; a.leapDist0 = 0;
     }
@@ -1366,7 +1373,7 @@ export class Sim {
     const hold = a.leaping ? 0 : stopAt;
     const dx = aimX - a.x, dy = aimY - a.y;
     const dist = Math.hypot(dx, dy);
-    a.heading = Math.atan2(dy, dx);
+    a.heading = a.leaping ? a.leapHeading : Math.atan2(dy, dx);
     if (dist > hold) {
       const step = Math.min(dist - hold, mps * dt);
       a.x += (dx / dist) * step;
@@ -1454,8 +1461,10 @@ export class Sim {
             if (along === 0 && Math.abs(dx) < 0.5) { dx = dx < 0 ? -1 : 1; dy = 0; }
             else if (along === 1 && Math.abs(dy) < 0.5) { dy = dy < 0 ? -1 : 1; dx = 0; }
           }
-          const aMoves = !a.isPlayer && a.held !== this.tickCount;
-          const bMoves = !b.isPlayer && b.held !== this.tickCount;
+          // an airborne body is ballistic — crowd pressure must not shove it
+          // off its committed line (user: locked location until it lands)
+          const aMoves = !a.isPlayer && a.held !== this.tickCount && !a.leaping;
+          const bMoves = !b.isPlayer && b.held !== this.tickCount && !b.leaping;
           if (!aMoves && !bMoves) continue;
           const push = (need - dist) * relax * (aMoves && bMoves ? 0.5 : 1);
           if (aMoves) { a.x -= dx * push; a.y -= dy * push; this._clampToRoom(a, room); }
@@ -1771,6 +1780,7 @@ export class Sim {
       for (const a of this.agents) {
         if (a.dead || a.isPlayer || a.deck !== f.deck || a.faction === FACTION.CORPSE) continue;
         if (a.held === this.tickCount) continue; // a frantic host isn't steering anything
+        if (a.leaping) continue;                 // mid-pounce: committed, no steering
         const dx = a.x - f.x, dy = a.y - f.y;
         const d2 = dx * dx + dy * dy;
         if (d2 > R * R || d2 < 1e-6) continue;

@@ -17,6 +17,9 @@ const SAMPLES = {
   deathScream: ['deathScream.wav'],
   growl: ['growl.wav', 'growl2.wav'],            // combat form moving
   shriek: ['shriek.wav', 'shriek2.wav'],         // infection form
+  // MARINE BARKS: real voice lines, one take each. Deliberately NOT variants —
+  // each is spent once per run (see the bark director in main.js).
+  bark1: ['bark1.wav'], bark2: ['bark2.wav'], bark3: ['bark3.wav'], bark4: ['bark4.wav'],
 };
 // KILLED OUTRIGHT by the audit, with no real sample to stand in yet. Dropping
 // the buffer is the whole fix — play() no-ops on an unknown name — so every
