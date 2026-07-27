@@ -47,8 +47,18 @@ export const CARRY = {
   // is a real barrel angle the beam and the weapon light both follow, so a man
   // walking a dark corridor throws his torch onto the plating ahead of him.
   pitch: -0.05,
+  // WHERE EACH HAND GRABS, in the WEAPON's own frame: `grip`/`guard` run down
+  // the barrel, `*Down` hangs below the bore and `*Side` comes out of its
+  // flank. The two perpendicular terms are what stop the arms merging (see
+  // AIM): along the barrel alone the two hands have nowhere to go.
   grip: -0.02,       // firing hand, measured along the rifle's own axis
   guard: 0.24,       // support hand, up on the handguard
+  gripDown: 0, gripSide: 0, guardDown: 0, guardSide: 0,
+  // how far INSIDE its own reach each hand is asked to close, when the station
+  // it was given is further out than the arm can go (see solveCarry). Keeping
+  // it non-zero is what keeps the residual negative — the hand shuts past the
+  // weapon rather than hanging short of it, which is the one that shows.
+  bite: 0.012,
   // SIGHTED (user: "obviously need marines leaning in and sighting their
   // guns"). See AIM below for why this is a straight-armed presentation and
   // not a shouldered one — the rig gives no other option.
@@ -59,7 +69,16 @@ export const CARRY = {
   // body is a carry angle, and a man shooting at something points the weapon
   // AT it. pitch 0.19 cancels the 0.24 lean, leaving the barrel 3 degrees down
   // in world — level enough to be aimed, low enough for the beam to land.
-  fire: { drop: 0.88, fwd: 0.61, right: 0.10, yaw: 0.0, pitch: 0.19, grip: -0.03, guard: 0.14 },
+  // The two hands take OPPOSITE CORNERS of the receiver — firing hand under it
+  // and out to the strong side, support hand over it and across — because
+  // along the barrel they have nowhere to go (see AIM). Both stations sit
+  // 12 mm inside where that arm exactly reaches, so both residuals land at
+  // −0.011: each hand closes PAST its hold, never short of it.
+  fire: {
+    drop: 0.88, fwd: 0.61, right: 0.10, yaw: 0.0, pitch: 0.19,
+    grip: 0.126, gripDown: 0.05, gripSide: 0.06,
+    guard: 0.132, guardDown: -0.03, guardSide: -0.06,
+  },
 };
 
 // AIMING, AND WHY IT LOOKS LIKE THIS.
@@ -80,8 +99,28 @@ export const CARRY = {
 // height with the barrel level and down the man's own bearing, which is what
 // every jointless-limb shooter has ever done. Committing to it fully is what
 // makes it read — half-measures land back on the hip carry, which is the
-// complaint. The hands then sit close together along the barrel (0.14 apart
-// instead of 0.26) so neither arm has to overshoot far to reach its point.
+// complaint.
+//
+// TWO ARMS, NOT ONE MASS (user, on the last pass: "the two arms visually merge
+// into one mass while aiming"). They did, and moving the hands apart ALONG the
+// barrel cannot fix it. A hand is always exactly 0.743 m from its shoulder, so
+// the only stations where it is truly ON a straight barrel are where that
+// sphere cuts the barrel line:
+//     t = (shoulder − origin)·axis + sqrt(armLen² − h²),   h = shoulder→line
+// Run it for both shoulders at this placement and they come out at 0.146 and
+// 0.137 — the entire axial spread available is NINE MILLIMETRES, and pushing
+// either hand past its own root only floats it off the weapon. The bracket
+// only opens up as h approaches armLen, i.e. with the arm stretched square to
+// the barrel, which is the weapon-out-to-the-side family this pose exists to
+// avoid: even at 0.6 m off the hip it is worth 9 cm. (The low-ready carry gets
+// its hand spread for free precisely because its barrel hangs 0.59 m below the
+// shoulders, so h IS large down there.)
+//
+// So the second solve target is PERPENDICULAR instead. The firing hand takes
+// the underside of the receiver on the strong side, the support hand comes
+// over the top from the far side, and the 0.15 m between them is bought out of
+// the weapon's own cross-section rather than its length. Both hands still sit
+// within ~2 cm of the mesh and both residuals stay negative — nothing floats.
 //
 // The rest is body language, and it is doing most of the work:
 //   lean   the whole body pitches onto the weapon (about the feet, so the
@@ -97,6 +136,19 @@ export const AIM = {
   head: 0.28,        // chin down behind the weapon
   stance: 0.32,      // rear/front leg split
   rate: 6.5,         // eased in and out at this rate (≈0.2 s to commit)
+  // A HELD SIGHT PICTURE IS NOT A STATUE (user: "the aiming legs are
+  // completely static"). Two slow, unrelated oscillations off the id hash:
+  // `sway` rocks the whole man fore/aft over his feet, `swayRoll` rolls his
+  // weight from one boot to the other. Both are hip angles, so both would
+  // SLIDE the feet — the rock is cancelled by translating the body the exact
+  // distance its feet would have travelled (_aimShift), and the roll's is a
+  // 3 cm scuff spread over 13 s, which is what a man settling his weight
+  // actually does. Height is _aimDip's job, and it now takes the real leg
+  // angles instead of assuming a fixed split, so no phase of this lifts a
+  // boot off the plating or drives one into it.
+  sway: 0.05,        // fore/aft rock at the hip
+  swayRoll: 0.035,   // weight rolling between the feet
+  swayRate: 0.75,    // rad/s — an 8 s rock under a 13 s roll
 };
 const RIFLE_TIP = 0.515;   // muzzle along the rifle's own +X (RIFLE_MUZZLE.z)
 const AXIS_Z = new THREE.Vector3(0, 0, 1);   // model-frame fore/aft swing axis
@@ -104,6 +156,8 @@ const AXIS_Z = new THREE.Vector3(0, 0, 1);   // model-frame fore/aft swing axis
 // per-body constant in [0,1) — stance, stride length and step phase all vary
 // off it so a crowd never marches in lockstep
 const bodyRnd = (id) => ((Math.imul(id, 1597334677) ^ 0x5f3a1c) >>> 0) / 4294967296;
+// which foot this body blades forward when it sights (see AIM.stance)
+const leadFoot = (id) => (bodyRnd(id) < 0.5 ? 1 : -1);
 // One full cycle = two steps. The rate is chosen so the FEET COVER GROUND at
 // the speed the body actually travels: stride = 2·L·sin(A) with L ≈ 0.96 m and
 // the amplitudes below give 1.40 m/s walking and 2.11 m/s running, which are
@@ -192,8 +246,19 @@ export function solveCarry(rig, over) {
   const y = rig.armR.pivot[1] - rig.armR.len + C.drop;
   const cp = Math.cos(C.pitch), sp = Math.sin(C.pitch);
   const cy = Math.cos(C.yaw), sy = Math.sin(C.yaw);
-  // a point `t` along the rifle's own axis, in model space
-  const at = (t) => [C.fwd + t * cp * cy, y + t * sp, C.right - t * cp * sy];
+  // the weapon's own frame in model space: down the barrel, up out of the
+  // receiver, out of its right flank (ax × up)
+  const ax = [cp * cy, sp, -cp * sy];
+  const up = [-sp * cy, cp, sp * sy];
+  const rt = [sy, 0, cy];
+  // a point on the WEAPON: `t` along its axis, `dn` below the bore, `side`
+  // out of its right flank. The last two are the second solve target — the
+  // only axis on which the two hands can actually be told apart (see AIM).
+  const at = (t, dn = 0, side = 0) => [
+    C.fwd + t * ax[0] - dn * up[0] + side * rt[0],
+    y + t * ax[1] - dn * up[1] + side * rt[1],
+    C.right + t * ax[2] - dn * up[2] + side * rt[2],
+  ];
   const aim = (arm, target) => {
     const dx = target[0] - arm.pivot[0], dy = target[1] - arm.pivot[1], dz = target[2] - arm.pivot[2];
     const d = Math.hypot(dx, dy, dz) || 1;
@@ -202,7 +267,26 @@ export function solveCarry(rig, over) {
       new THREE.Vector3(dx / d, dy / d, dz / d));
     return { q, slack: d - arm.len };
   };
-  const r = aim(rig.armR, at(C.grip)), l = aim(rig.armL, at(C.guard));
+  // REACH-CLAMPED, PER BODY. A station is only worth asking for if that arm
+  // can get there, and the bodies are not the same: the armed crewman's arm is
+  // 0.725 m off a shoulder set 6 cm further back than the marine's, so the
+  // marine's stations left BOTH his hands floating 7 cm short of the weapon.
+  // Solve the arm's reach sphere against the (offset) barrel line and pull the
+  // station back to that root — never past it — so the residual comes out
+  // negative on any proportions instead of only on the model it was tuned on.
+  const hold = (arm, t, dn, side) => {
+    const p0 = at(0, dn, side);
+    const dx = arm.pivot[0] - p0[0], dy = arm.pivot[1] - p0[1], dz = arm.pivot[2] - p0[2];
+    const a = dx * ax[0] + dy * ax[1] + dz * ax[2];
+    const r2 = arm.len * arm.len - (dx * dx + dy * dy + dz * dz - a * a);
+    // barrel further off this shoulder than the arm is long — no station on it
+    // is reachable at all, so take the closest approach and leave the residual
+    // as small as the geometry allows rather than choosing an arbitrary miss
+    if (r2 <= 0) return aim(arm, at(a, dn, side));
+    return aim(arm, at(Math.min(t, a + Math.sqrt(r2) - C.bite), dn, side));
+  };
+  const r = hold(rig.armR, C.grip, C.gripDown, C.gripSide);
+  const l = hold(rig.armL, C.guard, C.guardDown, C.guardSide);
   return {
     qR: r.q, qL: l.q, slackR: r.slack, slackL: l.slack,
     rifle: {
@@ -564,16 +648,50 @@ export class Agents3D {
   // the body's own forward tip when engaging (see AIM)
   _aimLean(w) { return AIM.lean * w; }
 
-  // FEET ON THE DECK, LEANING (the same rule _gaitDip enforces for the walk).
-  // A rigid leg split ±s about its hip lifts BOTH feet L(1−cos s); the lean
-  // then rotates that pair about the body origin, which drops the leading foot
-  // by L·sin s·sin(lean) and lifts the trailing one by as much. At 0.32 rad of
-  // stance and 0.24 of lean that is 7 cm of front boot buried in the plating,
-  // so the body rides up by however far the LOWER foot went under.
-  _aimDip(legLen, w, lean) {
-    if (!w) return 0;
-    const s = AIM.stance * w;
-    return legLen * ((1 - Math.cos(s)) * Math.cos(lean) - Math.abs(Math.sin(s) * Math.sin(lean)));
+  // The two hip angles a sighted body is holding — the bladed split plus the
+  // slow weight shift (see AIM). Unscaled: every caller blends them in by the
+  // same `aim` weight the rest of the pose uses.
+  //
+  // BOTH BOOTS ON THE DECK, NOT JUST THE FRONT ONE. A rigid leg swung `a`
+  // about its hip, on a body leaning `λ` about its feet, lifts its sole by
+  //     L·(cos λ − cos(a + λ))
+  // so the ONLY two hip angles that leave a boot touching are a = 0 and
+  // a = −2λ. The shipped split was ±stance about ZERO, which satisfies neither
+  // and left the rear boot hanging 14 cm in the air once _aimDip had planted
+  // the front one. Centring the split on −lean instead makes a+λ come out ±s
+  // for both legs: they lift by exactly the same amount, the dip takes it out,
+  // and the man stands on both feet — square about the vertical in world,
+  // which is what a leaning body's stance actually looks like.
+  _aimLegs(id) {
+    const o = (this._legs ??= { l: 0, r: 0, rock: 0 });
+    const s = leadFoot(id) * AIM.stance;
+    const p = this.sim.t * AIM.swayRate + bodyRnd(id) * 6.2832;
+    // two periods that do not divide into each other, so a squad never falls
+    // into step and no one body repeats on a short loop
+    const rock = AIM.sway * Math.sin(p);
+    const roll = AIM.swayRoll * Math.sin(p * 0.63 + 1.7 + bodyRnd(id) * 3.1);
+    o.l = -AIM.lean + s + rock + roll; o.r = -AIM.lean - s + rock - roll; o.rock = rock;
+    return o;
+  }
+
+  // ...and the drop that plants them (the same rule _gaitDip enforces for the
+  // walk). Takes the real hip angles rather than assuming a fixed ±stance
+  // split, because the weight shift above is always moving them: whatever the
+  // legs are doing, the body rides by the LOWER sole's lift and that sole ends
+  // up exactly on the plating.
+  _aimDip(legLen, aL, aR, lean) {
+    if (!aL && !aR) return 0;
+    const cl = Math.cos(lean);
+    return legLen * Math.min(cl - Math.cos(aL + lean), cl - Math.cos(aR + lean));
+  }
+
+  // ...and the fore/aft translation that stops the rock from SKATING him
+  // across the deck. Turning both legs through `rock` walks the average sole
+  // forward by L·sin(rock)·cos(stance); move the body back by exactly that and
+  // the boots stay where they were planted (the two soles differ by under
+  // half a millimetre, which is the whole of the residual scuff).
+  _aimShift(legLen, aim, rock) {
+    return -legLen * Math.sin(rock * aim) * Math.cos(AIM.stance * aim);
   }
 
   // The carry this body is actually holding: the relaxed low-ready, the
@@ -668,10 +786,11 @@ export class Agents3D {
         // the ATTACK cycle underneath is a flood form's claw shuffle, which
         // twitched a rifleman's legs and bobbed his head off the sights.
         if (aim > 0) {
-          const s = bodyRnd(id) < 0.5 ? 1 : -1;   // which foot he leads with
           if (part === 'head') ang += (AIM.head - ang) * aim;
-          else if (part === 'legL') ang += (s * AIM.stance - ang) * aim;
-          else if (part === 'legR') ang += (-s * AIM.stance - ang) * aim;
+          else if (part === 'legL' || part === 'legR') {
+            const lg = this._aimLegs(id);
+            ang += ((part === 'legL' ? lg.l : lg.r) - ang) * aim;
+          }
         }
         // ARMS IN (user: "both hands outstretched", "still looks silly"): the
         // A-pose bind holds the hands ~43° off the body, so every unarmed
@@ -1088,12 +1207,17 @@ export class Agents3D {
           curAim = this._aimBlend(id, clip === CLIP.ATTACK, dt);
           const aimLean = this._aimLean(curAim);
           const lean = flinch + aimLean;
+          // the slow weight shift, and the fore/aft translation that keeps his
+          // boots where he planted them while he rocks over them
+          const lg = curAim > 0 ? this._aimLegs(id) : null;
           const gy = elev - this._gaitDip(clip, animT, id, set.rig.legLen)
-            - this._aimDip(set.rig.legLen, curAim, aimLean);
-          this._pose(wx, gy, wz, heading, 1, 1, 1, lean);
+            - (lg ? this._aimDip(set.rig.legLen, lg.l * curAim, lg.r * curAim, aimLean) : 0);
+          const sh = lg ? this._aimShift(set.rig.legLen, curAim, lg.rock) : 0;
+          const bx = wx + Math.cos(heading) * sh, bz = wz - Math.sin(heading) * sh;
+          this._pose(bx, gy, bz, heading, 1, 1, 1, lean);
           stampHold(set, counts.armed++);
           const carry = this._holdFor(set, curAim);
-          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob, lean);
+          this._carryAt(bx, gy, bz, heading, carry.rifle, curBob, lean);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
             // out of the NOZZLE, not the sternum (user: "flashlights aligned
@@ -1101,7 +1225,7 @@ export class Agents3D {
             // elevation once the lean and the bob have swung it
             const mz = this._aimOf(carry.rifle, curBob, lean);
             if (sim.fogAt(buf.nodeId[i])) { // only fog gives the shaft something to scatter off
-              this._beamAt(wx, gy + mz.y, wz, heading, mz.yaw, mz.elev);
+              this._beamAt(bx, gy + mz.y, bz, heading, mz.yaw, mz.elev);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
             this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading,
@@ -1114,17 +1238,20 @@ export class Agents3D {
           curAim = this._aimBlend(id, clip === CLIP.ATTACK, dt);
           const aimLean = this._aimLean(curAim);
           const lean = flinch + aimLean;
+          const lg = curAim > 0 ? this._aimLegs(id) : null;
           const gy = elev - this._gaitDip(clip, animT, id, set.rig.legLen)
-            - this._aimDip(set.rig.legLen, curAim, aimLean);
-          this._pose(wx, gy, wz, heading, 1, 1, 1, lean);
+            - (lg ? this._aimDip(set.rig.legLen, lg.l * curAim, lg.r * curAim, aimLean) : 0);
+          const sh = lg ? this._aimShift(set.rig.legLen, curAim, lg.rock) : 0;
+          const bx = wx + Math.cos(heading) * sh, bz = wz - Math.sin(heading) * sh;
+          this._pose(bx, gy, bz, heading, 1, 1, 1, lean);
           stampHold(set, (flags & FLAG.ODST) ? counts.odst++ : counts.marine++);
           const carry = this._holdFor(set, curAim);
-          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob, lean);
+          this._carryAt(bx, gy, bz, heading, carry.rifle, curBob, lean);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
             const mz = this._aimOf(carry.rifle, curBob, lean);
             if (sim.fogAt(buf.nodeId[i])) {
-              this._beamAt(wx, gy + mz.y, wz, heading, mz.yaw, mz.elev);
+              this._beamAt(bx, gy + mz.y, bz, heading, mz.yaw, mz.elev);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
             this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading,
