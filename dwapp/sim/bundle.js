@@ -144,7 +144,35 @@ var PARAMS = {
     reanimateIntegrityFrac: 0.6,
     reanimateTimeSec: 2
   },
-  flamethrower: { fuelUnits: 100, dps: 50, fuelPerSec: 2, fuelPerCorpse: 1, burnNodeSec: 12 },
+  flamethrower: {
+    fuelUnits: 100,
+    dps: 50,
+    fuelPerSec: 2,
+    fuelPerCorpse: 1,
+    burnNodeSec: 12,
+    // IN YOUR HANDS (user: "make the flamethrower something the player can
+    // use"). Deliberately NOT the NPC numbers. A marine's flamer is an
+    // abstraction that ticks a dps pool into a room; yours is aimed, so it
+    // needs a reach, a cone, and a tank that runs dry fast enough that
+    // carrying it is a decision. dps is 2x the line rate, the same
+    // player-vs-NPC parity the rifle already has.
+    //
+    // The tank is the whole balance: 8 units/s against 100 units is 12.5 s of
+    // held trigger. That is two rooms cleared, not a deck.
+    player: {
+      dps: 100,
+      fuelPerSec: 8,
+      rangeM: 9,
+      // the stream reaches this far and stops
+      coneDeg: 24,
+      // half-angle it bites inside
+      ignhitS: 0.1,
+      // igniter catch before the stream is live
+      tankUnits: 100,
+      armoryRefill: 55
+      // a spare tank off the rack, not a full swap
+    }
+  },
   // lockedFraction: per-run graph mutation (visible variety run to run).
   // shiftEverySec: the damaged ship keeps shifting — every ~2 min (jittered)
   // a working door jams or a jammed one grinds free, connectivity-guarded
@@ -4330,6 +4358,10 @@ function humanDeathToCorpse(sim2, a) {
   corpse.x = a.x;
   corpse.y = a.y;
   corpse.wasArmed = a.faction === FACTION.ARMED || a.faction === FACTION.MARINE;
+  if (a.flamer && a.fuel > 0) {
+    corpse.hadFlamer = true;
+    corpse.flamerFuel = a.fuel;
+  }
   sim2.spawn(corpse);
 }
 
@@ -4652,6 +4684,8 @@ var Sim = class {
     this.lastStand = false;
     this.initialSquadMarines = agents.filter((a) => a.faction === FACTION.MARINE && !a.garrison && !a.odst).length;
     this.armoryStock = this.P.armory.stock;
+    this.armoryFlamer = true;
+    this.armoryFuelCans = 3;
     this.armoryLocked = true;
     this.marinesKnowRevive = false;
     this.outcome = null;
@@ -4863,6 +4897,54 @@ var Sim = class {
     if (best.mags > 1) best.lowCalled = false;
     this.log("radio", `fireteam: ${best.callsign ? best.callsign.rank + " " + best.callsign.name : "a marine"} takes your mag — back in the fight`, best.node);
     return best;
+  }
+  // THE PLAYER'S FLAMETHROWER (user: "make the flamethrower something the
+  // player can use"). Two ways to end up holding one, both of them earned:
+  // off the body of the operator who was carrying it, or off the armory rack
+  // once the seal has released. Nothing is added to the ship to make this
+  // work — `armoryFlamer` is the spare that params already says is racked in
+  // there, and the corpse route is the line's own flamer coming back into
+  // play after he goes down.
+  //
+  // Note what is NOT set here: the player's agent never gets `.flamer`. The
+  // sim would then run it as an NPC flamer in resolveCombat — burning a room
+  // by itself, for free, on top of what you aim. Yours is game-side only.
+  playerTakeFlamer(a, corpse = null) {
+    const cap = this.P.flamethrower.player.tankUnits;
+    let fuel;
+    if (corpse) {
+      fuel = Math.min(cap, corpse.flamerFuel ?? 0);
+      corpse.hadFlamer = false;
+      corpse.flamerFuel = 0;
+      this.log("combat", "you pull the flamethrower off the operator and check the tanks (you)", corpse.node, corpse.x, corpse.y);
+    } else {
+      fuel = cap;
+      this.armoryFlamer = false;
+      this.log("combat", "you lift the flamethrower off the armory rack — full tanks (you)", a.node, a.x, a.y);
+    }
+    return fuel;
+  }
+  // a spare tank off the rack: tops you up, never past the tank's capacity
+  playerRefuel(have) {
+    const P = this.P.flamethrower.player;
+    if (!this.armoryFuelCans) return have;
+    this.armoryFuelCans--;
+    return Math.min(P.tankUnits, have + P.armoryRefill);
+  }
+  // Your trigger is down and the stream is landing at (x, y) in `node`. Marks
+  // the room as burning exactly the way an NPC flamer does, so the hive's
+  // pathing avoids it and the renderer draws fire where the fuel went.
+  // Path-cache invalidation is gated on the node not ALREADY burning: this is
+  // called at frame rate, and invalidating every frame would thrash a cache
+  // the whole hive reads.
+  playerFlame(node, x, y) {
+    if (node < 0) return;
+    const g = this.graph;
+    const wasBurning = g.burningUntil[node] > this.t;
+    g.burningUntil[node] = this.t + this.P.flamethrower.burnNodeSec;
+    g.burnX[node] = x;
+    g.burnY[node] = y;
+    if (!wasBurning) g.invalidatePathCache();
   }
   // the player takes up a rifle — from the armory rack or from a corpse
   // that died holding one (game rule: the survivor can fight back)
