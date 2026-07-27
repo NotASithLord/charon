@@ -18311,17 +18311,39 @@ function createInstanceMatrixNode( builder, instanceMatrix, count ) {
 
 	const isStorageMatrix = instanceMatrix.isStorageInstancedBufferAttribute === true;
 
+	// CHARON PATCH -- size the array from the attribute's CAPACITY, not the
+	// mesh's live draw count.
+	//
+	// The array length is baked into the WGSL at first build, and nothing ever
+	// rebuilds it for a count change: RenderObject.getDynamicCacheKey() hashes
+	// the scene's lights, the camera and receiveShadow, and never looks at
+	// object.count. So whatever `count` happened to be the first time this
+	// material was compiled is the bound for the rest of the run.
+	//
+	// That is fatal for a pooled InstancedMesh that starts empty and fills
+	// later -- and worse for one warmed deliberately at count 1 to precompile
+	// it, which bakes `array<mat4x4<f32>, 1>`. Every instance past the first
+	// then indexes out of bounds and the robustness clamp folds them all onto
+	// instance 0: bodies vanish or stack on one another, on WebGPU only (the
+	// WebGL2 path uses instanced vertex attributes and has no baked bound).
+	//
+	// The capacity is the honest bound -- the buffer really is this many mat4s
+	// long -- and it is constant for the mesh's lifetime, so the shader stays
+	// valid however the draw count moves. Also used for the path choice below,
+	// so a mesh can't switch buffer strategies between builds either.
+	const capacity = Math.max( instanceMatrix.count | 0, count | 0, 1 );
+
 	if ( isStorageMatrix ) {
 
-		instanceMatrixNode = storage( instanceMatrix, 'mat4', Math.max( count, 1 ) ).element( instanceIndex );
+		instanceMatrixNode = storage( instanceMatrix, 'mat4', capacity ).element( instanceIndex );
 
 	} else {
 
-		const uniformBufferSize = count * 16 * 4;
+		const uniformBufferSize = capacity * 16 * 4;
 
 		if ( uniformBufferSize <= builder.getUniformBufferLimit() ) {
 
-			instanceMatrixNode = buffer( instanceMatrix.array, 'mat4', Math.max( count, 1 ) ).element( instanceIndex );
+			instanceMatrixNode = buffer( instanceMatrix.array, 'mat4', capacity ).element( instanceIndex );
 
 		} else {
 
@@ -18416,7 +18438,8 @@ const instance = /*@__PURE__*/ Fn( ( [ count, matrices, colors = null ], builder
 
 	if ( ! isStorageMatrix ) {
 
-		const uniformBufferSize = count * 16 * 4;
+		// CHARON PATCH: capacity, to match createInstanceMatrixNode's choice
+		const uniformBufferSize = Math.max( matrices.count | 0, count | 0, 1 ) * 16 * 4;
 
 		if ( uniformBufferSize > builder.getUniformBufferLimit() ) {
 
