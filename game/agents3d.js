@@ -618,7 +618,7 @@ export class Agents3D {
   // That is the bright pool on the wall he is facing, and because every
   // marine faces somewhere different, a dark room fills with separate spots
   // that move as they cover their arcs.
-  _addRifleLight(nodeIdx, sx, sy, deck, elev, hSim) {
+  _addRifleLight(nodeIdx, sx, sy, deck, elev, hSim, muzzleY = 1.15) {
     const [mwx, mwz] = this.world.simToWorld(sx, sy, deck);
     const ddx = mwx - (this.viewX ?? 0), ddz = mwz - (this.viewZ ?? 0);
     const d2 = ddx * ddx + ddz * ddz;
@@ -646,8 +646,10 @@ export class Agents3D {
     // origin + aim, so the host can drive a real SPOTLIGHT with it: a point
     // light at the wall is a round blob, and the user wants to see the beam's
     // footprint picking out what the man is actually looking at.
-    r.ox = owx; r.oy = elev + 1.15; r.oz = owz;
-    r.tx = hwx; r.ty = elev + 1.05; r.tz = hwz;
+    // the carry solve reports where the barrel actually ends — the old
+    // hardcoded 1.15 sat ~45 cm above it once the rifle came down to the hip
+    r.ox = owx; r.oy = elev + muzzleY; r.oz = owz;
+    r.tx = hwx; r.ty = elev + muzzleY - 0.10; r.tz = hwz;
     r.throw = t; r.d2 = d2;
     this.rifleLightN++;
   }
@@ -953,7 +955,7 @@ export class Agents3D {
               this._beamAt(wx, gy + carry.rifle.muzzleY, wz, heading);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
-            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading);
+            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading, carry.rifle.muzzleY);
           }
           break;
         }
@@ -970,7 +972,7 @@ export class Agents3D {
               this._beamAt(wx, gy + carry.rifle.muzzleY, wz, heading);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
-            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading);
+            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading, carry.rifle.muzzleY);
           }
           break;
         }
