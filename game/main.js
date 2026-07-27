@@ -610,7 +610,10 @@ function updateRoomLightPool(inDark) {
     // a compartment hold the light down: a 3-degree depression puts the pool
     // low on the far wall, and on a long throw it lands on the DECK short of
     // the wall instead — which is where you actually look for a body.
-    T.target.position.set(r.tx, r.ty - r.throw * 0.05, r.tz);
+    // agents3d now emits the barrel's REAL elevation, so the old flat ~3%
+    // depression here would double-count to ~6 degrees and drop every pool
+    // short of what the man is actually pointing at
+    T.target.position.set(r.tx, r.ty, r.tz);
     T.target.updateMatrixWorld();
     // three windows the inverse-square falloff to zero at `distance` with a
     // pow4 ramp, so a cutoff set just past the wall eats about half the
@@ -630,7 +633,7 @@ function updateRoomLightPool(inDark) {
     const r = lit[i];
     const bx = r.tx - r.ox, bz = r.tz - r.oz;
     const bl = Math.hypot(bx, bz) || 1;
-    lightPool.add(r.tx - bx / bl * 1.3, r.ty - Math.min(r.throw * 0.05, 1.0), r.tz - bz / bl * 1.3,
+    lightPool.add(r.tx - bx / bl * 1.3, r.ty, r.tz - bz / bl * 1.3,
       TEAM_TORCH_HEX, 26, 5, 2);
   }
 }
