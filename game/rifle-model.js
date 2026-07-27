@@ -201,18 +201,22 @@ export function buildFlamerViewmodel() {
   // over the merged geometry and it blew out into a white slab with no
   // readable shape at all. Low metalness + high roughness keeps the specular
   // off it, and three tones give the silhouette internal edges to read by.
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(0.115, 0.125, 0.115), roughness: 0.92, metalness: 0.10,
+  // TEXTURED, and that is the whole trick. Flat-coloured primitives held 30 cm
+  // from a head-mounted torch saturate to a single white silhouette with no
+  // shading variation left in them — the first two cuts of this read as a
+  // featureless cream blob, and neither darkening the colours nor yawing the
+  // weapon touched it, because the problem was never shape or placement. The
+  // MA5 survives the same light only because its material carries a map whose
+  // dark pixels keep albedo variation alive through the exposure. So the
+  // flamer borrows the same ship-panel map, tinted per part.
+  const panel = tex('body');
+  const mat = (r, g, b, rough, metal) => new THREE.MeshStandardMaterial({
+    map: panel, color: new THREE.Color(r, g, b), roughness: rough, metalness: metal,
   });
-  const tankMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(0.205, 0.180, 0.095), roughness: 0.80, metalness: 0.18,
-  });
-  const hoseMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(0.045, 0.045, 0.050), roughness: 0.98, metalness: 0.02,
-  });
-  const nozzMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(0.085, 0.080, 0.075), roughness: 0.70, metalness: 0.30,
-  });
+  const bodyMat = mat(0.42, 0.45, 0.42, 0.88, 0.16);
+  const tankMat = mat(0.60, 0.53, 0.28, 0.74, 0.26);   // oil-drab pressure bottles
+  const hoseMat = mat(0.16, 0.16, 0.18, 0.98, 0.02);
+  const nozzMat = mat(0.30, 0.28, 0.26, 0.66, 0.34);
   const p = flamerParts();
   for (const [parts, mat] of [[p.body, bodyMat], [p.tanks, tankMat], [p.hose, hoseMat], [p.nozzle, nozzMat]]) {
     const g = mergeParts(parts);
@@ -241,7 +245,11 @@ export function buildFlamerViewmodel() {
 // weapon than the MA5 and the tanks ride high, so held at the MA5's tune it
 // buries the top of the receiver in the bottom of the screen: dropped and
 // pushed out, and tipped down a touch so the nozzle stays in frame.
-export const FLAMER_TUNE = { x: 0.170, y: -0.300, z: 0.330, ry: -0.10, rx: -0.030, rz: 0.03, s: 1.0 };
+// Yawed well off the view axis on purpose: held square, the weapon points away
+// from the eye and all you see is the rear domes of the twin tanks — two
+// spheres, no edges. Turning it brings the receiver, the hose and the nozzle
+// into frame, which is where its readable detail lives.
+export const FLAMER_TUNE = { x: 0.230, y: -0.300, z: 0.325, ry: -0.35, rx: -0.025, rz: 0.04, s: 0.85 };
 
 // Body + gun, merged into ONE geometry (untextured metal tint) so hundreds
 // of carried rifles on marines/armed crew/armed combat forms still cost a
