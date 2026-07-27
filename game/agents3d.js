@@ -38,14 +38,17 @@ function commitInstanced(mesh, count) {
   // frame — and most of the 57 character part-meshes are empty most frames).
   // Firefox's wgpu pays the most per redundant binding; every backend wins.
   mesh.visible = count > 0;
-  const im = mesh.instanceMatrix;
-  if (im.clearUpdateRanges) {
-    im.clearUpdateRanges();
-    if (count > 0) im.addUpdateRange(0, count * 16);
-    im.needsUpdate = count > 0;
-  } else {
-    im.needsUpdate = true;
-  }
+  // FULL UPLOAD, DELIBERATELY. This used to declare a partial update range
+  // (0 .. count*16) to avoid re-sending 512 unused slots every frame. That
+  // saving is not worth it: bodies keep going invisible on WebGPU, the update
+  // range is the one thing standing between "matrix written" and "matrix on
+  // the GPU", and it is a documented soft spot in this backend — a range that
+  // is mis-scaled, ignored, or applied against a stale version leaves those
+  // instances reading whatever was in the buffer before, which for a slot that
+  // has never been drawn is zeros. A zero matrix collapses the body to a point:
+  // exactly "invisible flood". Correctness first; the copy is cheap next to
+  // losing an enemy you are supposed to be fighting.
+  if (count > 0) mesh.instanceMatrix.needsUpdate = true;
 }
 
 function makeInstanced(scene, geo, color, emissive = 0x000000, emissiveIntensity = 0.4) {
