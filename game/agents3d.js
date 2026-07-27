@@ -16,7 +16,68 @@ import { sightRangeAt } from '../sim/combat.js';
 
 const CAP = 512;
 // the carry yaw _rifleAt applies; the weapon light rides the same axis
-const RIFLE_YAW = 0.28;
+const RIFLE_YAW = 0.40;
+
+// --- procedural rig -------------------------------------------------------
+// Model space for every character: +X forward, +Y up, +Z the body's own
+// right, feet at y = 0. Limbs are RIGID single meshes swung about the JMS
+// shoulder/hip pivot — there is no elbow and no knee, which is the constraint
+// every number below is written against.
+
+// CARRY (user: "marines should actually be holding on their rifles and in a
+// pose similar to halo games", then "both hands outstretched, still looks
+// silly"). Both of those come from the same root cause: the weapon and the
+// arms were tuned independently, so the hands never actually met the gun and
+// the only way to close the gap was to reach for it.
+//
+// So the weapon is placed FIRST and the arms are SOLVED to it — each arm is
+// simply aimed at its attachment point on the rifle, which is all a jointless
+// arm can do. That makes "hands on the weapon" true by construction on any
+// body proportions, and it is why the carry height is expressed relative to
+// where THIS body's fingertips hang (shoulder − arm length) rather than as an
+// absolute: a straight arm cannot hold a rifle above its own hands, and a
+// rifle placed there is exactly the outstretched pose that was rejected.
+const CARRY = {
+  drop: 0.15,        // weapon centre this far above the fingertip line
+  fwd: 0.17,         // in front of the spine
+  right: 0.28,       // out at the strong-side hip
+  yaw: RIFLE_YAW,    // muzzle carried across the body (the torch rides this)
+  // LEVEL, deliberately. A muzzle-up diagonal fits the arms better, but the
+  // torch cone and the weapon light can only be yawed, never pitched, so any
+  // barrel angle is an angle the light does not follow — and "flashlights
+  // aligned with gun nozzles" is the ask. Flat barrel, flat beam.
+  pitch: 0.0,
+  grip: -0.02,       // firing hand, measured along the rifle's own axis
+  guard: 0.24,       // support hand, up on the handguard
+  // FIGHTING is the same carry brought up and levelled, as far as an elbowless
+  // arm can bring it: a shouldered rifle is simply not reachable on this rig
+  // (the hand would have to sit 0.30 m from a shoulder it is 0.74 m from).
+  fire: { drop: 0.17, fwd: 0.26, right: 0.20, pitch: 0.02 },
+};
+const RIFLE_TIP = 0.515;   // muzzle along the rifle's own +X (RIFLE_MUZZLE.z)
+const AXIS_Z = new THREE.Vector3(0, 0, 1);   // model-frame fore/aft swing axis
+
+// per-body constant in [0,1) — stance, stride length and step phase all vary
+// off it so a crowd never marches in lockstep
+const bodyRnd = (id) => ((Math.imul(id, 1597334677) ^ 0x5f3a1c) >>> 0) / 4294967296;
+// One full cycle = two steps. The rate is chosen so the FEET COVER GROUND at
+// the speed the body actually travels: stride = 2·L·sin(A) with L ≈ 0.96 m and
+// the amplitudes below give 1.40 m/s walking and 2.11 m/s running, which are
+// P.movement.baseMps and the fleeing/charging multiplier. The old fixed 7.2
+// rad/s against a ±0.5 rad stride was a 2.0 m/s footfall under a 1.4 m/s body
+// — a 44% mismatch, and the reason the walk read as skating metronome.
+const LEG_AMP = { walk: 0.38, run: 0.50 };
+const gaitRate = (clip) => (clip === CLIP.RUN ? 7.2 : clip === CLIP.ATTACK ? 9
+  : clip === CLIP.WRITHE ? 13 : 6.2);
+const gaitPhase = (clip, t, id) => {
+  const r = bodyRnd(id);
+  return t * gaitRate(clip) * (0.94 + r * 0.12) + r * 6.2832;
+};
+// hip angle over one cycle. The second harmonic is what stops it being a
+// metronome: it makes the swing leg travel faster than the stance leg, so the
+// foot spends longer under the body than out in front of it, the way a real
+// step does.
+const strideOf = (p) => Math.sin(p) + 0.16 * Math.sin(2 * p);
 // deterministic per-(shooter, tick, salt) jitter in [-1, 1] for tracer spread
 function shotJitter(id, tick, salt) {
   let h = (id * 374761393 + tick * 668265263 + salt * 2246822519) | 0;
@@ -51,6 +112,65 @@ function commitInstanced(mesh, count) {
   if (count > 0) mesh.instanceMatrix.needsUpdate = true;
 }
 
+// Measure a converted character once: where its shoulders and hips are, and
+// how far its fingertips sit from the shoulder. That radius is fixed — a rigid
+// arm's hand is ALWAYS exactly that far out — so it is the number every carry
+// and every swing has to respect.
+function rigMetrics(parts) {
+  const reach = (part) => {
+    let pivot = null, best = 0, tip = null;
+    for (const p of parts) {
+      if (p.part !== part || !p.pivot) continue;
+      pivot = p.pivot;
+      const pos = p.geometry.attributes.position.array;
+      for (let i = 0; i < pos.length; i += 3) {
+        const dx = pos[i] - pivot[0], dy = pos[i + 1] - pivot[1], dz = pos[i + 2] - pivot[2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > best) { best = d2; tip = [dx, dy, dz]; }
+      }
+    }
+    if (!pivot || !tip) return null;
+    const r = Math.sqrt(best);
+    return { pivot, len: r, dir: [tip[0] / r, tip[1] / r, tip[2] / r] };
+  };
+  const armR = reach('armR'), armL = reach('armL');
+  const hip = parts.find((p) => p.part === 'legR' && p.pivot)?.pivot
+    ?? parts.find((p) => p.part === 'legL' && p.pivot)?.pivot;
+  return { armR, armL, legLen: hip ? hip[1] : 0.95 };
+}
+
+// Solve the two arm rotations that put this body's hands on a rifle carried at
+// `cfg`, and hand back the weapon transform they were solved against so the
+// two can never be tuned apart again. Pure geometry, run once per model.
+function solveCarry(rig, over) {
+  if (!rig.armR || !rig.armL) return null;
+  const C = { ...CARRY, ...over };
+  const y = rig.armR.pivot[1] - rig.armR.len + C.drop;
+  const cp = Math.cos(C.pitch), sp = Math.sin(C.pitch);
+  const cy = Math.cos(C.yaw), sy = Math.sin(C.yaw);
+  // a point `t` along the rifle's own axis, in model space
+  const at = (t) => [C.fwd + t * cp * cy, y + t * sp, C.right - t * cp * sy];
+  const aim = (arm, target) => {
+    const dx = target[0] - arm.pivot[0], dy = target[1] - arm.pivot[1], dz = target[2] - arm.pivot[2];
+    const d = Math.hypot(dx, dy, dz) || 1;
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(arm.dir[0], arm.dir[1], arm.dir[2]),
+      new THREE.Vector3(dx / d, dy / d, dz / d));
+    return { q, slack: d - arm.len };
+  };
+  const r = aim(rig.armR, at(C.grip)), l = aim(rig.armL, at(C.guard));
+  return {
+    qR: r.q, qL: l.q, slackR: r.slack, slackL: l.slack,
+    rifle: {
+      fwd: C.fwd, y, right: C.right, yaw: C.yaw, pitch: C.pitch,
+      sh: rig.armR.pivot[1],
+      // where the barrel actually ends, so the torch can leave the nozzle
+      // instead of the sternum (user: "flashlights aligned with gun nozzles")
+      muzzleY: y + RIFLE_TIP * sp, muzzleF: C.fwd + RIFLE_TIP * cp * cy,
+    },
+  };
+}
+
 function makeInstanced(scene, geo, color, emissive = 0x000000, emissiveIntensity = 0.4) {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.15, emissive, emissiveIntensity });
   const mesh = new THREE.InstancedMesh(geo, mat, CAP);
@@ -73,7 +193,9 @@ export class Agents3D {
     // drawn as one InstancedMesh per texture group, feet at y=0. The
     // carrier keeps its procedural swelling body (no source mesh exists);
     // corpses are the character meshes laid flat (burned husks stay slabs).
-    const mkSet = (name) => characterParts(name).map((p) => {
+    const mkSet = (name) => {
+      const parts = characterParts(name);
+      const flood = name === 'infection' || name === 'combat_civ' || name === 'combat_odst';
       // FrontSide (swarm finding): DoubleSide on the densest textured meshes
       // in the game doubled raster work in the main AND shadow passes. The
       // humanoid parts are closed shells — verified by a 4-angle spin-around
@@ -85,19 +207,33 @@ export class Agents3D {
       // culled by FrontSide in the main pass while the shadow pass draws
       // BackSide, leaving a black silhouette with no caster). The humanoid
       // crew/marine shells verified clean under FrontSide and keep the win.
-      const flood = name === 'infection' || name === 'combat_civ' || name === 'combat_odst';
-      const mat = new THREE.MeshStandardMaterial({
-        map: p.texture, roughness: 0.78, metalness: 0.06,
-        side: flood ? THREE.DoubleSide : THREE.FrontSide,
+      const set = parts.map((p) => {
+        const mat = new THREE.MeshStandardMaterial({
+          map: p.texture, roughness: 0.78, metalness: 0.06,
+          side: flood ? THREE.DoubleSide : THREE.FrontSide,
+        });
+        const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
+        mesh.count = 0;
+        mesh.frustumCulled = false;
+        mesh.userData.part = p.part;
+        mesh.userData.pivot = p.pivot;
+        scene.add(mesh);
+        return mesh;
       });
-      const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
-      mesh.count = 0;
-      mesh.frustumCulled = false;
-      mesh.userData.part = p.part;
-      mesh.userData.pivot = p.pivot;
-      scene.add(mesh);
-      return mesh;
-    });
+      set.rig = rigMetrics(parts);
+      // ARMS IN, NOT OUT. These meshes are bound in an A-POSE — the hand sits
+      // ~43° out from the shoulder — so a pure fore/aft swing walks the body
+      // around with its arms held off its sides like a gorilla. Adduction
+      // about model X is the only axis that closes that, and it is applied to
+      // every human limb, not just to rifle carriers. Flood limbs are left
+      // alone: one of a combat form's arms is a whip tentacle that is MEANT to
+      // hang wide.
+      const dz = set.rig.armR ? set.rig.armR.dir[2] : 0;
+      set.adduct = flood || Math.abs(dz) < 0.4 ? 0 : Math.sign(dz) * 0.34;
+      set.hold = solveCarry(set.rig, null);
+      set.holdFire = solveCarry(set.rig, CARRY.fire);
+      return set;
+    };
     this.civSet = mkSet('civilian');
     this.armedSet = mkSet('crew_armed');
     this.marineSet = mkSet('marine');
@@ -271,46 +407,46 @@ export class Agents3D {
   // joint pivots (shoulder/hip from the JMS skeleton) with a procedural
   // cycle picked by the sim's animation clip. Pure render-side — the sim's
   // deterministic state is untouched.
-  _swingFor(part, clip, t, id, hold) {
-    const ph = t * (clip === CLIP.RUN ? 11 : clip === CLIP.ATTACK ? 9 : clip === CLIP.WRITHE ? 13 : 7.2)
-      + (id % 7) * 0.9; // strangers walk out of step
+  _swingFor(part, clip, t, id, panic) {
+    const rnd = bodyRnd(id);
+    const ph = gaitPhase(clip, t, id);
     const s = Math.sin(ph);
-    // TWO HANDS ON THE WEAPON (user: marines should actually hold their guns).
-    // A rifle carrier's arms never hang or swing free: right arm to the grip,
-    // left arm crossed further to the fore-stock — matching _rifleAt's held
-    // pose — raised toward level when fighting, with a soft bob when walking.
-    if (hold && (part === 'armL' || part === 'armR')) {
-      // POSITIVE swing = forward on this rig (the old negative bases pitched
-      // the arms BACKWARD ~40° — the "awk stuff" in the user's screenshot;
-      // verified by candidate-grid renders). Right hand to the grip, left
-      // crossed further up the fore-stock — Halo low-ready.
-      // TIGHTER CARRY (user: "both hands outstretched, still looks silly").
-      // These arms are rigid single meshes with no elbow, so a big forward
-      // swing from the A-pose bind can only ever read as a straight reach.
-      // Keeping the swing small and leaning on adduction instead gives a
-      // compact low-ready that a jointless arm can actually sell.
-      const base = part === 'armR' ? 0.48 : 0.68;
-      const aim = clip === CLIP.ATTACK ? 0.3 : clip === CLIP.RUN ? 0.12 : 0;
-      const bob = clip === CLIP.WALK || clip === CLIP.RUN
-        ? Math.sin(ph * 2) * 0.05
-        : Math.sin(ph * 0.35 + (part === 'armR' ? 0.6 : 0)) * 0.03; // breathing
-      return base + aim + bob;
-    }
     switch (clip) {
-      case CLIP.WALK:
-        if (part === 'legL') return s * 0.5;
-        if (part === 'legR') return -s * 0.5;
-        if (part === 'armL') return -s * 0.3;
-        if (part === 'armR') return s * 0.3;
-        if (part === 'head') return Math.sin(ph * 0.5) * 0.04;
+      case CLIP.WALK: {
+        // HUMAN GAIT, NOT A METRONOME (user: unarmed NPCs need realistic
+        // walking). Contralateral arm/leg, a shaped hip curve (see strideOf),
+        // a per-body stride length, and a head that counters the body's
+        // two-per-cycle dip instead of nodding on its own unrelated clock.
+        const v = 0.9 + rnd * 0.2;               // this body's stride length
+        const A = LEG_AMP.walk * v;
+        if (part === 'legL') return A * strideOf(ph);
+        if (part === 'legR') return A * strideOf(ph + Math.PI);
+        // arms swing a little further BACK than forward, as they really do
+        if (part === 'armL') return -0.30 * v * s - 0.04;
+        if (part === 'armR') return 0.30 * v * s - 0.04;
+        if (part === 'head') return Math.sin(ph * 2) * 0.05 - 0.02;
         return 0;
-      case CLIP.RUN:
-        if (part === 'legL') return s * 0.85;
-        if (part === 'legR') return -s * 0.85;
-        if (part === 'armL') return -s * 0.6;
-        if (part === 'armR') return s * 0.6;
-        if (part === 'head') return 0.08;
+      }
+      case CLIP.RUN: {
+        // A jog at the sim's fleeing speed. The legs cannot open much further
+        // than a walk without the knee this rig does not have, so the run is
+        // sold on CADENCE (gaitRate), pumped arms and the deeper bounce the
+        // dip below produces — not on a wider scissor.
+        const v = 0.9 + rnd * 0.2;
+        const A = LEG_AMP.run * v;
+        // PANIC (FLAG.PANICKED): a fleeing civilian is not jogging. Arms come
+        // up and thrash out of time with the legs, the head snaps around.
+        const armA = panic ? 0.85 : 0.55;
+        const jitter = panic ? Math.sin(ph * 2.7 + rnd * 9) * 0.22 : 0;
+        if (part === 'legL') return A * strideOf(ph);
+        if (part === 'legR') return A * strideOf(ph + Math.PI);
+        if (part === 'armL') return -armA * v * s + jitter;
+        if (part === 'armR') return armA * v * s - jitter;
+        if (part === 'head') return panic
+          ? 0.10 + Math.sin(ph * 1.7 + rnd * 5) * 0.16
+          : 0.07 + Math.sin(ph * 2) * 0.05;
         return 0;
+      }
       case CLIP.ATTACK:
         // raised, flailing swipes — claws up and hammering (positive =
         // forward on this rig, same sign fix as the rifle hold)
@@ -330,7 +466,7 @@ export class Agents3D {
         // IDLE — a body at rest is never rigid (user: standing all weird and
         // stiff): slow breath in the arms, an occasional unhurried look around,
         // and a static per-body stance offset so no two read as clones.
-        const set2 = ((id * 1597334677) >>> 0) / 4294967296 - 0.5;
+        const set2 = rnd - 0.5;
         if (part === 'armL' || part === 'armR') {
           return Math.sin(ph * 0.35 + (part === 'armR' ? 1 : 0)) * 0.05
             + set2 * (part === 'armR' ? 0.06 : -0.05); // asymmetric rest
@@ -341,6 +477,31 @@ export class Agents3D {
         return 0;
       }
     }
+  }
+
+  // FEET ON THE DECK. A rigid leg swung θ about its hip lifts its foot
+  // L·(1−cos θ) off the floor, so the old ±0.5 rad stride had BOTH feet
+  // floating up to 11 cm at full scissor — a body skating along above the
+  // plating. Dropping the whole body by the lift of whichever foot is closest
+  // to vertical plants that foot exactly, and the drop is the two-per-cycle
+  // vertical bob a real gait has for free: lowest at double support, highest
+  // at midstance. Capped so the deeper running stride bounces instead of
+  // squatting.
+  _gaitDip(clip, t, id, legLen) {
+    if (clip !== CLIP.WALK && clip !== CLIP.RUN) return 0;
+    const ph = gaitPhase(clip, t, id);
+    const A = (clip === CLIP.RUN ? LEG_AMP.run : LEG_AMP.walk) * (0.9 + bodyRnd(id) * 0.2);
+    const lo = Math.min(Math.abs(strideOf(ph)), Math.abs(strideOf(ph + Math.PI)));
+    return Math.min(0.085, legLen * (1 - Math.cos(A * lo)));
+  }
+
+  // Forward/back lean of the WHOLE body, in the body's own frame: positive
+  // tips onto the back (the same axis and sign the death fall uses). Walking
+  // and running lean into the travel; a jog leans further.
+  _leanFor(clip, t, id) {
+    if (clip === CLIP.RUN) return -0.13 + Math.sin(gaitPhase(clip, t, id) * 2) * 0.02;
+    if (clip === CLIP.WALK) return -0.045;
+    return 0;
   }
 
   // dead-sprawl stamp for bodies lying flat: limbs splayed at deterministic
@@ -384,30 +545,56 @@ export class Agents3D {
     }
   }
 
-  // write base × (pivot-anchored swing) into every part mesh of a set
-  _stampAnimated(set, i, clip, animT, id, hold = false) {
+  // write base × (pivot-anchored swing) into every part mesh of a set.
+  // `hold` picks the solved carry (see solveCarry): the two arms stop being
+  // animated at all and are simply placed on the weapon, and `bob` swings that
+  // whole assembly — arms AND rifle together, about the shoulder line — so
+  // nothing can shake the gun out of the hands.
+  _stampAnimated(set, i, clip, animT, id, hold = null, bob = 0, panic = false) {
     if (this._curD2 < CAST_NEAR2) this._castNear.add(set);
+    const arms = hold && clip !== CLIP.DEATH;
+    if (arms && bob) {
+      (this._qBob ??= new THREE.Quaternion()).setFromAxisAngle(AXIS_Z, bob);
+      this._qArm ??= new THREE.Quaternion();
+    }
     for (const mesh of set) {
       const pivot = mesh.userData.pivot;
       const part = mesh.userData.part;
-      const ang = pivot && clip !== CLIP.DEATH ? this._swingFor(part, clip, animT, id, hold) : 0;
-      if (!ang) { mesh.setMatrixAt(i, this._m); continue; }
-      // TWO-AXIS HOLD (user: the hold still read as splayed "awk stuff" from
-      // behind): the H2 arms are modeled with an outward A-pose slope, so a
-      // pure forward pitch keeps the elbows flared. Rifle carriers also
-      // ADDUCT — the X-rotation pulls the hands in toward the weapon's
-      // centerline, closing the silhouette.
-      if (hold && clip !== CLIP.DEATH && (part === 'armL' || part === 'armR')) {
-        this._eHold ??= new THREE.Euler();
-        this._eHold.set(part === 'armR' ? 0.52 : -0.52, 0, ang);
-        this._mRot.makeRotationFromEuler(this._eHold);
-      } else this._mRot.makeRotationZ(ang);
+      if (!pivot || clip === CLIP.DEATH) { mesh.setMatrixAt(i, this._m); continue; }
+      if (arms && (part === 'armL' || part === 'armR')) {
+        const q = part === 'armR' ? hold.qR : hold.qL;
+        if (bob) this._mRot.makeRotationFromQuaternion(this._qArm.copy(this._qBob).multiply(q));
+        else this._mRot.makeRotationFromQuaternion(q);
+      } else {
+        const ang = this._swingFor(part, clip, animT, id, panic);
+        // ARMS IN (user: "both hands outstretched", "still looks silly"): the
+        // A-pose bind holds the hands ~43° off the body, so every unarmed
+        // walker swung wide-splayed arms. Adduction about model X — the only
+        // axis that closes that splay — brings them down beside the hips
+        // while the Z swing still does the walking.
+        const add = set.adduct && (part === 'armL' || part === 'armR')
+          ? (part === 'armR' ? set.adduct : -set.adduct) : 0;
+        if (!ang && !add) { mesh.setMatrixAt(i, this._m); continue; }
+        if (add) {
+          (this._eHold ??= new THREE.Euler()).set(add, 0, ang);
+          this._mRot.makeRotationFromEuler(this._eHold);
+        } else this._mRot.makeRotationZ(ang);
+      }
       this._mPart.makeTranslation(pivot[0], pivot[1], pivot[2])
         .multiply(this._mRot)
         .multiply(this._mOut.makeTranslation(-pivot[0], -pivot[1], -pivot[2]));
       this._mOut.multiplyMatrices(this._m, this._mPart);
       mesh.setMatrixAt(i, this._mOut);
     }
+  }
+
+  // the breathing / walking sway of a shouldered weapon, shared by the arms
+  // and the rifle so they move as one rigid carry
+  _carryBob(clip, animT, id) {
+    if (clip === CLIP.WALK || clip === CLIP.RUN) {
+      return Math.sin(gaitPhase(clip, animT, id) * 2) * (clip === CLIP.RUN ? 0.075 : 0.045);
+    }
+    return Math.sin(animT * 0.9 + bodyRnd(id) * 6.28) * 0.022;   // breathing
   }
 
   // transient tracer for the player's own rifle
@@ -493,9 +680,11 @@ export class Agents3D {
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
     const counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
-    let clip = 0, animT = 0, curId = 0;
-    const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId);
-    const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId, true); // rifle carriers
+    let clip = 0, animT = 0, curId = 0, curPanic = false, curBob = 0;
+    const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId, null, 0, curPanic);
+    // rifle carriers: arms placed on the solved carry, not swung
+    const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId,
+      clip === CLIP.ATTACK ? set.holdFire : set.hold, curBob);
 
     const seen = new Set();
     // per-frame per-set "any instance near enough to cast into the torch cone"
@@ -582,6 +771,8 @@ export class Agents3D {
       clip = buf.animClip[i];
       animT = buf.animTime[i];
       curId = id;
+      curPanic = (flags & FLAG.PANICKED) !== 0;
+      curBob = this._carryBob(clip, animT, id);
       const rp = this.rpos.get(id);
       const deck = rp.deck;
       if (Math.abs(deck - playerDeck) > 1) continue; // invisible through opaque decks
@@ -712,11 +903,16 @@ export class Agents3D {
         if (p >= 1) this._riseAt.delete(id);
         else {
           const ease = p * p * (3 - 2 * p);
-          rise = -Math.PI / 2 * (1 - ease) + Math.sin(performance.now() * 0.05 + id) * 0.07 * (1 - p);
+          // POSITIVE: it fell onto its BACK (+PI/2 in the downed blend above),
+          // so it has to come up off its back too — the old negative sign
+          // raised it out of a face-down pose it was never in.
+          rise = Math.PI / 2 * (1 - ease) + Math.sin(performance.now() * 0.05 + id) * 0.07 * (1 - p);
         }
       }
-      // FLINCH (hit feedback): a freshly-hurt body jerks
-      const flinch = (flags & FLAG.FLINCH ? Math.sin(performance.now() * 0.06 + id) * 0.09 - 0.14 : 0) + rise;
+      // FLINCH (hit feedback): a freshly-hurt body jerks — backwards, off the
+      // shot, in its own frame (see _pose on the axis this now uses)
+      const flinch = (flags & FLAG.FLINCH ? Math.sin(performance.now() * 0.06 + id) * 0.09 + 0.14 : 0)
+        + rise + this._leanFor(clip, animT, id);
 
       // CRAWL-OUT (user: deck arrivals must surface at the opening): a body
       // snapped to a grate/hatch mouth starts sunk into the deck and climbs
@@ -734,20 +930,27 @@ export class Agents3D {
         }
       }
 
+      // FEET ON THE DECK: drop the body by the lift its planted foot would
+      // otherwise have (see _gaitDip). This is also the walk's vertical bob.
       switch (f) {
         case FACTION.CIVILIAN: {
-          this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
+          this._pose(wx, elev - this._gaitDip(clip, animT, id, this.civSet.rig.legLen),
+            wz, heading, 1, 1, 1, flinch);
           stamp(this.civSet, counts.civ++);
           break;
         }
         case FACTION.ARMED: {
-          this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
+          const gy = elev - this._gaitDip(clip, animT, id, this.armedSet.rig.legLen);
+          this._pose(wx, gy, wz, heading, 1, 1, 1, flinch);
           stampHold(this.armedSet, counts.armed++);
-          this._rifleAt(wx, elev + 1.05, wz, heading);
+          const carry = clip === CLIP.ATTACK ? this.armedSet.holdFire : this.armedSet.hold;
+          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
             if (sim.fogAt(buf.nodeId[i])) { // only fog gives the shaft something to scatter off
-              this._beamAt(wx, elev + 1.08, wz, heading);
+              // out of the NOZZLE, not the sternum (user: "flashlights aligned
+              // with gun nozzles") — the solve hands back where the barrel ends
+              this._beamAt(wx, gy + carry.rifle.muzzleY, wz, heading);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
             this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading);
@@ -755,14 +958,16 @@ export class Agents3D {
           break;
         }
         case FACTION.MARINE: {
-          this._pose(wx, elev, wz, heading, 1, 1, 1, flinch);
-          if (flags & FLAG.ODST) stampHold(this.odstSet, counts.odst++);
-          else stampHold(this.marineSet, counts.marine++);
-          this._rifleAt(wx, elev + 1.15, wz, heading);
+          const set = (flags & FLAG.ODST) ? this.odstSet : this.marineSet;
+          const gy = elev - this._gaitDip(clip, animT, id, set.rig.legLen);
+          this._pose(wx, gy, wz, heading, 1, 1, 1, flinch);
+          stampHold(set, (flags & FLAG.ODST) ? counts.odst++ : counts.marine++);
+          const carry = clip === CLIP.ATTACK ? set.holdFire : set.hold;
+          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
             if (sim.fogAt(buf.nodeId[i])) {
-              this._beamAt(wx, elev + 1.14, wz, heading);
+              this._beamAt(wx, gy + carry.rifle.muzzleY, wz, heading);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
             this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading);
@@ -771,7 +976,8 @@ export class Agents3D {
         }
         case FACTION.INFECTION: {
           const pulse = 1 + Math.sin(this.sim.t * 7 + id) * 0.15;
-          this._pose(wx, elev, wz, heading, pulse, pulse, pulse, flinch);
+          this._pose(wx, elev - this._gaitDip(clip, animT, id, this.infectionSet.rig.legLen),
+            wz, heading, pulse, pulse, pulse, flinch);
           stamp(this.infectionSet, counts.infection++);
           break;
         }
@@ -790,9 +996,15 @@ export class Agents3D {
             bz = riseEntry.from[2] + (wz - riseEntry.from[2]) * es;
             by = riseEntry.from[1] + ((elev + hover) - riseEntry.from[1]) * es;
           }
+          if (!hover) by -= this._gaitDip(clip, animT, id, this.combatCivSet.rig.legLen);
           // charge: lean hard forward, stretched stride; a leap tucks and
-          // stretches further and rides the arc up off the floor
-          this._e.set((leaping ? 0.85 : charging ? 0.55 : 0.18) + flinch, heading, 0);
+          // stretches further and rides the arc up off the floor.
+          // NEGATIVE, AND IN THE BODY FRAME (see _pose): written into the
+          // euler's X slot this was a rotation about the WORLD x-axis applied
+          // before the heading, so a form running along world +X did not lean
+          // at all — it ROLLED, and one running along world +Z pitched. Every
+          // charging form was toppling sideways in the render grid.
+          this._e.set(0, heading, -(leaping ? 0.55 : charging ? 0.42 : 0.14) + flinch);
           this._q.setFromEuler(this._e);
           // a reviving form slerps out of its settled ragdoll orientation into
           // the rising pose, so there is no orientation snap to pair with the
@@ -813,10 +1025,15 @@ export class Agents3D {
             this._s.set(1, leaping ? 1.08 : charging ? 1.05 : 1, leaping ? 1.18 : charging ? 1.12 : 1));
           if (flags & FLAG.ARMED_HOST) {
             stamp(this.combatOdstSet, counts.combatOdst++);
-            // bx/bz (not wx/wz) so the rifle rides with the body while a
-            // reviving form slides in from its settled ragdoll spot; identical
-            // to wx/wz for every non-reviving form
-            this._rifleAt(bx, elev + 1.1, bz, heading);
+            // The stolen rifle is composed IN THE BODY'S FRAME (bx/bz, and the
+            // body quaternion) so it leans, rises and slides with the form —
+            // it used to hang plumb at a fixed world height while a charging
+            // form pitched forward out from under it.
+            (this._v ??= new THREE.Vector3()).set(0.26, 1.04, 0.16).applyQuaternion(this._q);
+            this._e.set(0, RIFLE_YAW, -0.18);
+            this._q2.setFromEuler(this._e).premultiply(this._q);
+            this._m.compose(this._p.set(bx + this._v.x, by + this._v.y, bz + this._v.z),
+              this._q2, this._s.set(1, 1, 1));
             this.rifle.setMatrixAt(counts.rifle++, this._m);
           } else {
             stamp(this.combatCivSet, counts.combatCiv++);
@@ -1045,10 +1262,34 @@ export class Agents3D {
     this._commitCarrierAnim(counts.carrier);   // per-instance clip/phase/swell
   }
 
-  _pose(x, y, z, rotY, sx, sy, sz, rx = 0) {
-    this._e.set(rx, rotY, 0);
+  // LEAN IN THE BODY'S OWN FRAME. This used to write the lean into the euler's
+  // X slot, i.e. about the WORLD x-axis, ahead of the heading — so a body
+  // facing world +X was not leaning at all, it was ROLLING, and one facing
+  // world +Z pitched instead. Charging combat forms visibly toppled sideways.
+  // XYZ order with x=0 gives Ry(heading)·Rz(lean), which is the same axis and
+  // sign the death fall already uses: positive tips onto the back, negative
+  // leans into the direction of travel.
+  _pose(x, y, z, rotY, sx, sy, sz, lean = 0) {
+    this._e.set(0, rotY, lean);
     this._q.setFromEuler(this._e);
     this._m.compose(this._p.set(x, y, z), this._q, this._s.set(sx, sy, sz));
+  }
+
+  // Place a CARRIED rifle from the same solve its owner's arms were placed
+  // from, so the two cannot drift apart. `floorY` is the deck under his feet:
+  // the offsets are model-space, exactly as solveCarry produced them.
+  _carryAt(x, floorY, z, rotY, cfg, bob = 0) {
+    let ox = cfg.fwd, oy = cfg.y, pitch = cfg.pitch;
+    if (bob) {   // the whole carry rotates about the shoulder line, as the arms do
+      const dx = ox, dy = oy - cfg.sh, c = Math.cos(bob), s = Math.sin(bob);
+      ox = dx * c - dy * s; oy = cfg.sh + dx * s + dy * c; pitch += bob;
+    }
+    const fx = Math.cos(rotY), fz = -Math.sin(rotY);   // +X-forward after rotY
+    this._e.set(0, rotY + cfg.yaw, pitch);
+    this._q.setFromEuler(this._e);
+    this._m.compose(
+      this._p.set(x + fx * ox - fz * cfg.right, floorY + oy, z + fz * ox + fx * cfg.right),
+      this._q, this._s.set(1, 1, 1));
   }
 
   // The torch points WHERE HE IS LOOKING. Riding _rifleAt put the cone on the
