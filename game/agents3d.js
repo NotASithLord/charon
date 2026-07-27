@@ -15,6 +15,8 @@ import { TASK } from '../sim/hive.js';
 import { sightRangeAt } from '../sim/combat.js';
 
 const CAP = 512;
+// the carry yaw _rifleAt applies; the weapon light rides the same axis
+const RIFLE_YAW = 0.28;
 // deterministic per-(shooter, tick, salt) jitter in [-1, 1] for tracer spread
 function shotJitter(id, tick, salt) {
   let h = (id * 374761393 + tick * 668265263 + salt * 2246822519) | 0;
@@ -431,7 +433,14 @@ export class Agents3D {
     const ddx = mwx - (this.viewX ?? 0), ddz = mwz - (this.viewZ ?? 0);
     if (ddx * ddx + ddz * ddz > 1600) return;   // 40 m — the pool scores the rest
     const nd = this.sim.graph.node(nodeIdx);
-    const hx = Math.cos(hSim), hy = Math.sin(hSim);
+    // ALONG THE BARREL, NOT THE CHEST (user: "flashlights aligned with gun
+    // nozzles"). The rifle is carried yawed across the body by _rifleAt, so a
+    // light thrown down the body's heading points somewhere the weapon is not.
+    // Use the weapon's own axis and start it at the muzzle.
+    const gh = hSim - RIFLE_YAW;                 // _rifleAt yaws the gun by +0.28 in render space
+    const hx = Math.cos(gh), hy = Math.sin(gh);
+    sx += Math.cos(hSim) * 0.20 + hx * 0.55;     // body offset, then down the barrel
+    sy += Math.sin(hSim) * 0.20 + hy * 0.55;
     let t = 16;                                  // throw limit
     if (hx > 1e-4) t = Math.min(t, (nd.x + nd.w / 2 - sx) / hx);
     else if (hx < -1e-4) t = Math.min(t, (nd.x - nd.w / 2 - sx) / hx);
@@ -447,7 +456,7 @@ export class Agents3D {
     hit.i = 5.5 + near * 6; hit.d = 7 + t * 0.35;
     this.rifleLightN++;
     // a little spill at the weapon itself so the man holding it is lit too
-    const [mxw, mzw] = this.world.simToWorld(sx + hx * 0.6, sy + hy * 0.6, deck);
+    const [mxw, mzw] = this.world.simToWorld(sx + hx * 0.25, sy + hy * 0.25, deck);
     const sp = this.rifleLights[this.rifleLightN]
       ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0, i: 0, d: 0 });
     sp.x = mxw; sp.y = elev + 1.15; sp.z = mzw; sp.i = 2.4; sp.d = 3.6;
@@ -1044,6 +1053,7 @@ export class Agents3D {
   // low-ready rifle, which is held across the chest — so the beam came out of
   // the marine's sternum and threw off to one side (user screenshot).
   _beamAt(x, y, z, rotY) {
+    rotY += RIFLE_YAW;                            // down the barrel, like the light
     const fx = Math.cos(rotY), fz = -Math.sin(rotY);
     this._e.set(0, rotY, 0);
     this._q.setFromEuler(this._e);
@@ -1056,7 +1066,7 @@ export class Agents3D {
     // body, sitting in the raised hands — candidate C of the pose grid
     const fx = Math.cos(rotY), fz = -Math.sin(rotY); // +X-forward after rotY
     const rx = -fz, rz = fx;                          // right-hand direction
-    this._e.set(0, rotY + 0.28, -0.26);
+    this._e.set(0, rotY + RIFLE_YAW, -0.26);
     this._q.setFromEuler(this._e);
     this._m.compose(
       this._p.set(x + fx * 0.20 + rx * 0.04, y - 0.09, z + fz * 0.20 + rz * 0.04),
