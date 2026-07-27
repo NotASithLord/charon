@@ -1907,6 +1907,11 @@ export class Sim {
       if (a.inShaftAmbush !== undefined) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;
+      // TRIGGER DOWN. combat.js refreshes flamingT every tick a stream is
+      // running, so a sustained burn holds this continuously; the corpse-cache
+      // squirt (humans.js) is one instant, and the half-second tail is what
+      // turns it into a visible burst rather than a single-frame flicker.
+      if (this.t - (a.flamingT ?? -99) < 0.5) flags |= FLAG.FLAMING;
       if (a.odst) flags |= FLAG.ODST;
       if (a.move && a.move.layer === 'shaft' && a.move.hidden) flags |= FLAG.IN_SHAFT;
       // armed corpses carry the flag too so the renderer can lay the right
@@ -1924,6 +1929,14 @@ export class Sim {
   _clipFor(a) {
     if (a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) return CLIP.DEATH;
     if (a.state === STATE.GRABBING || a.state === STATE.FIGHT) return CLIP.ATTACK;
+    // A MAN WITH THE TRIGGER DOWN IS NOT AT LOW READY. The corpse-cache burn
+    // (humans.js) happens in a room with no flood in it, so the flamer was not
+    // in FIGHT and rendered relaxed — weapon across his body at the carry yaw,
+    // while a jet came out of it. ATTACK is what drives the renderer's aim
+    // blend, which squares the barrel up and brings the yaw to zero, so the
+    // stream leaves the nozzle pointing where he is pointing. Render output
+    // only: _clipFor is read nowhere but writeBuffer.
+    if (this.t - (a.flamingT ?? -99) < 0.5) return CLIP.ATTACK;
     if (a.faction === FACTION.INFECTION) return a.move ? CLIP.RUN : CLIP.WRITHE;
     // close-follow escorts move in real space with NO a.move — they were
     // rendering IDLE while sliding (user: no walking animation). Their real

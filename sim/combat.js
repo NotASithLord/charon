@@ -152,6 +152,18 @@ export function resolveCombat(sim, dt) {
         anyFire = true;
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
+        // ...AND WHERE. The stream lands on what he is burning, not at the
+        // room's centroid. `targets` is already id-sorted, so the nearest of
+        // them is a deterministic pick with no roll behind it.
+        let aim = targets[0], aimD = Infinity;
+        for (const t of targets) {
+          const d2 = (t.x - flamer.x) ** 2 + (t.y - flamer.y) ** 2;
+          if (d2 < aimD - 1e-9) { aimD = d2; aim = t; }
+        }
+        sim.graph.burnX[node] = aim.x;
+        sim.graph.burnY[node] = aim.y;
+        // trigger down this tick — renderers hang the jet off it (see FLAMING)
+        flamer.flamingT = sim.t;
         sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
         let flamePool = P.flamethrower.dps * dt;
         for (const t of targets) {

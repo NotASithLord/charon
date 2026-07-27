@@ -121,6 +121,28 @@ export class GameAudio extends PositionalSynth {
       const pop = Math.sin(t * 2 * Math.PI * (7 + t * 5)) > 0.55 ? 1 : 0.2;
       return rnd() * pop * Math.exp(-t * 2.2) * 0.55;
     });
+    // FLAMETHROWER ROAR. Deliberately one of the plainest things in the bank:
+    // the audit killed the synthetic cues that tried to be clever (a sine
+    // sweep for a scream read as a cartoon boing), and a flame is one of the
+    // few sounds that IS filtered noise, so there is nothing to fake. Two
+    // cascaded one-poles over the seeded noise — a single pole still hisses
+    // like a cymbal and it is the second that turns it into air moving — plus
+    // a low combustion body under it and a slow incommensurate gutter so a
+    // sustained burn never settles into a tremolo. No attack transient: the
+    // ignition pop belongs to the weapon, not to the loop, and this cue is
+    // retriggered end-to-end while the trigger is held.
+    this.buffers.flame = (() => {
+      let lp = 0, lp2 = 0;
+      return mk(1.1, (t) => {
+        lp += (rnd() - lp) * 0.09;      // ~roar band
+        lp2 += (lp - lp2) * 0.28;       // second pole kills the hiss
+        const body = Math.sin(t * 2 * Math.PI * (58 + Math.sin(t * 2 * Math.PI * 1.9) * 7)) * 0.30;
+        const gutter = 0.72 + Math.sin(t * 2 * Math.PI * 5.3) * 0.16 + Math.sin(t * 2 * Math.PI * 11.7) * 0.10;
+        // ramped at both ends only enough to stop a click at the seam
+        const env = Math.min(1, t * 38) * Math.min(1, (1.1 - t) * 14);
+        return (lp2 * 11 + body) * gutter * env * 0.5;
+      });
+    })();
     // radio blip
     this.buffers.radio = mk(0.16, (t) => Math.sin(t * 2 * Math.PI * (t < 0.08 ? 880 : 660)) * 0.35 * Math.exp(-t * 10));
 

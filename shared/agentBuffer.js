@@ -23,6 +23,11 @@ export const FLAG = {
   CHARGING: 1 << 11,   // combat form in a lunge/charge burst (render sprint)
   LEAPING: 1 << 13,    // combat form airborne mid-leap (render lifted off the floor)
   ODST: 1 << 14,       // armory-reserve ODST (render in black plate)
+  // TRIGGER DOWN ON THE FLAMETHROWER this instant. FLAMER says a man carries
+  // the thing; this says fuel is leaving the nozzle right now, which is the
+  // only moment there is a jet to draw. Paired with graph.burnX/burnY, which
+  // say where that fuel is landing.
+  FLAMING: 1 << 15,
 };
 
 // Anim clip table (§9). Index = animClip in the buffer.
