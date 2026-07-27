@@ -98,17 +98,48 @@ const post = new PostFX(renderer, scene, camera);
 // scene, which shortens the light loop compiled into every shader — so the
 // lower rungs land at or below the old budget.
 const lightPool = new LightPool(scene, 16);
-// Real spotlights for the nearest weapon lights — the pool above is point
-// lights, which cannot throw a directional footprint. Three is enough to read
-// as "the fireteam is lighting this room" without another shadow-caster's cost
-// (these deliberately do NOT cast shadows; only your own torch does).
-const teamTorches = Array.from({ length: 3 }, () => {
-  const L = new THREE.SpotLight(0xdCE6FF, 0, 22, 0.5, 0.45, 1.6);
+// Real spotlights for the weapon lights. SEVEN of them at the top rungs — a
+// fireteam plus stragglers — because a POINT light cannot have a heading, and
+// heading is the entire request ("i dont see the direction of the wall hes
+// looking at illuminated. I want different illuminated spots coming from
+// their heading"). Isolating the two kinds side by side in a blacked-out CIC
+// settled it: five spotlights alone gave crisp discs on the exact bulkheads
+// the men were facing with everything else at zero, while just TWO of the
+// pooled point blobs lit the whole compartment — ceiling, deck, all four
+// walls — because a sphere of light radiates into every surface it can see.
+// So the spot count went up and the blobs went away as the primary; only the
+// overflow past the spot budget still gets one, and only as a small disc.
+// They deliberately do NOT cast shadows; only your own torch does.
+//
+// DECAY 2 IS THE OTHER HALF (user: "i dont think a cone is realistic at
+// all... what is it reflecting off of?"). The first pass used decay 1.6 over
+// a 28-degree cone, which is a soft even wash: every surface in the room came
+// back at roughly the same brightness, so nothing read as a beam LANDING on
+// anything. True inverse-square plus a tighter cone means the footprint is
+// hot at its centre, falls off hard across the room, and the geometry inside
+// it is picked out by N.L instead of flattened.
+const TEAM_TORCH_HEX = 0xe2ecff;   // a shade cooler than yours (0xeaf2ff) — same lamp family, tellable apart
+const TEAM_TORCH_CD = 560;         // candela; a tighter reflector concentrates the same lumens
+const teamTorches = Array.from({ length: 7 }, () => {
+  const L = new THREE.SpotLight(TEAM_TORCH_HEX, 0, 24, 0.26, 0.6, 2);
   L.castShadow = false;
   scene.add(L);
   scene.add(L.target);
   return L;
 });
+let teamSpotN = teamTorches.length;
+// same trick as LightPool.setActive: genuinely REMOVE the spare spots from the
+// scene on the low rungs, which shortens the light loop compiled into every
+// shader rather than just multiplying by a zero uniform
+function setTeamSpots(n) {
+  n = Math.max(0, Math.min(n, teamTorches.length));
+  if (n === teamSpotN) return;
+  teamSpotN = n;
+  teamTorches.forEach((L, i) => {
+    if (i < n) { if (!L.parent) { scene.add(L); scene.add(L.target); } }
+    else if (L.parent) { L.intensity = 0; scene.remove(L); scene.remove(L.target); }
+  });
+}
 
 // IMAGE-BASED LIGHTING (the RoomEnvironment recipe, compacted): a tiny
 // procedural interior baked through PMREM gives every PBR material real
@@ -144,11 +175,38 @@ scene.add(lamp);
 // FLASHLIGHT (user rule): in flood-held darkness this is all you have. In
 // spore fog its throw clamps to a few meters instead of the whole room.
 // It casts REAL shadows now — a soft-penumbra spot, not a dumb hard cone.
-const torch = new THREE.SpotLight(0xeaf2ff, 0, 30, 0.46, 0.62, 1.5);
+//
+// TWO CONES, because that is what a weapon light actually is: a tight hot
+// core thrown by the reflector plus a much wider, much dimmer spill from the
+// same lens. One medium-wide soft spot reads as a grey smear on the wall —
+// there is no bright disc to say "the beam is pointed HERE", and no dark
+// surround to say "and nowhere else". The core is narrow enough that the
+// shadow map spends all its texels on the part you are looking at, and it is
+// the only one of the two that casts.
+const torch = new THREE.SpotLight(0xeaf2ff, 0, 30, 0.22, 0.4, 2);
 const torchTarget = new THREE.Object3D();
 scene.add(torch, torchTarget);
 torch.target = torchTarget;
 torch.castShadow = true;
+// the spill: keeps you from walking down a black tunnel with a dot in it,
+// and puts light on the deck at your feet. No shadow, no cost beyond one more
+// light in the loop. Its apex sits ~0.75 m AHEAD of the eye — far enough that
+// the whole viewmodel is behind the cone's origin, because at true
+// inverse-square a wide cone from the eye puts 100+ lux on a rifle held 0.6 m
+// away and the gun renders as a white cutout. The world cannot tell the
+// difference between an apex at the eye and one at arm's length.
+const torchSpill = new THREE.SpotLight(0xeaf2ff, 0, 14, 0.50, 0.95, 2);
+torchSpill.castShadow = false;
+torchSpill.target = torchTarget;
+scene.add(torchSpill);
+// ...which leaves the rifle lit by nothing at all, so it gets its own rig, the
+// way every shooter lights a viewmodel. A 1.5 m point light parented to the
+// camera physically cannot reach the room (a bulkhead you are pressed against
+// takes ~5% of what the gun takes), so the compartment stays honest.
+const gunFill = new THREE.PointLight(0xdfeaff, 0, 1.5, 1);
+gunFill.position.set(0.06, 0.02, -0.42);
+camera.add(gunFill);
+const _torchDir = new THREE.Vector3(); // per-frame scratch (was allocating one a frame)
 // HALF-RATE SHADOWS: the WebGPU renderer throttles per-light — the loop
 // stamps shadow.needsUpdate at 30Hz instead of every frame
 torch.shadow.autoUpdate = false;
@@ -387,11 +445,11 @@ agents.rifle.castShadow = true;
 // ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
 let _shadowAt = 0; // torch shadow refresh clock (wall time, not frame parity)
 const RUNGS = [
-  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 12 },
-  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 12 },
-  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 10, bloom: 0.375, motes: 24, rag: 32, rifleLights: 8 },
-  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24, rag: 24, rifleLights: 5 },
-  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12, rag: 16, rifleLights: 3 },
+  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 6, teamSpots: 7 },
+  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 6, teamSpots: 7 },
+  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 10, bloom: 0.375, motes: 24, rag: 32, rifleLights: 4, teamSpots: 4 },
+  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24, rag: 24, rifleLights: 3, teamSpots: 3 },
+  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12, rag: 16, rifleLights: 2, teamSpots: 2 },
 ];
 // whole-frame pixel budget: huge windows can't buy retina supersampling on
 // an integrated GPU — the cap yields before the budget does (HD opts out)
@@ -421,6 +479,7 @@ const governor = new QualityGovernor({
       _shadowAt = performance.now();
     }
     lightPool.setActive(R.lights);
+    setTeamSpots(R.teamSpots ?? 3);
     post.setBloomScale(R.bloom);
     motes.setCount(R.motes);
     // CPU lever (swarm finding: the ladder shed only GPU cost): fewer live
@@ -478,10 +537,11 @@ governor.prewarm(scene, camera, {
 // invisible on the room. A small pool of pooled point lights now rides the
 // nearest unsteady fixtures on your deck, so a guttering room actually
 // throws guttering light on its walls, floor and occupants.
-function updateRoomLightPool() {
+function updateRoomLightPool(inDark) {
   // every powered fixture and every dead-room red lamp declares a VIRTUAL
   // light — the global pool picks the winners near you (dead ship, discrete
   // sources instead of an ambient wash)
+  const pnode = player.agent.node;
   for (let n = 0; n < sim.graph.n; n++) {
     const L = world.roomLights[n];
     if (!L || L.x === undefined) continue;
@@ -490,10 +550,20 @@ function updateRoomLightPool() {
     if (nd.deck !== player.deck) continue;
     const d2 = (L.x - player.x) * (L.x - player.x) + (L.z - player.z) * (L.z - player.z);
     if (d2 > 40 * 40) continue;
+    // NEIGHBOURS DON'T SHINE THROUGH THE BULKHEAD. A pooled point light has
+    // no occluder — a strip two compartments away with a 19 m reach lit our
+    // walls from BEHIND, and that unowned leak was what kept a blacked-out
+    // room sitting at a flat blue lift instead of at zero. It is invisible
+    // when you are in a lit room, and it is the entire problem when you are
+    // not. Shortening the reach of everything outside your own compartment
+    // kills the leak but still lets a lit room read as lit when you look into
+    // it through a hatch; the doorway transfer itself is updateDoorSpill's
+    // job, and that one is placed with knowledge of the wall.
+    const leak = inDark && n !== pnode ? 0.47 : 1;
     if (L.mode === 'dead' && L.emergency) {
       // red battery lamp over the hatch — dim, warm, with a slow breathe
       lightPool.add(L.em.x, L.em.y, L.em.z, 0xff4030,
-        2.6 + Math.sin(performance.now() * 0.0011 + L.phase) * 0.5, 11, 1.9);
+        2.6 + Math.sin(performance.now() * 0.0011 + L.phase) * 0.5, 11 * leak, 1.9);
     } else {
       // hung WELL below the plating: the throw pools on the deck and walls
       // while the ceiling above stays near-black (user: bright ceilings
@@ -509,7 +579,7 @@ function updateRoomLightPool() {
       for (let f = 0; f < nFix; f++) {
         const off = nFix === 1 ? 0 : (f - (nFix - 1) / 2) * stepW;
         lightPool.add(L.x + (alongX ? off : 0), L.y - 1.25, L.z + (alongX ? 0 : off),
-          0xbfd4f2, L.mode === 'steady' ? 14 : 15 * L.lvl, 19, 1.9);
+          0xbfd4f2, L.mode === 'steady' ? 14 : 15 * L.lvl, 19 * leak, 1.9);
       }
     }
   }
@@ -529,20 +599,39 @@ function updateRoomLightPool() {
   const lit = [];
   for (let i = 0; i < agents.rifleLightN; i++) lit.push(agents.rifleLights[i]);
   lit.sort((a, b) => a.d2 - b.d2);
-  const spots = Math.min(teamTorches.length, lit.length);
-  for (let i = 0; i < teamTorches.length; i++) {
+  const spots = Math.min(teamSpotN, lit.length);
+  for (let i = 0; i < teamSpotN; i++) {
     const T = teamTorches[i], r = i < spots ? lit[i] : null;
     if (!r) { T.intensity = 0; continue; }
     T.position.set(r.ox, r.oy, r.oz);
-    T.target.position.set(r.tx, r.ty, r.tz);
+    // NOSE-DOWN. agents3d solves the aim purely in plan view, so every beam
+    // came out dead level at 1.05 m and a room full of marines read as a line
+    // of dots ruled around the bulkhead at exactly chest height. Men clearing
+    // a compartment hold the light down: a 3-degree depression puts the pool
+    // low on the far wall, and on a long throw it lands on the DECK short of
+    // the wall instead — which is where you actually look for a body.
+    T.target.position.set(r.tx, r.ty - r.throw * 0.05, r.tz);
     T.target.updateMatrixWorld();
-    T.distance = r.throw + 8;
-    T.intensity = 26;
+    // three windows the inverse-square falloff to zero at `distance` with a
+    // pow4 ramp, so a cutoff set just past the wall eats about half the
+    // landing brightness. Put the cutoff well beyond the throw and let the
+    // decay do the work — the beam then dies with range instead of with an
+    // arbitrary radius.
+    T.distance = r.throw * 1.6 + 8;
+    T.intensity = TEAM_TORCH_CD;
   }
-  const rlCap = (RUNGS[rung].rifleLights ?? 4) * 2;
+  // OVERFLOW ONLY, and kept on a very short leash. A point light AT the wall
+  // grazes it and dumps most of its output backwards into the room, which is
+  // why the old blobs washed everything; backing it 1.3 m off the surface
+  // along the man's own beam makes it face the wall and read as a disc, and a
+  // 5 m reach means it physically cannot reach the compartment behind it.
+  const rlCap = RUNGS[rung].rifleLights ?? 4;
   for (let i = spots; i < Math.min(lit.length, spots + rlCap); i++) {
     const r = lit[i];
-    lightPool.add(r.tx, r.ty, r.tz, 0xdCE6FF, 8, r.throw * 0.4 + 8, 1.7);
+    const bx = r.tx - r.ox, bz = r.tz - r.oz;
+    const bl = Math.hypot(bx, bz) || 1;
+    lightPool.add(r.tx - bx / bl * 1.3, r.ty - Math.min(r.throw * 0.05, 1.0), r.tz - bz / bl * 1.3,
+      TEAM_TORCH_HEX, 26, 5, 2);
   }
 }
 
@@ -2094,13 +2183,23 @@ function frame(now) {
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
   lamp.intensity = inDark ? 0.0 : 4.5 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
-  torch.intensity += ((inDark ? 95 : 60) - torch.intensity) * dimT;
+  // candela, not the old 1.5-decay number: at true inverse-square 430 cd puts
+  // a wall at 4 m near clipping and a bulkhead at 20 m at a believable glimmer,
+  // which is what a handheld actually does. The spill is a tenth of it, and
+  // the viewmodel rig a four-hundredth — both ride the same dial so the whole
+  // lamp brightens and dims as one.
+  torch.intensity += ((inDark ? 430 : 260) - torch.intensity) * dimT;
+  torchSpill.intensity = torch.intensity * 0.09;
+  gunFill.intensity = torch.intensity * 0.0038;
   torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
+  torchSpill.distance = inFog ? sim.P.darkness.fogViewM + 1 : 14;
   {
     const tp = player.cameraPose();
-    const tdir = new THREE.Vector3();
+    const tdir = _torchDir;
     camera.getWorldDirection(tdir);
     torch.position.set(tp.x, tp.y - 0.1, tp.z);
+    // spill apex out past the muzzle — see the note where it is built
+    torchSpill.position.set(tp.x + tdir.x * 0.75, tp.y - 0.1 + tdir.y * 0.75, tp.z + tdir.z * 0.75);
     torchTarget.position.set(tp.x + tdir.x * 10, tp.y + tdir.y * 10, tp.z + tdir.z * 10);
   }
   // fog wall: global exponential-ish fog closes in inside a spore room
@@ -2119,7 +2218,7 @@ function frame(now) {
   fire.update(dtReal, player.x, player.z);
   sparks.update(dtReal, now / 1000, player.x, player.z);
   updateMotes(dtReal);
-  updateRoomLightPool();
+  updateRoomLightPool(inDark);
   updateDoorSpill();
   updateMuzzleLights();
   lightPool.commit(player.x, player.z);
