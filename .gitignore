@@ -1,3 +1,6 @@
 node_modules/
 dist/
 _app-compose*.mjs
+
+# Claude Code agent worktrees (transient; auto-removed when an agent finishes)
+.claude/
