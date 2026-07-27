@@ -621,8 +621,13 @@ var FLAG = {
   // combat form in a lunge/charge burst (render sprint)
   LEAPING: 1 << 13,
   // combat form airborne mid-leap (render lifted off the floor)
-  ODST: 1 << 14
+  ODST: 1 << 14,
   // armory-reserve ODST (render in black plate)
+  // TRIGGER DOWN ON THE FLAMETHROWER this instant. FLAMER says a man carries
+  // the thing; this says fuel is leaving the nozzle right now, which is the
+  // only moment there is a jet to draw. Paired with graph.burnX/burnY, which
+  // say where that fuel is landing.
+  FLAMING: 1 << 15
 };
 var CLIP = { IDLE: 0, WALK: 1, RUN: 2, ATTACK: 3, DEATH: 4, WRITHE: 5 };
 var AgentBuffer = class {
@@ -766,6 +771,8 @@ var ShipGraph = class {
     this.lightMode = new Uint8Array(this.n);
     this.breachNode = -1;
     this.burningUntil = new Float64Array(this.n);
+    this.burnX = new Float32Array(this.n);
+    this.burnY = new Float32Array(this.n);
     this.trailNode = new Float32Array(this.n);
     this.trailEdge = new Float32Array(this.edges.length);
     this._layout();
@@ -2083,6 +2090,9 @@ function updateMarineTick(sim2, a, dt) {
           a.fuel -= sim2.P.flamethrower.fuelPerCorpse;
           sim2.stats.corpsesBurned++;
           sim2.graph.burningUntil[a.node] = sim2.t + sim2.P.flamethrower.burnNodeSec;
+          sim2.graph.burnX[a.node] = corpse.x;
+          sim2.graph.burnY[a.node] = corpse.y;
+          a.flamingT = sim2.t;
           sim2.graph.invalidatePathCache();
           if (sim2.stats.corpsesBurned % 10 === 1) sim2.log("burn", `flamethrower burning bodies in ${nd.name} (fuel ${a.fuel.toFixed(0)})`, a.node);
         }
@@ -4027,6 +4037,17 @@ function resolveCombat(sim2, dt) {
         anyFire = true;
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim2.graph.burningUntil[node] = sim2.t + P.flamethrower.burnNodeSec;
+        let aim = targets[0], aimD = Infinity;
+        for (const t of targets) {
+          const d2 = (t.x - flamer.x) ** 2 + (t.y - flamer.y) ** 2;
+          if (d2 < aimD - 1e-9) {
+            aimD = d2;
+            aim = t;
+          }
+        }
+        sim2.graph.burnX[node] = aim.x;
+        sim2.graph.burnY[node] = aim.y;
+        flamer.flamingT = sim2.t;
         sim2.graph.invalidatePathCache();
         let flamePool = P.flamethrower.dps * dt;
         for (const t of targets) {
@@ -6267,6 +6288,7 @@ var Sim = class {
       if (a.inShaftAmbush !== void 0) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;
+      if (this.t - (a.flamingT ?? -99) < 0.5) flags |= FLAG.FLAMING;
       if (a.odst) flags |= FLAG.ODST;
       if (a.move && a.move.layer === "shaft" && a.move.hidden) flags |= FLAG.IN_SHAFT;
       if (a.hostArmed || a.faction === FACTION.CORPSE && a.wasArmed && a.damage < 100) flags |= FLAG.ARMED_HOST;
@@ -6281,6 +6303,7 @@ var Sim = class {
   _clipFor(a) {
     if (a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) return CLIP.DEATH;
     if (a.state === STATE.GRABBING || a.state === STATE.FIGHT) return CLIP.ATTACK;
+    if (this.t - (a.flamingT ?? -99) < 0.5) return CLIP.ATTACK;
     if (a.faction === FACTION.INFECTION) return a.move ? CLIP.RUN : CLIP.WRITHE;
     if (a.closeFollow) return (a.followSpeed ?? 0) > 3.2 ? CLIP.RUN : (a.followSpeed ?? 0) > 0.4 ? CLIP.WALK : CLIP.IDLE;
     if (a.move) return this._speedMult(a) > 1.2 ? CLIP.RUN : CLIP.WALK;
