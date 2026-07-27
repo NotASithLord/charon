@@ -374,6 +374,7 @@ agents.rifle.castShadow = true;
 // The recompile rungs are PREWARMED behind the intro (compileAsync), so
 // stepping down mid-fight costs a uniform change, not a shader storm.
 // ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
+let _shadowAt = 0; // torch shadow refresh clock (wall time, not frame parity)
 const RUNGS = [
   { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 12 },
   { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 12 },
@@ -406,6 +407,7 @@ const governor = new QualityGovernor({
         torch.shadow.map = null;
       }
       torch.shadow.needsUpdate = true;
+      _shadowAt = performance.now();
     }
     lightPool.setActive(R.lights);
     post.setBloomScale(R.bloom);
@@ -1916,7 +1918,6 @@ function updateBarks(now) {
 }
 
 // --- main loop ---
-let frameNo = 0;
 let physAcc = 0;
 let _trackerAt = 0, _observeAt = 0, _sweepAt = 0; // subsystem throttle clocks (perf pass 2)
 let _smYaw = 0, _smPitch = 0, _bobPhase = 0, _bobAmp = 0; // viewmodel sway/bob (first-strike feel)
@@ -2278,8 +2279,11 @@ function frame(now) {
       _fpsWorst *= 0.55; // spikes linger a couple of seconds, then fade
     }
   }
-  if (renderer.shadowMap.enabled && (frameNo & 1) === 0) torch.shadow.needsUpdate = true; // 30Hz shadows
-  frameNo++;
+  // WALL CLOCK, not frame parity: every-other-frame is 30Hz at 60Hz but 120Hz
+  // on the Legion's 240Hz panel, and the map is head-locked to the camera pose
+  // so two thirds of those passes re-rendered an identical depth buffer.
+  // >= 30 reproduces today's cadence exactly at 60Hz (two vsyncs is 33.3ms).
+  if (renderer.shadowMap.enabled && now - _shadowAt >= 30) { _shadowAt = now; torch.shadow.needsUpdate = true; }
   renderer.info.reset(); // per-frame accumulation across all post passes
   post.render(scene, camera, now / 1000);
   requestAnimationFrame(frame);

@@ -147,8 +147,12 @@ export class QualityGovernor {
           ]);
           if (timedOut) {
             console.warn(`[${this.label}] prewarm rung ${i} compile exceeded ${DEADLINE_MS}ms — unblocking the quality ladder (slow shader compiles; pipelines will finish warming in the background)`);
+            this._pinWarm();
             break;
           }
+          // pin before the NEXT applyRung: rung N is evicted during rung N+1's
+          // compile, so the pin has to land while it is still referenced
+          this._pinWarm();
         }
       } finally {
         restore?.();
@@ -159,11 +163,44 @@ export class QualityGovernor {
     }
   }
 
+  // KEEP WHAT PREWARM BUILT (swarm finding, and the standing "invisible flood"
+  // report). three REF-COUNTS compiled pipelines and node-builder state, and
+  // applyRung() changes the scene's light set — which changes the render
+  // object's cache key, drops the old refcount to zero and DESTROYS the
+  // GPUShaderModule and its NodeBuilderState. There is no retained tier.
+  //
+  // So prewarm's whole point was being undone as it went: compiling rung 2 and
+  // then applying rung 3 threw rung 2's work away, and only the final rung
+  // survived the intro. Worse for a pooled InstancedMesh that is EMPTY at boot
+  // — every flood set is — because its first real appearance mid-run then has
+  // to rebuild from cold, synchronously, in the middle of a fight.
+  //
+  // Pinning usedTimes to Infinity makes the `usedTimes === 0` eviction test
+  // unreachable, so nothing prewarm built is ever destroyed. Called ONLY from
+  // prewarm, never on a live ladder step, so mid-game material churn still
+  // evicts normally and this cannot grow without bound.
+  _pinWarm() {
+    try {
+      const nbc = this.renderer._nodes?.nodeBuilderCache;
+      if (nbc) for (const st of nbc.values()) st.usedTimes = Infinity;
+      const caches = this.renderer._pipelines?.caches;
+      if (caches) for (const p of caches.values()) {
+        p.usedTimes = Infinity;
+        if (p.vertexProgram) p.vertexProgram.usedTimes = Infinity;
+        if (p.fragmentProgram) p.fragmentProgram.usedTimes = Infinity;
+        if (p.computeProgram) p.computeProgram.usedTimes = Infinity;
+      }
+    } catch { /* vendored-three internals moved: degrade to the old behaviour */ }
+  }
+
   // Call once per frame with the real frame delta; walks resolution and
   // rungs on its internal 3s cadence.
   frame(now, dtRealSec, viewportW, viewportH) {
     const dtMs = Math.min(50, dtRealSec * 1000);
-    this._ema = this._ema * 0.94 + dtMs * 0.06;
+    // TIME-BASED, not frame-count. alpha 0.06 is a ~16-frame window: 267ms at
+    // 60Hz but only 67ms at 240Hz, so each 3s decision on a high-refresh panel
+    // summarised 2% of its own interval.
+    this._ema += (dtMs - this._ema) * (1 - Math.exp(-dtMs / 250));
     // VSYNC-LOCK detection (user q: "will it re-upgrade when able?"): a
     // 60Hz display never shows sub-16.7ms frames however fast the GPU is,
     // so the old "ema < 13" ascend gate made the ladder a RATCHET there —
@@ -173,7 +210,16 @@ export class QualityGovernor {
     this._interval = Math.min((this._interval ?? 16.7) + 0.01, Math.max(3.5, dtMs));
     if (now - this._evalAt <= 3000) return;
     this._evalAt = now;
-    const locked = this._ema <= this._interval + 0.8;
+    // _interval is a leaky rolling MIN of observed deltas. On a 60Hz panel that
+    // IS the refresh interval; on 120/240Hz it is merely the fastest frame we
+    // happened to present, so it sits far below the mean forever and `locked`
+    // is permanently false — which kills the ascend gate and re-creates the
+    // exact ratchet the vsync detection was added to remove. Clamp the FAST
+    // side to the cadence these thresholds are tuned to. The SLOW side still
+    // honours the measurement, so macOS Low Power Mode's 30Hz rAF throttle is
+    // still read correctly as "at cadence, hold quality".
+    const cadence = this._interval < 16.0 ? 16.7 : this._interval;
+    const locked = this._ema <= cadence + 0.8;
     // NOTHING moves while pinned or prewarming (swarm finding: the walk used
     // to run on prewarm's TRANSIENT rungs — it read rung 3's 0.60 floor
     // mid-compile-grind and stranded pixel ratio below rung 0's 0.85 floor
@@ -182,10 +228,17 @@ export class QualityGovernor {
     const R = this.rungs[this.rung];
     const cur = this.renderer.getPixelRatio();
     const floor = R.res[0];
-    const budgetCap = this.hd ? 9 : Math.sqrt(this.pixelBudget / ((viewportW * viewportH) || 1));
+    // NEVER BELOW NATIVE. sqrt(3.0e6 / 4.10e6) = 0.856 on a 2560x1600 dpr=1
+    // panel, so the budget pinned an RTX 4070 at 72% of native for the whole
+    // run — and the ascend step's 0.006 proposal was rejected by the 0.01
+    // epsilon below, so it could never climb back out either.
+    const budgetCap = this.hd ? 9 : Math.max(1, Math.sqrt(this.pixelBudget / ((viewportW * viewportH) || 1)));
     const cap = Math.max(floor, Math.min(window.devicePixelRatio || 1, this.hd ? 2 : R.res[1], budgetCap));
     let next = cur;
-    if (this._ema > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
+    // snap into range FIRST: boot can start above the cap (pixelRatioCap is a
+    // fixed 1.25) and no other branch walks it down
+    if (cur > cap + 0.01) next = cap;
+    else if (this._ema > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
     else if ((this._ema < 13 || locked) && cur < cap) next = Math.min(cap, cur + 0.1);
     else if (cur < floor - 0.01) next = floor; // self-heal: never sit stranded below the active rung's floor
     if (Math.abs(next - cur) > 0.01) {
