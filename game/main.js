@@ -2238,3 +2238,4 @@ requestAnimationFrame(frame);
 
 // debug hooks
 window.__game = { sim, world, player, agents, weapon, camera, scene, renderer };
+window.__audio = audio; // sound-board / audit harness

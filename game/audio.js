@@ -6,10 +6,60 @@
 
 import { PositionalSynth } from '../engine/audio.js';
 
+// REAL FLOOD AUDIO (user sound audit): the procedural stand-ins here were
+// rejected outright — "boom sucks", "death scream is a joke", "scream is the
+// WORST" — and real Halo flood recordings were supplied to replace them.
+// Downsampled to 22.05 kHz mono and trimmed; a key may carry several takes so
+// a repeated cue doesn't machine-gun the same waveform.
+const SAMPLES = {
+  boom: ['boom.wav', 'boom2.wav'],               // carrier rupture / blast
+  scream: ['scream.wav', 'scream2.wav'],         // a human being taken
+  deathScream: ['deathScream.wav'],
+  growl: ['growl.wav', 'growl2.wav'],            // combat form moving
+  shriek: ['shriek.wav', 'shriek2.wav'],         // infection form
+};
+// KILLED OUTRIGHT by the audit, with no real sample to stand in yet. Dropping
+// the buffer is the whole fix — play() no-ops on an unknown name — so every
+// call site stays put for whenever a real recording arrives.
+const MUTED = ['bounce', 'clack'];
+
 export class GameAudio extends PositionalSynth {
   constructor() {
     super();
     this.ambientOneShot = 'groan'; // hull groans ride the ambience bed
+    this._alts = {};
+  }
+
+  // one cue, several takes: swap the chosen take in for the call's duration so
+  // the engine's play() needs no notion of variants
+  play(name, at = null, vol = 1, key = null, minGapMs = 90) {
+    const alts = this._alts[name];
+    if (alts && alts.length > 1) {
+      const saved = this.buffers[name];
+      this.buffers[name] = alts[(Math.random() * alts.length) | 0];
+      const r = super.play(name, at, vol, key, minGapMs);
+      this.buffers[name] = saved;
+      return r;
+    }
+    return super.play(name, at, vol, key, minGapMs);
+  }
+
+  // fetch + decode the real takes over the procedural bank. Async and
+  // best-effort: until a file lands the procedural voice still plays, and a
+  // missing or undecodable file just leaves the bank alone.
+  async _loadSamples() {
+    // in parallel — loaded one after another, the last cue in the list was
+    // still procedural seconds into the run
+    await Promise.all(Object.entries(SAMPLES).map(async ([key, files]) => {
+      const bufs = (await Promise.all(files.map(async (f) => {
+        try {
+          const res = await fetch(`./assets/sounds/${f}`);
+          if (!res.ok) return null;
+          return await this.ctx.decodeAudioData(await res.arrayBuffer());
+        } catch { return null; } // keep whatever is already in the bank
+      }))).filter(Boolean);
+      if (bufs.length) { this.buffers[key] = bufs[0]; this._alts[key] = bufs; }
+    }));
   }
 
   // --- procedural sample bank -----------------------------------------------
@@ -157,5 +207,8 @@ export class GameAudio extends PositionalSynth {
       }
       return v * 0.7;
     });
+
+    for (const k of MUTED) delete this.buffers[k];
+    this._loadSamples();
   }
 }

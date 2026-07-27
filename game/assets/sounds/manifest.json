@@ -1,0 +1,21 @@
+{
+  "boom": [
+    "boom.wav",
+    "boom2.wav"
+  ],
+  "scream": [
+    "scream.wav",
+    "scream2.wav"
+  ],
+  "deathScream": [
+    "deathScream.wav"
+  ],
+  "growl": [
+    "growl.wav",
+    "growl2.wav"
+  ],
+  "shriek": [
+    "shriek.wav",
+    "shriek2.wav"
+  ]
+}

@@ -45,7 +45,7 @@ const TARGETS = [
 // The carrier's textures come out of a GLB as JPEG (scripts/convert-carrier.mjs
 // copies them through rather than re-encoding), so the MIME type has to follow
 // the extension — a jpeg served as image/png decodes to nothing.
-const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.wav': 'audio/wav' };
 const IMAGE_EXT = Object.keys(MIME);
 const dataUri = (name, bytes) => {
   const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
@@ -74,6 +74,12 @@ const buildTarget = async (t) => {
       `const ASSETS = ${JSON.stringify(map)};`,
       `const norm = (u) => String(u).replace(/^\\.\\//, '');`,
       `THREE.DefaultLoadingManager.setURLModifier((u) => ASSETS[norm(u)] ?? u);`,
+      // AUDIO GOES THROUGH fetch(), NOT three's loader (game/audio.js pulls the
+      // real flood samples itself), and in peerd's opaque-origin sandbox a
+      // relative fetch resolves against nothing. Serve the packed data: URI
+      // for any URL we baked, and pass everything else through untouched.
+      `{ const _f = globalThis.fetch.bind(globalThis);`,
+      `  globalThis.fetch = (u, o) => _f(typeof u === 'string' ? (ASSETS[norm(u)] ?? u) : u, o); }`,
     ].join('\n');
     const preludePath = join(TMP, `prelude-${t.name}.mjs`);
     await writeFile(preludePath, prelude);
