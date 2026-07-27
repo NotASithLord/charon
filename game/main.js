@@ -461,20 +461,23 @@ const governor = new QualityGovernor({
   renderer, rungs: RUNGS, pixelBudget: PIXEL_BUDGET, hd: HD, label: 'charon',
   apply: (R, i) => {
     rung = i;
-    renderer.shadowMap.enabled = R.shadows;
+    // NOTHING HERE MAY DESTROY A SHADOW RESOURCE. Reported again on the Legion
+    // (Windows/Chrome/Dawn): "Destroyed texture [ShadowDepthTexture] used in a
+    // submit", the same class of crash Firefox died of. Two paths caused it and
+    // both are gone:
+    //   - toggling renderer.shadowMap.enabled across a rung tears shadow
+    //     resources down mid-flight. It is pinned on at boot now; a rung with
+    //     shadows off simply stops the caster, so no shadow pass runs and the
+    //     cost is the same.
+    //   - re-sizing the map orphaned the old render target, and an orphaned
+    //     target IS eventually destroyed — which is exactly what the error
+    //     says. The map size is fixed for the session instead.
+    // Why it only showed up on that machine now: the 240Hz cadence fix
+    // unfroze the ladder. Before it, `locked` was permanently false on a
+    // high-refresh panel and rung changes could not happen at all, so this
+    // latent crash had nothing to trigger it.
     torch.castShadow = R.shadows;
     if (R.shadows) {
-      if (torch.shadow.mapSize.x !== R.shadowMap) {
-        torch.shadow.mapSize.set(R.shadowMap, R.shadowMap);
-        // NO dispose (user's Firefox died with "Texture with
-        // 'ShadowDepthTexture' label has been destroyed"): rung changes are
-        // frequent now, and destroying the depth texture while an in-flight
-        // pass still references it kills the device on stricter validators.
-        // Nulling the map makes three allocate the new size lazily; the old
-        // target stays alive until nothing references it — a bounded, tiny
-        // leak (three sizes ever) instead of a device loss.
-        torch.shadow.map = null;
-      }
       torch.shadow.needsUpdate = true;
       _shadowAt = performance.now();
     }
@@ -2413,7 +2416,8 @@ function frame(now) {
   // on the Legion's 240Hz panel, and the map is head-locked to the camera pose
   // so two thirds of those passes re-rendered an identical depth buffer.
   // >= 30 reproduces today's cadence exactly at 60Hz (two vsyncs is 33.3ms).
-  if (renderer.shadowMap.enabled && now - _shadowAt >= 30) { _shadowAt = now; torch.shadow.needsUpdate = true; }
+  // gate on the CASTER, not the renderer flag — the flag is pinned on now
+  if (torch.castShadow && now - _shadowAt >= 30) { _shadowAt = now; torch.shadow.needsUpdate = true; }
   renderer.info.reset(); // per-frame accumulation across all post passes
   post.render(scene, camera, now / 1000);
   requestAnimationFrame(frame);
