@@ -21,6 +21,8 @@ import { FACTION, FLAG, CLIP, CLIPS } from '../shared/agentBuffer.js';
 import { World, elevOf } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { CARRIER_CLIPS } from './carrier-model.js';
+import { FireFX, FlameJetFX } from '../engine/fx.js';
+import { LightPool } from '../engine/lights.js';
 
 const QP = new URLSearchParams(location.search);
 const canvas = document.getElementById('c');
@@ -88,6 +90,17 @@ applyLighting();
 // --- orbit camera ---------------------------------------------------------
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
 const orbit = { yaw: 2.3, pitch: 0.42, dist: 5.6, tx: roomX, ty: floorY + 0.9, tz: roomZ };
+
+// COMBAT FX, on the game's own wiring. Without these a flamethrower spawned
+// here is a man holding a prop: the jet and the fire it lights are DECLARED by
+// Agents3D and drained by the host, so a sandbox with no host draws neither.
+// Same light pool, same drain as game/main.js, so what burns here burns the
+// way it burns in game.
+const lightPool = new LightPool(scene, 8);
+const fire = new FireFX(scene, lightPool);
+const jets = new FlameJetFX(scene, lightPool);
+fire.camera = camera;
+jets.camera = camera;
 
 // The camera frames whatever you are looking at: the selected body, else the
 // middle of everything in the room, else the empty room. Rooms here run to
@@ -181,6 +194,17 @@ const SPAWNS = [
   ['combat (armed)', FACTION.COMBAT, (a) => { a.hostArmed = true; }],
   ['infection form', FACTION.INFECTION, (a) => { a.hp = a.maxHp = 1; }],
   ['marine', FACTION.MARINE, null],
+  // The sim is PAUSED by default, so `flamingT = t` never ages out and the man
+  // holds the trigger down for as long as you want to look at him. The burn
+  // point 5 m down his heading is what the sim would have recorded, so the jet
+  // reaches it and FireFX lights the far end of it.
+  ['flamethrower', FACTION.MARINE, (a) => {
+    a.flamer = true; a.fuel = 100;
+    a.flamingT = sim.t;
+    sim.graph.burningUntil[a.node] = sim.t + 12;
+    sim.graph.burnX[a.node] = a.x + Math.cos(a.heading) * 5;
+    sim.graph.burnY[a.node] = a.y + Math.sin(a.heading) * 5;
+  }],
   ['ODST', FACTION.MARINE, (a) => { a.odst = true; }],
   ['crew (armed)', FACTION.ARMED, null],
   ['civilian', FACTION.CIVILIAN, null],
@@ -278,6 +302,24 @@ renderer.setAnimationLoop(() => {
 
   placeCamera(dt);
   agents.update(dt);
+  // drain the combat FX exactly as game/main.js does
+  lightPool.frame();
+  for (let n = 0; n < sim.graph.n; n++) {
+    const key = `burn${n}`, burning = sim.graph.burningUntil[n] > sim.t;
+    if (burning && !fire.fires.has(key)) {
+      const nd = sim.graph.node(n);
+      const [bx, bz] = world.simToWorld(sim.graph.burnX[n], sim.graph.burnY[n], nd.deck);
+      fire.add(key, bx, bz, elevOf(nd.deck), 1.2);
+    } else if (!burning && fire.fires.has(key)) fire.remove(key);
+  }
+  fire.update(dt, camera.position.x, camera.position.z);
+  jets.frame();
+  for (let i = 0; i < agents.flameJetN; i++) {
+    const r = agents.flameJets[i];
+    jets.emit(r.ox, r.oy, r.oz, r.dx, r.dy, r.dz, r.len, r.seed);
+  }
+  jets.update(dt, camera.position.x, camera.position.y, camera.position.z);
+  lightPool.commit(camera.position.x, camera.position.z);
   renderer.render(scene, camera);
 
   el('hud').textContent = `${room.name} · deck ${room.deck} · `
@@ -285,4 +327,4 @@ renderer.setAnimationLoop(() => {
     + (running ? ' · SIM RUNNING' : ' · sim paused');
 });
 
-window.__sandbox = { sim, world, agents, scene, camera, room, spawn, clearAll };
+window.__sandbox = { sim, world, agents, scene, camera, room, spawn, clearAll, orbit, jets, fire };

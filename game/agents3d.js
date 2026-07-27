@@ -7,7 +7,7 @@ import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import * as TSL from '../engine/vendor/three.tsl.module.js';
 import { FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
 import { elevOf } from './world.js';
-import { carryGeometry } from './rifle-model.js';
+import { carryGeometry, flamerGeometry, FLAMER_MUZZLE } from './rifle-model.js';
 import { characterParts } from './characters.js';
 import { buildCarrier, CarrierAnimator, SACK_BLOAT_M } from './carrier-model.js';
 import { RagdollSystem } from '../engine/physics/ragdoll.js';
@@ -394,6 +394,20 @@ export class Agents3D {
     this.rifle = makeInstanced(scene, carryGeometry(), 0x23272e);
     this.rifle.material.roughness = 0.45;
     this.rifle.material.metalness = 0.65;
+    // THE FLAMETHROWER IS NOT AN MA5 (it was rendering as one, which made the
+    // only weapon that permanently destroys a body indistinguishable from the
+    // ones that don't). Same carry solve, different silhouette — see
+    // game/rifle-model.js. Scorched olive, and only a whisper of emissive for
+    // the igniter pilot: the material is uniform over the whole mesh, so a
+    // pilot bright enough to see at the nozzle turns the entire weapon into a
+    // bar of hot copper (it did).
+    this.flamer = makeInstanced(scene, flamerGeometry(), 0x36382f, 0x2a0800, 0.16);
+    this.flamer.material.roughness = 0.72;
+    this.flamer.material.metalness = 0.45;
+    // flame jets declared this frame; the host drains them into its FlameJetFX
+    // exactly as it drains rifleLights into the light pool (records recycle)
+    this.flameJets = [];
+    this.flameJetN = 0;
 
     // combat FX: tracers + muzzle flashes. Flood fire (a hostArmed combat
     // form emptying its stolen rifle) gets its own sickly-green tracer so
@@ -915,10 +929,51 @@ export class Agents3D {
     return this.sim.darkAt(nodeIdx) || this.sim.graph.lightMode[nodeIdx] === 3;
   }
 
+  // A JET OUT OF THE NOZZLE (FLAG.FLAMING — the sim's trigger, held only while
+  // fuel is actually leaving the weapon). Two things are borrowed rather than
+  // invented, and both matter:
+  //   DIRECTION is the barrel's real world bearing and elevation, the same
+  //     `_aimOf` vector the torch cone and the weapon light already ride, so
+  //     the stream physically cannot point somewhere the weapon does not.
+  //   LENGTH comes from the sim: graph.burnX/burnY is the exact spot the fuel
+  //     is landing on, so the jet REACHES what it is setting alight and the
+  //     fire that appears there is the end of this stream, not a coincidence.
+  // The host drains these into a FlameJetFX (engine/fx.js).
+  _noteFlameJet(nodeIdx, wx, gy, wz, heading, cfg, mz, deck, id) {
+    const rotY = heading + mz.yaw;                 // down the barrel, like the beam
+    const ce = Math.cos(mz.elev);
+    const dx = Math.cos(rotY) * ce, dy = Math.sin(mz.elev), dz = -Math.sin(rotY) * ce;
+    const fx = Math.cos(heading), fz = -Math.sin(heading);
+    // the carry solve measured its muzzle against the MA5's tip; the igniter
+    // ring stands a little proud of that, so push the origin the difference
+    const over = FLAMER_MUZZLE.z - RIFLE_TIP;
+    const ox = wx + fx * mz.f - fz * cfg.right + dx * over;
+    const oy = gy + mz.y + dy * over;
+    const oz = wz + fz * mz.f + fx * cfg.right + dz * over;
+    let len = 5.0;
+    const g = this.sim.graph;
+    if (g.burningUntil[nodeIdx] > this.sim.t) {
+      const [bwx, bwz] = this.world.simToWorld(g.burnX[nodeIdx], g.burnY[nodeIdx], deck);
+      // ...over-reached by the fraction of the card the flame burns out before
+      // (the shader spends the fuel by ~0.85 of the quad), so the VISIBLE end
+      // of the stream lands on the fire instead of a metre short of it
+      len = Math.hypot(bwx - ox, bwz - oz) / 0.85;
+    }
+    const r = this.flameJets[this.flameJetN] ?? (this.flameJets[this.flameJetN] = {});
+    r.ox = ox; r.oy = oy; r.oz = oz;
+    r.dx = dx; r.dy = dy; r.dz = dz;
+    // a stream has a range whatever it is pointed at: too short and it reads as
+    // a blowtorch, too long and it is a laser
+    r.len = Math.max(2.2, Math.min(9, len));
+    r.seed = id;
+    this.flameJetN++;
+  }
+
   update(dt) {
     const { sim, world } = this;
     const buf = sim.buffer;
     this.rifleLightN = 0;
+    this.flameJetN = 0;
     // First frame: everything already dead is PRE-PLACED (the event/breach
     // corpses seeded at t=0) — mark it so it lies where it was authored instead
     // of every corpse on the ship flopping the instant the game loads. Only
@@ -934,7 +989,7 @@ export class Agents3D {
     // age recent blasts (a death registers a frame or two after the boom)
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
-    const counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
+    const counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flamer: 0, flash: 0, beam: 0 };
     let clip = 0, animT = 0, curId = 0, curPanic = false, curBob = 0, curAim = 0;
     const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId, null, 0, curPanic);
     // rifle carriers: arms placed on the solved carry, not swung
@@ -1218,7 +1273,13 @@ export class Agents3D {
           stampHold(set, counts.armed++);
           const carry = this._holdFor(set, curAim);
           this._carryAt(bx, gy, bz, heading, carry.rifle, curBob, lean);
-          this.rifle.setMatrixAt(counts.rifle++, this._m);
+          // the flamethrower rides the SAME solve — only the mesh differs
+          if (flags & FLAG.FLAMER) this.flamer.setMatrixAt(counts.flamer++, this._m);
+          else this.rifle.setMatrixAt(counts.rifle++, this._m);
+          // bx/bz, not wx/wz: the aim sway rocks the body over its planted
+          // boots, and the jet has to leave the nozzle where the nozzle IS
+          if (flags & FLAG.FLAMING) this._noteFlameJet(buf.nodeId[i], bx, gy, bz, heading,
+            carry.rifle, this._aimOf(carry.rifle, curBob, lean), deck, id);
           if (this._needsLamp(buf.nodeId[i])) {
             // out of the NOZZLE, not the sternum (user: "flashlights aligned
             // with gun nozzles") — and down the barrel's REAL bearing and
@@ -1247,7 +1308,10 @@ export class Agents3D {
           stampHold(set, (flags & FLAG.ODST) ? counts.odst++ : counts.marine++);
           const carry = this._holdFor(set, curAim);
           this._carryAt(bx, gy, bz, heading, carry.rifle, curBob, lean);
-          this.rifle.setMatrixAt(counts.rifle++, this._m);
+          if (flags & FLAG.FLAMER) this.flamer.setMatrixAt(counts.flamer++, this._m);
+          else this.rifle.setMatrixAt(counts.rifle++, this._m);
+          if (flags & FLAG.FLAMING) this._noteFlameJet(buf.nodeId[i], bx, gy, bz, heading,
+            carry.rifle, this._aimOf(carry.rifle, curBob, lean), deck, id);
           if (this._needsLamp(buf.nodeId[i])) {
             const mz = this._aimOf(carry.rifle, curBob, lean);
             if (sim.fogAt(buf.nodeId[i])) {
@@ -1538,10 +1602,11 @@ export class Agents3D {
     // a carried rifle is only ever within torch reach when its carrier is
     this.rifle.castShadow = !cull || this._castNear.has(this.armedSet) || this._castNear.has(this.marineSet)
       || this._castNear.has(this.odstSet) || this._castNear.has(this.combatOdstSet);
+    this.flamer.castShadow = this.rifle.castShadow;
     this.carrier.castShadow = !cull || this._castNear.has(this.carrier);
     for (const [mesh, c] of [[this.carrier, counts.carrier],
-    [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flash, counts.flash],
-    [this.beams, counts.beam]]) {
+    [this.corpse, counts.corpse], [this.rifle, counts.rifle], [this.flamer, counts.flamer],
+    [this.flash, counts.flash], [this.beams, counts.beam]]) {
       commitInstanced(mesh, c);
     }
     this._commitCarrierAnim(counts.carrier);   // per-instance clip/phase/swell

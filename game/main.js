@@ -12,7 +12,7 @@ import { Player } from './player.js';
 import { HeldWeapon } from './weapon.js';
 import { MA5, FRAG, ODST } from './fps-data.js';
 import { GameAudio } from './audio.js';
-import { FireFX, SparkFX, BloodFX } from '../engine/fx.js';
+import { FireFX, SparkFX, BloodFX, FlameJetFX } from '../engine/fx.js';
 import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
 import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
@@ -334,8 +334,12 @@ if (world.doorPanelsBad) {
 // event rattled the whole hull, so every deck carries a few small smolders
 // and shorted panels. Never on the player's spawn room.
 const sparks = new SparkFX(scene, lightPool);
+// the flamethrower's stream: declared per frame from agents3d's FLAG.FLAMING
+// carriers, exactly as the weapon lights are (see updateFlameJets)
+const jets = new FlameJetFX(scene, lightPool);
 fire.camera = camera;   // embers/sparks are instanced quads that billboard
 sparks.camera = camera; // to the camera each update
+jets.camera = camera;
 {
   const dmgRng = new RNG(seed + ':damage');
   const byDeck = new Map();
@@ -677,17 +681,41 @@ function updateMuzzleLights() {
   if (boomLight.intensity > 0.02) lightPool.add(boomLight.position.x, boomLight.position.y, boomLight.position.z, 0xffc890, boomLight.intensity, 22, 1.6);
 }
 
-// live flamethrower burns from the sim
+// live flamethrower burns from the sim.
+// THE FIRE LANDS WHERE THE FLAME WENT. This used to light the blaze at the
+// room's GEOMETRIC CENTRE, because the node was all the sim handed over — so
+// in a hangar the flame hit a body against a bulkhead and a fire lit up thirty
+// metres away mid-deck. The sim now records the spot the fuel landed on
+// (graph.burnX/burnY, written wherever burningUntil is), the same route the
+// blood marks take, and FireFX.add has always taken an arbitrary world point.
 function syncBurnFires() {
   for (let n = 0; n < sim.graph.n; n++) {
     const key = `burn${n}`;
     const burning = sim.graph.burningUntil[n] > sim.t;
     if (burning && !fire.fires.has(key)) {
       const nd = sim.graph.node(n);
-      const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
+      const [wx, wz] = world.simToWorld(sim.graph.burnX[n], sim.graph.burnY[n], nd.deck);
       fire.add(key, wx, wz, elevOf(nd.deck), 1.2);
     } else if (!burning && fire.fires.has(key)) fire.remove(key);
   }
+}
+
+// THE FLAME JET (item 1): agents3d hands over one record per marine with the
+// trigger down — origin at his nozzle, direction down his barrel, length out to
+// the spot the sim says the fuel is landing on. Drained here, like rifleLights,
+// so the FX and its three pooled lights live with the rest of the effects.
+// The roar is retriggered on a key gap slightly under the sample length, so a
+// sustained burn sounds continuous and a corpse-cache squirt is one bark.
+function updateFlameJets(dtReal) {
+  jets.frame();
+  for (let i = 0; i < agents.flameJetN; i++) {
+    const r = agents.flameJets[i];
+    jets.emit(r.ox, r.oy, r.oz, r.dx, r.dy, r.dz, r.len, r.seed);
+    if (Math.hypot(r.ox - player.x, r.oz - player.z) < 34) {
+      audio.play('flame', { x: r.ox, z: r.oz }, 0.7, `flame${r.seed}`, 900);
+    }
+  }
+  jets.update(dtReal, camera.position.x, camera.position.y, camera.position.z);
 }
 
 const weapon = new HeldWeapon(MA5);
@@ -2222,6 +2250,7 @@ function frame(now) {
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, player.x, player.z);
+  updateFlameJets(dtReal);
   sparks.update(dtReal, now / 1000, player.x, player.z);
   updateMotes(dtReal);
   updateRoomLightPool(inDark);

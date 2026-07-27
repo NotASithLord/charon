@@ -240,6 +240,226 @@ export class FireFX {
   }
 }
 
+// FLAME JET (the flamethrower had no visual identity at all — the one weapon
+// that permanently destroys a downed form was invisible). This is NOT FireFX
+// with a different transform: a pool fire is a column that rises off a fixed
+// base, and everything about its shader — turbulence scrolling DOWN so tongues
+// rise, an envelope that is wide at the bottom and licks to a point — is that
+// column. Pressurised fuel is the opposite: it is thrown ALONG an axis, it is
+// tightest at the nozzle and widens as it decelerates, and it burns out rather
+// than tapering. So the axis here is the quad's U, the turbulence scrolls
+// OUTWARD along it, and the envelope opens instead of closing.
+//
+// Two crossed cards containing the jet axis, rolled about that axis so one of
+// them is face-on to the camera — the same trick FireFX uses to make a flat
+// quad read as volume, applied to a horizontal stream. Pooled: rigs are built
+// once and re-aimed, because a flamethrower fires in bursts and building a
+// mesh per burst would hitch.
+let _jetMat = null;
+function jetMaterial() {
+  if (_jetMat) return _jetMat;
+  const uT = userData('jetT', 'float');
+  const uSeed = userData('jetSeed', 'float');
+  const mat = new THREE.MeshBasicNodeMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide, fog: false,
+  });
+  mat.colorNode = Fn(() => {
+    const u = uv().x;                          // 0 at the nozzle, 1 at the reach
+    const v = uv().y.sub(0.5).mul(2.0);        // -1..1 across the stream
+    // THREE turbulence layers, all travelling OUTWARD down the axis and all at
+    // different speeds — the shear between them is the one term that separates
+    // a jet from a puff. One layer alone slides as a single texture and reads
+    // as a lit cigar, which is exactly what the first pass looked like.
+    const n1 = fbm2(vec2(u.mul(3.0).sub(uT.mul(6.0)).add(uSeed.mul(13.0)), uv().y.mul(2.6)));
+    const n2 = fbm2(vec2(u.mul(7.0).sub(uT.mul(10.0)).add(uSeed.mul(7.0)), uv().y.mul(5.5)));
+    const n3 = fbm2(vec2(u.mul(15.0).sub(uT.mul(17.0)).add(uSeed.mul(3.0)), uv().y.mul(11.0)));
+    // the cone: a tight throat at the nozzle opening out as the fuel slows.
+    // pow < 1 flares it early and keeps it spreading, which is what pressurised
+    // fuel does once it loses the barrel. CAPPED below 1 so the ragged edge can
+    // never reach the quad's own boundary — uncapped, the noise pushed the
+    // envelope past it and you could see the rectangle.
+    const cone = float(0.045).add(u.pow(0.75).mul(0.86)).min(0.82);
+    const edge = cone.mul(n1.mul(1.0).add(0.45));
+    const r = clamp(abs(v).div(edge.max(0.02)), 0.0, 1.0);
+    // ...and a fade well inside the quad rim on top of the cap, so the card can
+    // have no silhouette of its own under ANY noise value. Without it the thin
+    // outer haze survived to |v| = 1 and cut off square: from inside the plume
+    // you could see the rectangle ruled across the compartment.
+    const core = r.oneMinus().pow(1.45).mul(smoothstep(0.66, 0.97, abs(v)).oneMinus());
+    // SLUGS. Fuel does not leave a nozzle at a constant rate — it comes in
+    // gouts, and the density pulsing along the axis is most of what makes this
+    // read as something being PUSHED rather than a static cone that is on.
+    const slug = n2.mul(1.3).add(0.35);
+    // the hot core survives; the skirt shreds. Restricting the fine octave to
+    // the outside is what keeps the middle looking dense instead of noisy.
+    const shred = mix(float(1.0), n3.mul(1.9), smoothstep(0.15, 0.95, r));
+    // ignites just off the nozzle and burns itself out towards the reach, with
+    // the tail broken up so the far end sheds detached puffs
+    const lit = smoothstep(0.0, 0.07, u)
+      .mul(smoothstep(0.66, 1.06, u.add(n2.sub(0.5).mul(0.5))).oneMinus())
+      // and a guaranteed stop at the quad's far end — the noise term above can
+      // leave a third of the density alive at u = 1, which cuts off square
+      .mul(smoothstep(0.88, 1.0, u).oneMinus());
+    const f = clamp(core.mul(slug).mul(shred).mul(lit).mul(1.25), 0.0, 1.0);
+    // black-body along the burn: white-hot where the fuel is still dense,
+    // cooling to sooty red as it spends itself down the axis
+    const heat = clamp(f.mul(float(1.25).sub(u.mul(0.55))), 0.0, 1.0);
+    const col = mix(
+      mix(vec3(0.55, 0.06, 0.0), vec3(1.0, 0.42, 0.03), smoothstep(0.10, 0.55, heat)),
+      vec3(1.0, 0.90, 0.62), smoothstep(0.70, 1.0, heat));
+    // THE THROAT. Unburnt fuel leaving the nozzle is blue, and that hard blue
+    // root — tight, and only in the first tenth — is most of what reads as
+    // "under pressure" rather than "on fire".
+    const throat = smoothstep(0.0, 0.11, u).oneMinus().mul(r.oneMinus().pow(3.0));
+    return vec4(col.add(vec3(0.34, 0.58, 1.0).mul(throat).mul(1.1)),
+      clamp(f.mul(0.8).add(throat.mul(0.55)), 0.0, 1.0));
+  })();
+  _jetMat = mat;
+  return mat;
+}
+
+const _xA = new THREE.Vector3(), _yA = new THREE.Vector3(), _zA = new THREE.Vector3();
+const _nY = new THREE.Vector3();
+const _toCam = new THREE.Vector3();
+const _mBasis = new THREE.Matrix4();
+
+export class FlameJetFX {
+  // `n` rigs is the hard cap on simultaneous jets. The ship carries two
+  // flamethrowers, so 4 is slack, not a budget.
+  constructor(scene, lightPool = null, n = 4) {
+    this.scene = scene;
+    this.pool = lightPool;
+    this.camera = null;  // main.js sets this; the droplets billboard to it
+    this.t = 0;
+    this._n = 0;         // jets declared this frame
+    this._live = [];
+    this.rigs = [];
+    this._max = n;
+    this._quadGeo = new THREE.PlaneGeometry(1, 1);
+    this._quadGeo.translate(0.5, 0, 0);  // pivot at the NOZZLE, +X down the jet
+    this._dropGeo = new THREE.PlaneGeometry(1, 1);
+    this._dropTex = FireFX._makeSpotTex();
+    this._dropMat = new THREE.MeshBasicMaterial({
+      color: 0xffa040, map: this._dropTex, alphaMap: this._dropTex,
+      transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+      depthWrite: false, fog: false,
+    });
+  }
+
+  _rig(i) {
+    if (this.rigs[i]) return this.rigs[i];
+    const group = new THREE.Group();
+    const cards = [];
+    for (let k = 0; k < 2; k++) {
+      const c = new THREE.Mesh(this._quadGeo, jetMaterial());
+      c.userData.jetT = 0;
+      c.userData.jetSeed = k * 0.37;
+      c.frustumCulled = false;
+      c.renderOrder = 5;
+      group.add(c);
+      cards.push(c);
+    }
+    // BURNING DROPLETS. Fuel that fails to atomise gets thrown down the axis
+    // and falls out of the stream still alight — the detail that says liquid
+    // rather than gas, and it is what puts fire on the deck short of the target.
+    const N = 22;
+    const drops = new THREE.InstancedMesh(this._dropGeo, this._dropMat, N);
+    drops.frustumCulled = false;
+    drops.renderOrder = 5;
+    group.add(drops);
+    group.visible = false;
+    this.scene.add(group);
+    const rig = {
+      group, cards, drops,
+      seeds: Array.from({ length: N }, (_, j) => (j * 0.6180339887) % 1),
+    };
+    this.rigs[i] = rig;
+    return rig;
+  }
+
+  // declare a jet for THIS frame (light-pool style — nothing persists, so a
+  // burst that ends simply stops being declared and the rig goes dark)
+  frame() { this._n = 0; }
+
+  emit(ox, oy, oz, dx, dy, dz, len, seed = 0) {
+    if (this._n >= this._max) return;
+    const r = this._live[this._n] ?? (this._live[this._n] = {});
+    r.ox = ox; r.oy = oy; r.oz = oz;
+    r.dx = dx; r.dy = dy; r.dz = dz;
+    r.len = len; r.seed = seed;
+    this._n++;
+  }
+
+  update(dt, camX, camY, camZ) {
+    this.t += dt;
+    for (let i = 0; i < this.rigs.length; i++) {
+      if (i >= this._n && this.rigs[i]) this.rigs[i].group.visible = false;
+    }
+    for (let i = 0; i < this._n; i++) {
+      const j = this._live[i];
+      const rig = this._rig(i);
+      rig.group.visible = true;
+      const L = j.len;
+      // ROLL THE CARDS ABOUT THE JET AXIS so one of them presents its face to
+      // the eye. A flame card seen edge-on is a line; billboarding the pair
+      // about the axis (rather than freely, which would swing the jet off its
+      // own aim) keeps the stream pointing where the barrel points and still
+      // gives it a face.
+      _xA.set(j.dx, j.dy, j.dz).normalize();
+      _toCam.set(camX - j.ox, camY - j.oy, camZ - j.oz);
+      _yA.crossVectors(_toCam, _xA);
+      if (_yA.lengthSq() < 1e-8) _yA.set(0, 1, 0).cross(_xA); // dead-on: any perpendicular
+      _yA.normalize();
+      _zA.crossVectors(_xA, _yA);
+      // width grows with reach — a 3 m squirt and an 8 m gout are not the same
+      // stream scaled up; the far end of a long one has spread much further
+      const W = 0.55 + L * 0.20;
+      _nY.copy(_yA).negate();
+      for (let k = 0; k < 2; k++) {
+        const c = rig.cards[k];
+        c.userData.jetT = this.t;
+        c.userData.jetSeed = j.seed * 0.019 + k * 0.41;
+        // card 0 faces the camera; card 1 is the same quad rolled 90° about
+        // the axis, so the pair crosses through the stream. (xA, zA, -yA) and
+        // not (xA, zA, yA): the latter is left-handed and setFromRotationMatrix
+        // has no rotation to give back for a mirrored basis.
+        _mBasis.makeBasis(_xA, k === 0 ? _yA : _zA, k === 0 ? _zA : _nY);
+        c.quaternion.setFromRotationMatrix(_mBasis);
+        c.position.set(j.ox, j.oy, j.oz);
+        c.scale.set(L, W, 1);
+      }
+      // droplets: launched down the axis, decelerating, falling out of it
+      const q = this.camera?.quaternion ?? _IDENT_Q;
+      for (let d = 0; d < rig.drops.count; d++) {
+        const s = rig.seeds[d];
+        const life = (this.t * (0.9 + s * 0.7) + s * 5.3) % 1;
+        const run = L * life * (0.55 + s * 0.6);
+        const fall = 2.6 * life * life * (0.4 + s);
+        const lat = (s - 0.5) * W * life * 1.6;
+        _scl.setScalar(0.05 + s * 0.05);
+        _m4.compose(_pos.set(
+          j.ox + _xA.x * run + _yA.x * lat,
+          j.oy + _xA.y * run + _yA.y * lat - fall,
+          j.oz + _xA.z * run + _yA.z * lat), q, _scl);
+        rig.drops.setMatrixAt(d, _m4);
+      }
+      rig.drops.instanceMatrix.needsUpdate = true;
+      // LIGHT. Burning fuel thrown across a room is a moving source, and it is
+      // three sources, not one — a hard white root at the nozzle and a broad
+      // orange body down the stream, so the near wall and the far wall are lit
+      // differently. Guttered on incommensurate sines, as the pool fires are.
+      const g = 1 + Math.sin(this.t * 27) * 0.22 + Math.sin(this.t * 51.3) * 0.13;
+      this.pool?.add(j.ox + _xA.x * 0.3, j.oy + _xA.y * 0.3, j.oz + _xA.z * 0.3,
+        0xffd9a0, 20 * g, 8, 2.0);
+      this.pool?.add(j.ox + _xA.x * L * 0.45, j.oy + _xA.y * L * 0.45, j.oz + _xA.z * L * 0.45,
+        0xff8a30, 26 * g, 11 + L, 1.7);
+      this.pool?.add(j.ox + _xA.x * L * 0.9, j.oy + _xA.y * L * 0.9 + 0.2, j.oz + _xA.z * L * 0.9,
+        0xff6a20, 18 * g, 10 + L, 1.7);
+    }
+  }
+}
+
 // BLOOD MARKS (user: rooms should tell their own story): a dark pool with
 // drag streaks stamped onto the deck where someone was taken or fell.
 // Render-only, ring-buffered so a long run can't accumulate unbounded

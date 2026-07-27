@@ -113,6 +113,13 @@ export class ShipGraph {
     this.lightMode = new Uint8Array(this.n);
     this.breachNode = -1;
     this.burningUntil = new Float64Array(this.n); // sim-time until which node burns
+    // WHERE IN THE ROOM IT IS BURNING. Written at every site that writes
+    // burningUntil, and only meaningful while that timer is live. Without it
+    // the renderer had nothing but the node, so it lit the fire at the room's
+    // geometric CENTRE — in a hangar that is a bulkhead thirty metres from the
+    // body the fuel actually landed on.
+    this.burnX = new Float32Array(this.n);
+    this.burnY = new Float32Array(this.n);
     // Reserved for post-POC body-gathering blood trails (companion spec §5.4):
     // a decaying per-node/per-edge marker the hive lays while hauling corpses
     // and humans can follow. Left allocated so the mechanic drops in without

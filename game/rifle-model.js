@@ -89,6 +89,94 @@ export function buildRifleViewmodel() {
   return group;
 }
 
+// --- the flamethrower ------------------------------------------------------
+// There is no ported asset for it, and there does not need to be one: what
+// matters is that the man holding the only weapon in the game that permanently
+// destroys a body is not holding an MA5. So it is built from primitives to the
+// SAME conventions as carryGeometry — +X forward, origin at the weapon centre,
+// muzzle out at RIFLE_MUZZLE.z — which means solveCarry puts hands on it with
+// no changes to the carry at all.
+//
+// The silhouette is doing all the work and every part of it is chosen to be
+// unmistakable at ten metres in the dark: twin pressure tanks riding on TOP
+// (nothing else in the game has them), a fat feed hose looping out of them, and
+// a long thin nozzle with an igniter ring where a rifle has a muzzle.
+function mergeParts(parts) {
+  let vCount = 0, iCount = 0;
+  for (const g of parts) { vCount += g.attributes.position.count; iCount += g.index.count; }
+  const pos = new Float32Array(vCount * 3), nrm = new Float32Array(vCount * 3), uv = new Float32Array(vCount * 2);
+  const idx = new Uint32Array(iCount);
+  let vo = 0, io = 0;
+  for (const g of parts) {
+    pos.set(g.attributes.position.array, vo * 3);
+    nrm.set(g.attributes.normal.array, vo * 3);
+    uv.set(g.attributes.uv.array, vo * 2);
+    const gi = g.index.array;
+    for (let k = 0; k < gi.length; k++) idx[io + k] = gi[k] + vo;
+    vo += g.attributes.position.count;
+    io += gi.length;
+    g.dispose();
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  merged.setIndex(new THREE.BufferAttribute(idx, 1));
+  return merged;
+}
+
+// nozzle tip in the flamer's local space — where the jet leaves the weapon.
+// Shorter than the MA5's 0.515: the igniter sits proud of a stubby barrel.
+export const FLAMER_MUZZLE = new THREE.Vector3(0, 0.01, 0.56);
+
+let _mergedFlamer = null;
+export function flamerGeometry() {
+  if (_mergedFlamer) return _mergedFlamer;
+  const parts = [];
+  const push = (g, x, y, z, rx = 0, ry = 0, rz = 0) => {
+    g.rotateX(rx); g.rotateY(ry); g.rotateZ(rz);
+    g.translate(x, y, z);
+    parts.push(g);
+  };
+  // a cylinder is authored along +Y; -90° about Z lays it down the +X barrel line
+  const LIE = -Math.PI / 2;
+  // receiver
+  push(new THREE.BoxGeometry(0.50, 0.12, 0.11), 0.04, 0.0, 0);
+  // TWIN PRESSURE TANKS, domed, sitting above the receiver
+  for (const s of [-1, 1]) {
+    push(new THREE.CylinderGeometry(0.072, 0.072, 0.40, 12, 1), -0.05, 0.145, s * 0.082, 0, 0, LIE);
+    push(new THREE.SphereGeometry(0.072, 12, 8), 0.15, 0.145, s * 0.082);
+    push(new THREE.SphereGeometry(0.072, 12, 8), -0.25, 0.145, s * 0.082);
+  }
+  // the yoke strapping them down, and the regulator between them
+  push(new THREE.BoxGeometry(0.05, 0.20, 0.24), -0.05, 0.08, 0);
+  push(new THREE.CylinderGeometry(0.038, 0.038, 0.10, 10, 1), 0.10, 0.145, 0, 0, 0, LIE);
+  // FEED HOSE: out of the tank fronts, down and forward into the receiver
+  {
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0.20, 0.145, 0.082),
+      new THREE.Vector3(0.30, 0.10, 0.05),
+      new THREE.Vector3(0.30, 0.01, 0.0),
+      new THREE.Vector3(0.21, -0.02, 0.0),
+    ]);
+    parts.push(new THREE.TubeGeometry(curve, 14, 0.022, 6, false));
+  }
+  // stubby barrel out to the igniter
+  push(new THREE.CylinderGeometry(0.030, 0.034, 0.30, 10, 1), 0.36, -0.01, 0, 0, 0, LIE);
+  // NOZZLE: a flare, and the igniter ring standing proud of it — the one part
+  // of the weapon that is lit from inside when it fires
+  push(new THREE.CylinderGeometry(0.058, 0.032, 0.09, 12, 1), 0.545, -0.01, 0, 0, 0, LIE);
+  push(new THREE.TorusGeometry(0.052, 0.013, 6, 14), 0.50, -0.01, 0, 0, Math.PI / 2, 0);
+  // pistol grip and forward grip — both under the line, so the solved carry's
+  // two hands land on something rather than in air
+  push(new THREE.BoxGeometry(0.07, 0.19, 0.06), -0.09, -0.14, 0, 0, 0, 0.22);
+  push(new THREE.BoxGeometry(0.06, 0.17, 0.055), 0.19, -0.13, 0, 0, 0, -0.14);
+  const merged = mergeParts(parts);
+  // authored +X-forward already (unlike the ported MA5, which needed the bake)
+  _mergedFlamer = merged;
+  return merged;
+}
+
 // Body + gun, merged into ONE geometry (untextured metal tint) so hundreds
 // of carried rifles on marines/armed crew/armed combat forms still cost a
 // single InstancedMesh draw call. Baked -90° about Y so the asset's native
