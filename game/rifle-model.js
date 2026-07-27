@@ -129,28 +129,30 @@ function mergeParts(parts) {
 // Shorter than the MA5's 0.515: the igniter sits proud of a stubby barrel.
 export const FLAMER_MUZZLE = new THREE.Vector3(0, 0.01, 0.56);
 
-let _mergedFlamer = null;
-export function flamerGeometry() {
-  if (_mergedFlamer) return _mergedFlamer;
-  const parts = [];
-  const push = (g, x, y, z, rx = 0, ry = 0, rz = 0) => {
+// The parts, authored once, GROUPED BY MATERIAL. The carried version merges
+// them all (hundreds of instances, one draw call); the viewmodel keeps the
+// groups apart and shades them separately. Same shapes either way, so the
+// weapon in your hands and the weapon across the room are the same weapon.
+function flamerParts() {
+  const body = [], tanks = [], hose = [], nozzle = [];
+  const push = (into, g, x, y, z, rx = 0, ry = 0, rz = 0) => {
     g.rotateX(rx); g.rotateY(ry); g.rotateZ(rz);
     g.translate(x, y, z);
-    parts.push(g);
+    into.push(g);
   };
   // a cylinder is authored along +Y; -90° about Z lays it down the +X barrel line
   const LIE = -Math.PI / 2;
   // receiver
-  push(new THREE.BoxGeometry(0.50, 0.12, 0.11), 0.04, 0.0, 0);
+  push(body, new THREE.BoxGeometry(0.50, 0.12, 0.11), 0.04, 0.0, 0);
   // TWIN PRESSURE TANKS, domed, sitting above the receiver
   for (const s of [-1, 1]) {
-    push(new THREE.CylinderGeometry(0.072, 0.072, 0.40, 12, 1), -0.05, 0.145, s * 0.082, 0, 0, LIE);
-    push(new THREE.SphereGeometry(0.072, 12, 8), 0.15, 0.145, s * 0.082);
-    push(new THREE.SphereGeometry(0.072, 12, 8), -0.25, 0.145, s * 0.082);
+    push(tanks, new THREE.CylinderGeometry(0.072, 0.072, 0.40, 12, 1), -0.05, 0.145, s * 0.082, 0, 0, LIE);
+    push(tanks, new THREE.SphereGeometry(0.072, 12, 8), 0.15, 0.145, s * 0.082);
+    push(tanks, new THREE.SphereGeometry(0.072, 12, 8), -0.25, 0.145, s * 0.082);
   }
   // the yoke strapping them down, and the regulator between them
-  push(new THREE.BoxGeometry(0.05, 0.20, 0.24), -0.05, 0.08, 0);
-  push(new THREE.CylinderGeometry(0.038, 0.038, 0.10, 10, 1), 0.10, 0.145, 0, 0, 0, LIE);
+  push(body, new THREE.BoxGeometry(0.05, 0.20, 0.24), -0.05, 0.08, 0);
+  push(body, new THREE.CylinderGeometry(0.038, 0.038, 0.10, 10, 1), 0.10, 0.145, 0, 0, 0, LIE);
   // FEED HOSE: out of the tank fronts, down and forward into the receiver
   {
     const curve = new THREE.CatmullRomCurve3([
@@ -159,23 +161,87 @@ export function flamerGeometry() {
       new THREE.Vector3(0.30, 0.01, 0.0),
       new THREE.Vector3(0.21, -0.02, 0.0),
     ]);
-    parts.push(new THREE.TubeGeometry(curve, 14, 0.022, 6, false));
+    hose.push(new THREE.TubeGeometry(curve, 14, 0.022, 6, false));
   }
   // stubby barrel out to the igniter
-  push(new THREE.CylinderGeometry(0.030, 0.034, 0.30, 10, 1), 0.36, -0.01, 0, 0, 0, LIE);
+  push(body, new THREE.CylinderGeometry(0.030, 0.034, 0.30, 10, 1), 0.36, -0.01, 0, 0, 0, LIE);
   // NOZZLE: a flare, and the igniter ring standing proud of it — the one part
   // of the weapon that is lit from inside when it fires
-  push(new THREE.CylinderGeometry(0.058, 0.032, 0.09, 12, 1), 0.545, -0.01, 0, 0, 0, LIE);
-  push(new THREE.TorusGeometry(0.052, 0.013, 6, 14), 0.50, -0.01, 0, 0, Math.PI / 2, 0);
+  push(nozzle, new THREE.CylinderGeometry(0.058, 0.032, 0.09, 12, 1), 0.545, -0.01, 0, 0, 0, LIE);
+  push(nozzle, new THREE.TorusGeometry(0.052, 0.013, 6, 14), 0.50, -0.01, 0, 0, Math.PI / 2, 0);
   // pistol grip and forward grip — both under the line, so the solved carry's
   // two hands land on something rather than in air
-  push(new THREE.BoxGeometry(0.07, 0.19, 0.06), -0.09, -0.14, 0, 0, 0, 0.22);
-  push(new THREE.BoxGeometry(0.06, 0.17, 0.055), 0.19, -0.13, 0, 0, 0, -0.14);
-  const merged = mergeParts(parts);
-  // authored +X-forward already (unlike the ported MA5, which needed the bake)
-  _mergedFlamer = merged;
-  return merged;
+  push(hose, new THREE.BoxGeometry(0.07, 0.19, 0.06), -0.09, -0.14, 0, 0, 0, 0.22);
+  push(hose, new THREE.BoxGeometry(0.06, 0.17, 0.055), 0.19, -0.13, 0, 0, 0, -0.14);
+  return { body, tanks, hose, nozzle };
 }
+
+let _mergedFlamer = null;
+export function flamerGeometry() {
+  if (_mergedFlamer) return _mergedFlamer;
+  const p = flamerParts();
+  // authored +X-forward already (unlike the ported MA5, which needed the bake)
+  _mergedFlamer = mergeParts([...p.body, ...p.tanks, ...p.hose, ...p.nozzle]);
+  return _mergedFlamer;
+}
+
+// The flamethrower as the PLAYER holds it. Same primitives as the carried
+// version — one weapon, one silhouette, whether it is in your hands or across
+// the room — but as its own group so the igniter ring can be a separate
+// emissive material that lights when the trigger is down.
+//
+// flamerGeometry() is authored +X-forward (the carry convention). The
+// viewmodel rig is +Z-forward and gets rotated 180° about Y at the end, the
+// same as the MA5, so this is rotated -90° about Y first to convert.
+export function buildFlamerViewmodel() {
+  const group = new THREE.Group();
+  // MATTE AND DARK, on purpose. The torch is mounted at the eye, so a
+  // viewmodel is lit from point-blank by the brightest light in the game and
+  // then goes through bloom: the first cut of this was one metallic material
+  // over the merged geometry and it blew out into a white slab with no
+  // readable shape at all. Low metalness + high roughness keeps the specular
+  // off it, and three tones give the silhouette internal edges to read by.
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0.115, 0.125, 0.115), roughness: 0.92, metalness: 0.10,
+  });
+  const tankMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0.205, 0.180, 0.095), roughness: 0.80, metalness: 0.18,
+  });
+  const hoseMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0.045, 0.045, 0.050), roughness: 0.98, metalness: 0.02,
+  });
+  const nozzMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(0.085, 0.080, 0.075), roughness: 0.70, metalness: 0.30,
+  });
+  const p = flamerParts();
+  for (const [parts, mat] of [[p.body, bodyMat], [p.tanks, tankMat], [p.hose, hoseMat], [p.nozzle, nozzMat]]) {
+    const g = mergeParts(parts);
+    g.rotateY(-Math.PI / 2); // +X-forward -> +Z-forward
+    group.add(new THREE.Mesh(g, mat));
+  }
+
+  // the igniter: a small ring at the nozzle that sits dark until you fire and
+  // then glows. It is the only lit part of the weapon, so the pilot light
+  // reads clearly against the body in a black corridor.
+  const pilotMat = new THREE.MeshStandardMaterial({
+    color: 0x2a1b12, emissive: new THREE.Color(1.0, 0.42, 0.12), emissiveIntensity: 0,
+    roughness: 0.5,
+  });
+  const pilot = new THREE.Mesh(new THREE.TorusGeometry(0.054, 0.016, 8, 16), pilotMat);
+  pilot.position.set(0, -0.01, 0.50);
+  group.add(pilot);
+
+  group.rotation.y = Math.PI; // authored +Z-forward -> Three's -Z-forward
+  // 0 = cold, 1 = full stream. Driven from main.js each frame.
+  group.userData.setPilot = (v) => { pilotMat.emissiveIntensity = v * 5.5; };
+  return group;
+}
+
+// Viewmodel placement for the flamer, in CAMERA-local space. It is a bulkier
+// weapon than the MA5 and the tanks ride high, so held at the MA5's tune it
+// buries the top of the receiver in the bottom of the screen: dropped and
+// pushed out, and tipped down a touch so the nozzle stays in frame.
+export const FLAMER_TUNE = { x: 0.170, y: -0.300, z: 0.330, ry: -0.10, rx: -0.030, rz: 0.03, s: 1.0 };
 
 // Body + gun, merged into ONE geometry (untextured metal tint) so hundreds
 // of carried rifles on marines/armed crew/armed combat forms still cost a

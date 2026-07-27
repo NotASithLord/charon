@@ -78,8 +78,13 @@ export class Player extends FpsController {
     // --- E: scavenge ammo from the armory rack or the armed dead ---
     if (this.keys.has('KeyE') && !this._eLatch) {
       this._eLatch = true;
-      const src = this.ammoSource();
-      if (src && this.onAmmoTaken) this.onAmmoTaken(src);
+      // the flamethrower gets first refusal on the press — the game layer owns
+      // the "do I already have one / is the tank full" question, so it answers
+      // whether it consumed the key rather than us guessing
+      if (!this.onFlamerTaken?.()) {
+        const src = this.ammoSource();
+        if (src && this.onAmmoTaken) this.onAmmoTaken(src);
+      }
     } else if (!this.keys.has('KeyE')) this._eLatch = false;
 
     const wantClimb = this.keys.has('KeyL');
@@ -237,6 +242,28 @@ export class Player extends FpsController {
     const [sx, sy] = this.world.worldToSim(this.x, this.z, this.deck);
     for (const c of this.sim.agents) {
       if (c.dead || c.faction !== 6 || !c.wasArmed || c.damage >= 100) continue;
+      if (this.sim.graph.node(c.node).deck !== this.deck) continue;
+      const dx = c.x - sx, dy = c.y - sy;
+      if (dx * dx + dy * dy < 2.2 * 2.2) return c;
+    }
+    return null;
+  }
+
+  // THE FLAMETHROWER, separately (user). Kept apart from ammoSource so the two
+  // never mask each other: a body lying on the armory deck holds a rifle AND
+  // the flamer, and whichever the scavenge scan happened to reach first would
+  // silently win. main.js offers this one before the ammo prompt.
+  // Returns 'armory' | 'refuel' | <corpse> | null.
+  flamerSource(hasFlamer, fuelFrac) {
+    if (this.dead) return null;
+    const atArmory = this.agent.node === this._armoryIdx;
+    if (atArmory && !hasFlamer && this.sim.armoryFlamer) return 'armory';
+    // only offer a can when there is room in the tank for one to matter
+    if (atArmory && hasFlamer && this.sim.armoryFuelCans > 0 && fuelFrac < 0.9) return 'refuel';
+    if (hasFlamer) return null; // you already carry the only one you can hold
+    const [sx, sy] = this.world.worldToSim(this.x, this.z, this.deck);
+    for (const c of this.sim.agents) {
+      if (c.dead || c.faction !== 6 || !c.hadFlamer || (c.flamerFuel ?? 0) <= 0) continue;
       if (this.sim.graph.node(c.node).deck !== this.deck) continue;
       const dx = c.x - sx, dy = c.y - sy;
       if (dx * dx + dy * dy < 2.2 * 2.2) return c;

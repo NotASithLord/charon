@@ -534,5 +534,10 @@ export function humanDeathToCorpse(sim, a) {
   // the host's weapon falls with the body — a combat form raised from it
   // picks the weapon back up (lore)
   corpse.wasArmed = a.faction === FACTION.ARMED || a.faction === FACTION.MARINE;
+  // ...and so does the flamethrower, if he was the one carrying it. Recorded
+  // under its OWN keys, never `flamer`/`fuel`: a corpse wearing those would be
+  // picked up as a live flamer by the shooter scan above. This is inert data
+  // that only the player's scavenge (game/player.js) reads.
+  if (a.flamer && a.fuel > 0) { corpse.hadFlamer = true; corpse.flamerFuel = a.fuel; }
   sim.spawn(corpse);
 }

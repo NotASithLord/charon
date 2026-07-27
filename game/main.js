@@ -9,13 +9,16 @@ import { hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf, DOOR_W } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
-import { HeldWeapon } from './weapon.js';
+import { HeldWeapon, FlameThrower } from './weapon.js';
 import { MA5, FRAG, ODST } from './fps-data.js';
 import { GameAudio } from './audio.js';
 import { FireFX, SparkFX, BloodFX, FlameJetFX } from '../engine/fx.js';
 import { MarineMap } from './map.js';
 import { RNG } from '../shared/rng.js';
-import { buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE } from './rifle-model.js';
+import {
+  buildRifleViewmodel, GUN_TUNE, RIFLE_MUZZLE,
+  buildFlamerViewmodel, FLAMER_TUNE,
+} from './rifle-model.js';
 import { PhysicsWorld, initRapier, PHYS_DT } from '../engine/physics/physics-world.js';
 import { PostFX } from '../engine/post.js';
 import { LightPool } from '../engine/lights.js';
@@ -715,13 +718,42 @@ function updateFlameJets(dtReal) {
       audio.play('flame', { x: r.ox, z: r.oz }, 0.7, `flame${r.seed}`, 900);
     }
   }
+  // YOUR OWN stream rides the same pool and the same roar — one flame system
+  // in the game, whoever is holding the trigger. Louder and unpositioned: it
+  // is going off beside your head, not across the compartment.
+  if (_flameJet) {
+    const j = _flameJet;
+    jets.emit(j.ox, j.oy, j.oz, j.dx, j.dy, j.dz, j.len, _flameSeed);
+    audio.play('flame', null, 1.0, 'flame-player', 900);
+  }
   jets.update(dtReal, camera.position.x, camera.position.y, camera.position.z);
 }
 
 const weapon = new HeldWeapon(MA5);
+// THE FLAMETHROWER YOU CAN CARRY (user). `hasFlamer` is the pickup; `heldIsFlamer`
+// is which of the two is up. You never lose the MA5 — the flamer is a second
+// weapon on the sling, because a tank that empties in twelve seconds would be
+// a death sentence if taking it meant dropping the rifle.
+const FLAME = sim.P.flamethrower.player;
+const flamer = new FlameThrower(FLAME);
+let hasFlamer = false, heldIsFlamer = false;
 player.onAmmoTaken = (src) => {
   if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; frags = Math.min(FRAG.max, frags + 4); sim.log('combat', `you strip mags and a bandolier of frags from the rack (${sim.armoryStock} rifles left)`); }
   else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
+};
+// E on a flamethrower source. Offered ahead of the ammo prompt (see the hint
+// block) because the flamer is the rarer find and a body can carry both.
+player.onFlamerTaken = () => {
+  const src = player.flamerSource(hasFlamer, flamer.frac);
+  if (!src) return false;
+  if (src === 'refuel') {
+    flamer.fuel = sim.playerRefuel(flamer.fuel);
+    sim.log('combat', 'you swap a fuel can into the flamethrower (you)');
+  } else {
+    flamer.fuel = sim.playerTakeFlamer(player.agent, src === 'armory' ? null : src);
+    if (!hasFlamer) { hasFlamer = true; heldIsFlamer = true; } // the first one comes straight up
+  }
+  return true;
 };
 
 // MA5 viewmodel — the real ported first-strike asset (game/rifle-model.js),
@@ -735,6 +767,15 @@ viewmodel.position.set(GUN_TUNE.x, GUN_TUNE.y, -GUN_TUNE.z);
 viewmodel.rotation.set(GUN_TUNE.rx, GUN_TUNE.ry, GUN_TUNE.rz);
 viewmodel.scale.setScalar(GUN_TUNE.s);
 camera.add(viewmodel);
+// the flamer's own viewmodel, on the same camera rig. Both exist for the
+// whole session and visibility picks between them — building one on a weapon
+// swap would hitch the first time you switch, mid-fight, in the dark.
+const flamerMesh = buildFlamerViewmodel();
+const flamerModel = new THREE.Group();
+flamerModel.add(flamerMesh);
+flamerModel.scale.setScalar(FLAMER_TUNE.s);
+flamerModel.visible = false;
+camera.add(flamerModel);
 scene.add(camera);
 // transient combat lights are VIRTUAL now — they ride the global pool
 // (near the player they always win a slot, so the look is unchanged)
@@ -1475,6 +1516,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyG') fragPressed = true;
   if (e.code === 'KeyM') toggleMap();
   if (e.code === 'KeyK') toggleSoundBoard();
+  // WEAPON SWAP: Q. NOT 1/2 — those are the fireteam order keys (follow /
+  // hold / advance) and binding a weapon to them would fire both actions off
+  // one press. Silently ignored until you have actually found a flamethrower.
+  if (e.code === 'KeyQ' && hasFlamer) heldIsFlamer = !heldIsFlamer;
   // AMMO ECONOMY (user): T hands a mag from your reserve to the neediest
   // fireteam marine in reach — they burn real magazines now (combat.js)
   if (e.code === 'KeyT' && !player.dead && weapon.reserve >= 32) {
@@ -1629,6 +1674,85 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
     audio.play('tick', null, 0.5, 'tick', 40);
   } else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }
   return !!best;
+}
+
+// --- the flamethrower in your hands ---------------------------------------
+// One frame of live stream. Unlike traceShot this is not a ray: it is a cone
+// with a reach, so it bites everything inside it rather than the one thing
+// under the reticle. Sequence per frame: find how far the stream actually
+// gets (a wall stops it), burn what is inside the cone out to that distance,
+// tell the sim the room is on fire and WHERE, and hand the geometry to the
+// jet FX.
+const _fdir = new THREE.Vector3(), _fto = new THREE.Vector3();
+const _fmuzzle = new THREE.Vector3(), _fend = new THREE.Vector3();
+let _flameJet = null;      // {ox,oy,oz,dx,dy,dz,len} for this frame, or null
+let _flameSeed = 1;
+
+function flameTick(dt) {
+  camera.getWorldDirection(_fdir);
+  const origin = camera.position;
+
+  // REACH: the stream stops at the first wall or closed door. Without this
+  // you burn the compartment on the other side of a bulkhead, and the fire
+  // lands in a room you cannot see.
+  wallRay.set(origin, _fdir);
+  wallRay.far = FLAME.rangeM;
+  wallRay.near = 0.05;
+  const hits = wallRay.intersectObjects(solidsForShot(), false);
+  // back off the wall slightly so the flame washes the face of it rather than
+  // vanishing into the geometry
+  const reach = hits.length ? Math.max(0.6, hits[0].distance - 0.35) : FLAME.rangeM;
+
+  // the jet leaves the NOZZLE, carried through the viewmodel's real world
+  // transform (same treatment the MA5's muzzle flash gets)
+  flamerMesh.updateWorldMatrix(true, false);
+  _fmuzzle.set(0, -0.01, 0.50).applyMatrix4(flamerMesh.matrixWorld);
+  _fend.copy(origin).addScaledVector(_fdir, reach);
+
+  // COMBUSTION VOLUME: everything inside the cone, out to the reach. A pool
+  // split between targets (the way resolveCombat models a marine's flamer) is
+  // wrong for an aimed weapon — a cone does not divide itself between the
+  // things standing in it. Every body in the fire takes the full rate, and
+  // the tank is what stops you: 12.5 s of trigger, total.
+  const cosLimit = Math.cos(FLAME.coneDeg * Math.PI / 180);
+  const burn = FLAME.dps * dt;
+  let anyHit = false;
+  for (const a of shotCandidates()) {
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
+    _fto.set(wx, cy, wz).sub(origin);
+    const d = _fto.length();
+    if (d < 0.2 || d > reach) continue;
+    if (_fto.dot(_fdir) / d < cosLimit) continue;
+    hurtFloodForm(sim, a, burn, true, player.agent.id); // `true`: fire kills permanently
+    anyHit = true;
+  }
+  // FIRE DOES NOT CHECK BADGES (user built friendly fire in deliberately). A
+  // marine standing in your cone burns exactly like a combat form does, and
+  // your own fireteam is the most likely thing to be standing in it.
+  for (const a of sim.agents) {
+    if (a.dead || a.hp <= 0 || a.isPlayer) continue;
+    if (a.faction !== 0 && a.faction !== 1 && a.faction !== 2) continue;
+    if (a.deck !== player.deck) continue;
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    _fto.set(wx, elevOf(a.deck) + 0.9, wz).sub(origin);
+    const d = _fto.length();
+    if (d < 0.2 || d > reach) continue;
+    if (_fto.dot(_fdir) / d < cosLimit) continue;
+    sim.hurtHuman(a, burn, player.agent.id); // blamed on you, like any friendly fire
+  }
+
+  // the room is burning, and it is burning WHERE THE FUEL LANDED — the far
+  // end of the stream, not the room's centre
+  const [bx, by] = world.worldToSim(_fend.x, _fend.z, player.deck);
+  sim.playerFlame(player.agent.node, bx, by);
+  sim.gunfireAt(player.agent.node); // a flamethrower is not quiet
+  if (anyHit) hitFlash = Math.max(hitFlash, 0.35);
+
+  _flameJet = _flameJet ?? {};
+  _flameJet.ox = _fmuzzle.x; _flameJet.oy = _fmuzzle.y; _flameJet.oz = _fmuzzle.z;
+  _flameJet.dx = _fdir.x; _flameJet.dy = _fdir.y; _flameJet.dz = _fdir.z;
+  _flameJet.len = reach;
 }
 
 // --- grenades (review P1): a real lofted frag with bounces and a fuse.
@@ -2109,10 +2233,15 @@ function frame(now) {
     alpha = physAcc / PHYS_DT;
   }
 
-  // MA5 loop (auto fire, bloom, reload, melee) — pure mechanics, events out
+  // MA5 loop (auto fire, bloom, reload, melee) — pure mechanics, events out.
+  // The trigger goes to ONE weapon: whichever is up. Reload and melee still
+  // reach the rifle with the flamer out, so you can top the MA5 up while the
+  // torch is in your hands and butt-stroke something that gets inside the
+  // stream's minimum useful range.
+  const triggerLive = fireHeld && player.locked && !player.dead;
   const wevents = [];
   weapon.step(dtReal, {
-    fireHeld: fireHeld && player.locked && !player.dead,
+    fireHeld: triggerLive && !heldIsFlamer,
     reloadPressed, meleePressed,
   }, wevents);
   reloadPressed = false; meleePressed = false;
@@ -2122,6 +2251,21 @@ function frame(now) {
     else if (ev.t === 'reload_start') audio.play('clack', null, 0.7);
     else if (ev.t === 'dry') audio.play('clack', null, 0.4);
   }
+  // the flamethrower, on the same trigger. `_flameJet` is cleared every frame
+  // and only re-declared while the stream is live, so it goes out the instant
+  // you release — the same discipline the light pool and the NPC jets use.
+  _flameJet = null;
+  if (hasFlamer) {
+    const fevents = [];
+    flamer.step(dtReal, { fireHeld: triggerLive && heldIsFlamer }, fevents);
+    for (const ev of fevents) {
+      if (ev.t === 'flame') flameTick(ev.dt);
+      else if (ev.t === 'flame_on') { _flameSeed = (_flameSeed + 1) & 0xffff; audio.play('thud', null, 0.35); }
+      else if (ev.t === 'dry') audio.play('clack', null, 0.35);
+    }
+  }
+  // the igniter ring lights while the stream is out
+  flamerMesh.userData.setPilot?.(flamer.live ? 1 : (hasFlamer ? 0.10 : 0));
   if (fragPressed) { throwFrag(); fragPressed = false; el('frags').textContent = `${frags} FRAG`; }
   stepFrags(dtReal);
   boomLight.intensity *= Math.exp(-7 * dtReal);
@@ -2155,6 +2299,16 @@ function frame(now) {
     viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + meleeSwing * 0.95 - tilt;
     viewmodel.rotation.y = GUN_TUNE.ry + meleeSwing * 0.08;
     viewmodel.rotation.z = GUN_TUNE.rz - meleeSwing * 0.08;
+    // the flamer shares the sway and the bob, and gets a low-frequency shudder
+    // of its own while burning — a pressure feed kicks, it does not recoil in
+    // discrete jolts the way the rifle does
+    const shudder = flamer.live ? Math.sin(_bobPhase * 31 + now * 0.021) * 0.006 : 0;
+    flamerModel.position.x = FLAMER_TUNE.x + swayX;
+    flamerModel.position.y = FLAMER_TUNE.y + swayY + gunBobY + shudder;
+    flamerModel.position.z = -FLAMER_TUNE.z + (flamer.live ? 0.012 : 0);
+    flamerModel.rotation.x = FLAMER_TUNE.rx + shudder * 1.6;
+    flamerModel.rotation.y = FLAMER_TUNE.ry;
+    flamerModel.rotation.z = FLAMER_TUNE.rz;
   }
   // reticle bloom (first-strike CE reticle): arc radius tracks true spread
   {
@@ -2323,6 +2477,7 @@ function frame(now) {
     camera.rotateY(Math.atan2(-Math.cos(ghost.heading), -Math.sin(ghost.heading)));
     lamp.position.set(gx, gy + 0.2, gz);
     viewmodel.visible = false;
+    flamerModel.visible = false;
   } else {
     const pose = player.renderPose(alpha);
     // head bob (first-strike feel): shares the viewmodel's bob phase
@@ -2331,7 +2486,9 @@ function frame(now) {
     camera.rotateY(pose.yaw + (shake > 0 ? Math.sin(now * 0.09) * 0.02 * shake : 0));
     camera.rotateX(pose.pitch + (shake > 0 ? Math.sin(now * 0.11) * 0.018 * shake : 0));
     lamp.position.set(pose.x, pose.y + 0.2, pose.z);
-    viewmodel.visible = !player.dead;
+    // exactly one weapon on screen
+    viewmodel.visible = !player.dead && !heldIsFlamer;
+    flamerModel.visible = !player.dead && heldIsFlamer;
   }
 
   // HUD — dirty-checked: unconditional textContent/style writes every frame
@@ -2345,7 +2502,11 @@ function frame(now) {
   setStyle('healthBar', 'width', `${ghost ? hp / 63 * 100 : hp / 45 * 100}%`);
   setStyle('armorBar', 'width', `${ghost ? 0 : player.armor / 50 * 100}%`);
   setText('hpText', ghost ? `IT ${hp}` : `${Math.ceil(player.armor)} | ${hp}`);
-  setText('ammo', ghost ? '' : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`));
+  // the ammo readout follows whichever weapon is up: rounds for the rifle,
+  // a fuel percentage for the flamer (there is nothing to count in a tank)
+  setText('ammo', ghost ? ''
+    : heldIsFlamer ? (flamer.empty ? 'TANK DRY' : `FUEL ${Math.ceil(flamer.frac * 100)}%`)
+      : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`));
   // ROOM LIGHT STATE (user: note-taking between playthroughs) — the sim's
   // authoritative fixture + flood states for the compartment you're in
   {
@@ -2366,8 +2527,16 @@ function frame(now) {
     } else setText('roomState', '—');
   }
   rifleMesh.userData.setAmmoDigits?.(weapon.mag);
-  const src = player.dead ? null : player.ammoSource();
-  if (src) {
+  // the flamethrower prompt outranks the ammo prompt, matching the order the
+  // E key resolves them in (player.js) — the rarer pickup wins the line
+  const fsrc = player.dead ? null : player.flamerSource(hasFlamer, flamer.frac);
+  const src = fsrc ? null : (player.dead ? null : player.ammoSource());
+  if (fsrc) {
+    setText('hint', fsrc === 'armory' ? 'E — take the flamethrower off the rack'
+      : fsrc === 'refuel' ? `E — swap a fuel can (${sim.armoryFuelCans} left)`
+        : 'E — take the flamethrower off the operator');
+    setStyle('hint', 'display', 'block');
+  } else if (src) {
     setText('hint', src === 'armory'
       ? `E — strip mags from the rack (${sim.armoryStock} rifles)` : 'E — take mags off the dead');
     setStyle('hint', 'display', 'block');
@@ -2454,5 +2623,13 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // debug hooks
-window.__game = { sim, world, player, agents, weapon, camera, scene, renderer };
+window.__game = {
+  sim, world, player, agents, weapon, camera, scene, renderer, flamer,
+  viewmodel, flamerModel, jets, FLAMER_TUNE,
+  // test/debug hooks for the flamethrower (harnesses can't press E at a body)
+  giveFlamer: () => { hasFlamer = true; heldIsFlamer = true; flamer.fuel = FLAME.tankUnits; },
+  setTrigger: (v) => { fireHeld = !!v; },
+  putRifleUp: () => { heldIsFlamer = false; },
+  flamerState: () => ({ hasFlamer, heldIsFlamer, fuel: flamer.fuel, live: flamer.live, jet: _flameJet }),
+};
 window.__audio = audio; // sound-board / audit harness

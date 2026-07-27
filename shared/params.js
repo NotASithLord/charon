@@ -69,7 +69,27 @@ export const PARAMS = {
     reanimateIntegrityFrac: 0.6,
     reanimateTimeSec: 2,
   },
-  flamethrower: { fuelUnits: 100, dps: 50, fuelPerSec: 2, fuelPerCorpse: 1, burnNodeSec: 12 },
+  flamethrower: {
+    fuelUnits: 100, dps: 50, fuelPerSec: 2, fuelPerCorpse: 1, burnNodeSec: 12,
+    // IN YOUR HANDS (user: "make the flamethrower something the player can
+    // use"). Deliberately NOT the NPC numbers. A marine's flamer is an
+    // abstraction that ticks a dps pool into a room; yours is aimed, so it
+    // needs a reach, a cone, and a tank that runs dry fast enough that
+    // carrying it is a decision. dps is 2x the line rate, the same
+    // player-vs-NPC parity the rifle already has.
+    //
+    // The tank is the whole balance: 8 units/s against 100 units is 12.5 s of
+    // held trigger. That is two rooms cleared, not a deck.
+    player: {
+      dps: 100,
+      fuelPerSec: 8,
+      rangeM: 9,          // the stream reaches this far and stops
+      coneDeg: 24,        // half-angle it bites inside
+      ignhitS: 0.10,      // igniter catch before the stream is live
+      tankUnits: 100,
+      armoryRefill: 55,   // a spare tank off the rack, not a full swap
+    },
+  },
   // lockedFraction: per-run graph mutation (visible variety run to run).
   // shiftEverySec: the damaged ship keeps shifting — every ~2 min (jittered)
   // a working door jams or a jammed one grinds free, connectivity-guarded
