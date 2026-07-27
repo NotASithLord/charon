@@ -98,6 +98,17 @@ const post = new PostFX(renderer, scene, camera);
 // scene, which shortens the light loop compiled into every shader — so the
 // lower rungs land at or below the old budget.
 const lightPool = new LightPool(scene, 16);
+// Real spotlights for the nearest weapon lights — the pool above is point
+// lights, which cannot throw a directional footprint. Three is enough to read
+// as "the fireteam is lighting this room" without another shadow-caster's cost
+// (these deliberately do NOT cast shadows; only your own torch does).
+const teamTorches = Array.from({ length: 3 }, () => {
+  const L = new THREE.SpotLight(0xdCE6FF, 0, 22, 0.5, 0.45, 1.6);
+  L.castShadow = false;
+  scene.add(L);
+  scene.add(L.target);
+  return L;
+});
 
 // IMAGE-BASED LIGHTING (the RoomEnvironment recipe, compacted): a tiny
 // procedural interior baked through PMREM gives every PBR material real
@@ -508,13 +519,30 @@ function updateRoomLightPool() {
   // a blacked-out room; they compete in the same pool as everything else, and
   // in a dark room the fixtures are off, so there is little to compete with.
   // Nearest-first, budgeted per rung.
-  // each armed body declares two: the pool where its beam lands on the wall
-  // it is facing, and a little spill at the weapon itself
+  // TEAM TORCHES (user: "in pitch darkness all you see is your lights but also
+  // your teams lights illuminating things in the same room"). The nearest few
+  // get a REAL SPOTLIGHT aimed down the barrel, so you see the beam's footprint
+  // sweep the deck and bulkheads the way your own torch does — a point light at
+  // the wall is just a round blob. Everyone beyond those slots still declares a
+  // cheap pooled point light at the spot their beam lands, so a crowded dark
+  // room is many separate pools rather than an ambient lift.
+  const lit = [];
+  for (let i = 0; i < agents.rifleLightN; i++) lit.push(agents.rifleLights[i]);
+  lit.sort((a, b) => a.d2 - b.d2);
+  const spots = Math.min(teamTorches.length, lit.length);
+  for (let i = 0; i < teamTorches.length; i++) {
+    const T = teamTorches[i], r = i < spots ? lit[i] : null;
+    if (!r) { T.intensity = 0; continue; }
+    T.position.set(r.ox, r.oy, r.oz);
+    T.target.position.set(r.tx, r.ty, r.tz);
+    T.target.updateMatrixWorld();
+    T.distance = r.throw + 8;
+    T.intensity = 26;
+  }
   const rlCap = (RUNGS[rung].rifleLights ?? 4) * 2;
-  const n = Math.min(agents.rifleLightN, rlCap);
-  for (let i = 0; i < n; i++) {
-    const r = agents.rifleLights[i];
-    lightPool.add(r.x, r.y, r.z, 0xdCE6FF, r.i, r.d, 1.7);
+  for (let i = spots; i < Math.min(lit.length, spots + rlCap); i++) {
+    const r = lit[i];
+    lightPool.add(r.tx, r.ty, r.tz, 0xdCE6FF, 8, r.throw * 0.4 + 8, 1.7);
   }
 }
 

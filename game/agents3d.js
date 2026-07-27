@@ -434,35 +434,34 @@ export class Agents3D {
   _addRifleLight(nodeIdx, sx, sy, deck, elev, hSim) {
     const [mwx, mwz] = this.world.simToWorld(sx, sy, deck);
     const ddx = mwx - (this.viewX ?? 0), ddz = mwz - (this.viewZ ?? 0);
-    if (ddx * ddx + ddz * ddz > 1600) return;   // 40 m — the pool scores the rest
+    const d2 = ddx * ddx + ddz * ddz;
+    if (d2 > 1600) return;                       // 40 m — the pool scores the rest
     const nd = this.sim.graph.node(nodeIdx);
-    // ALONG THE BARREL, NOT THE CHEST (user: "flashlights aligned with gun
-    // nozzles"). The rifle is carried yawed across the body by _rifleAt, so a
-    // light thrown down the body's heading points somewhere the weapon is not.
-    // Use the weapon's own axis and start it at the muzzle.
-    const gh = hSim - RIFLE_YAW;                 // _rifleAt yaws the gun by +0.28 in render space
+    // ALONG THE BARREL (user: "flashlights aligned with gun nozzles"). The
+    // rifle is carried yawed across the body, so the body's heading points
+    // somewhere the weapon does not.
+    const gh = hSim - RIFLE_YAW;
     const hx = Math.cos(gh), hy = Math.sin(gh);
-    sx += Math.cos(hSim) * 0.20 + hx * 0.55;     // body offset, then down the barrel
-    sy += Math.sin(hSim) * 0.20 + hy * 0.55;
-    let t = 16;                                  // throw limit
-    if (hx > 1e-4) t = Math.min(t, (nd.x + nd.w / 2 - sx) / hx);
-    else if (hx < -1e-4) t = Math.min(t, (nd.x - nd.w / 2 - sx) / hx);
-    if (hy > 1e-4) t = Math.min(t, (nd.y + nd.d / 2 - sy) / hy);
-    else if (hy < -1e-4) t = Math.min(t, (nd.y - nd.d / 2 - sy) / hy);
-    t = Math.max(1.4, t - 0.4);                  // stop just short of the plating
-    const [hxw, hzw] = this.world.simToWorld(sx + hx * t, sy + hy * t, deck);
-    const hit = this.rifleLights[this.rifleLightN]
-      ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0, i: 0, d: 0 });
-    // closer throws concentrate, long ones spread and dim — inverse-square by hand
-    const near = Math.min(1, 6 / Math.max(2, t));
-    hit.x = hxw; hit.y = elev + 1.25; hit.z = hzw;
-    hit.i = 5.5 + near * 6; hit.d = 7 + t * 0.35;
-    this.rifleLightN++;
-    // a little spill at the weapon itself so the man holding it is lit too
-    const [mxw, mzw] = this.world.simToWorld(sx + hx * 0.25, sy + hy * 0.25, deck);
-    const sp = this.rifleLights[this.rifleLightN]
-      ?? (this.rifleLights[this.rifleLightN] = { x: 0, y: 0, z: 0, i: 0, d: 0 });
-    sp.x = mxw; sp.y = elev + 1.15; sp.z = mzw; sp.i = 2.4; sp.d = 3.6;
+    const ox = sx + Math.cos(hSim) * 0.20 + hx * 0.55;   // muzzle
+    const oy = sy + Math.sin(hSim) * 0.20 + hy * 0.55;
+    // march to the first wall of the room he is standing in — rect maths, no
+    // raycast — so the throw ends on a surface rather than in mid-air
+    let t = 16;
+    if (hx > 1e-4) t = Math.min(t, (nd.x + nd.w / 2 - ox) / hx);
+    else if (hx < -1e-4) t = Math.min(t, (nd.x - nd.w / 2 - ox) / hx);
+    if (hy > 1e-4) t = Math.min(t, (nd.y + nd.d / 2 - oy) / hy);
+    else if (hy < -1e-4) t = Math.min(t, (nd.y - nd.d / 2 - oy) / hy);
+    t = Math.max(1.4, t - 0.4);
+    const [owx, owz] = this.world.simToWorld(ox, oy, deck);
+    const [hwx, hwz] = this.world.simToWorld(ox + hx * t, oy + hy * t, deck);
+    const r = this.rifleLights[this.rifleLightN]
+      ?? (this.rifleLights[this.rifleLightN] = {});
+    // origin + aim, so the host can drive a real SPOTLIGHT with it: a point
+    // light at the wall is a round blob, and the user wants to see the beam's
+    // footprint picking out what the man is actually looking at.
+    r.ox = owx; r.oy = elev + 1.15; r.oz = owz;
+    r.tx = hwx; r.ty = elev + 1.05; r.tz = hwz;
+    r.throw = t; r.d2 = d2;
     this.rifleLightN++;
   }
 
