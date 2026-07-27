@@ -516,9 +516,13 @@ export class Sim {
       strategicSquads(this);
       this._commandTick();
       this._checkSelfArming();
+      // BEFORE the fall-back check (user: the seal should release "just before
+      // the all hands fall back is announced"). Measured with the old order —
+      // _checkLastStand first, _armoryWatch after — the release landed AFTER
+      // the fallback on 2 of 4 deciding seeds, by 71 s and 81 s.
+      this._armoryWatch();
       this._checkLastStand();
       this._lastStandStragglers();
-      this._armoryWatch();
       this._doorShiftTick();
       this.stats.conversionsRound = 0;
       this._expireCalls();
@@ -644,7 +648,19 @@ export class Sim {
       if (a.faction === FACTION.COMBAT && !a.downed) combat++;
       else if (a.faction === FACTION.MARINE && !a.downed && !a.odst) marines++;
     }
-    if (combat < this.P.armory.unlockCombatForms || marines > this.P.armory.unlockMarinesLeft) return;
+    // Two ways in. The original gate — a big flood and a thin line — still
+    // applies. But it could miss entirely: on one seed the flood peaked at 13
+    // combat forms and the seal never opened all run. The second gate is the
+    // one that matters dramatically: the line is ABOUT to break. Fall back
+    // trips at ceil(initial x marineFraction); release one squad's worth above
+    // that, so the reserve is always out the door first and the two events
+    // read as one beat — the seal, then the all-hands.
+    const lineGate = combat >= this.P.armory.unlockCombatForms
+      && marines <= this.P.armory.unlockMarinesLeft;
+    const brink = this.initialSquadMarines > 0 && !this.lastStand
+      && marines <= Math.ceil(this.initialSquadMarines * this.P.lastStand.marineFraction)
+        + this.P.armory.releaseLeadMarines;
+    if (!lineGate && !brink) return;
     this.armoryLocked = false;
     const armoryIdx = this.graph.byId.get('armory');
     for (const e of this.graph.edges) {
@@ -654,6 +670,31 @@ export class Sim {
     // the reserve steps out ready to fight — its squad joins the strategic
     // pool (the humans.js locked-gate stops applying the moment this flips)
     this.log('radio', 'ARMORY SEAL RELEASED — ODST reserve deploying. Racks are open.');
+    // THE RESERVE FALLS IN ON YOU (user: "those marines should actually join
+    // your fire team"). They are hardened plate with a flamethrower between
+    // them, and with the line breaking there is nothing left to reinforce but
+    // the player. Re-badge them onto the escort squad so humans.js runs them
+    // through the same coverage-post follow as the rest of your fireteam, and
+    // give them the magazine economy the escort tracks. Only in a game with a
+    // player attached — the headless replay has no escort squad to join.
+    const escort = this.squads.find((sq) => sq?.order?.kind === 'order:escort');
+    if (!escort) return;
+    let joined = 0;
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || !a.odst) continue;
+      const old = this.squads[a.squad];
+      if (old?.members) old.members = old.members.filter((id) => id !== a.id);
+      a.squad = escort.id;
+      a.escort = true;
+      a.mags = 4;
+      a.rounds = 32;
+      a.path = []; a.move = null; a.task = null;
+      escort.members.push(a.id);
+      joined++;
+    }
+    if (joined) {
+      this.log('radio', `the ODST reserve falls in on you — ${joined} rifles, and a flamethrower`);
+    }
   }
 
   _checkSelfArming() {

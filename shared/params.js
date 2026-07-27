@@ -124,6 +124,11 @@ export const PARAMS = {
     odstHp: 85,                // vs line marine 45 — hardened ODST plate
     unlockCombatForms: 20,     // flood must field at least this many combat forms
     unlockMarinesLeft: 10,     // and the line squads must be down to this few
+    // SECOND GATE (user: the seal should open just before the all-hands fall
+    // back, and it was landing after it or not at all). Release once the line
+    // is within this many marines of the fall-back threshold, so the reserve
+    // is always out first.
+    releaseLeadMarines: 4,
   },
   belief: {
     decayRatePerSec: 0.1,   // MASTER DIAL (lambda) — smart vs unfair

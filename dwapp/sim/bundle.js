@@ -225,8 +225,13 @@ var PARAMS = {
     // vs line marine 45 — hardened ODST plate
     unlockCombatForms: 20,
     // flood must field at least this many combat forms
-    unlockMarinesLeft: 10
+    unlockMarinesLeft: 10,
     // and the line squads must be down to this few
+    // SECOND GATE (user: the seal should open just before the all-hands fall
+    // back, and it was landing after it or not at all). Release once the line
+    // is within this many marines of the fall-back threshold, so the reserve
+    // is always out first.
+    releaseLeadMarines: 4
   },
   belief: {
     decayRatePerSec: 0.1,
@@ -5050,9 +5055,9 @@ var Sim = class {
       strategicSquads(this);
       this._commandTick();
       this._checkSelfArming();
+      this._armoryWatch();
       this._checkLastStand();
       this._lastStandStragglers();
-      this._armoryWatch();
       this._doorShiftTick();
       this.stats.conversionsRound = 0;
       this._expireCalls();
@@ -5173,7 +5178,9 @@ var Sim = class {
       if (a.faction === FACTION.COMBAT && !a.downed) combat++;
       else if (a.faction === FACTION.MARINE && !a.downed && !a.odst) marines++;
     }
-    if (combat < this.P.armory.unlockCombatForms || marines > this.P.armory.unlockMarinesLeft) return;
+    const lineGate = combat >= this.P.armory.unlockCombatForms && marines <= this.P.armory.unlockMarinesLeft;
+    const brink = this.initialSquadMarines > 0 && !this.lastStand && marines <= Math.ceil(this.initialSquadMarines * this.P.lastStand.marineFraction) + this.P.armory.releaseLeadMarines;
+    if (!lineGate && !brink) return;
     this.armoryLocked = false;
     const armoryIdx = this.graph.byId.get("armory");
     for (const e of this.graph.edges) {
@@ -5181,6 +5188,26 @@ var Sim = class {
     }
     this.graph.invalidatePathCache();
     this.log("radio", "ARMORY SEAL RELEASED — ODST reserve deploying. Racks are open.");
+    const escort = this.squads.find((sq) => sq?.order?.kind === "order:escort");
+    if (!escort) return;
+    let joined = 0;
+    for (const a of this.agents) {
+      if (a.dead || a.hp <= 0 || !a.odst) continue;
+      const old = this.squads[a.squad];
+      if (old?.members) old.members = old.members.filter((id) => id !== a.id);
+      a.squad = escort.id;
+      a.escort = true;
+      a.mags = 4;
+      a.rounds = 32;
+      a.path = [];
+      a.move = null;
+      a.task = null;
+      escort.members.push(a.id);
+      joined++;
+    }
+    if (joined) {
+      this.log("radio", `the ODST reserve falls in on you — ${joined} rifles, and a flamethrower`);
+    }
   }
   _checkSelfArming() {
     if (this._armingRolled || !this.floodKnown) return;
