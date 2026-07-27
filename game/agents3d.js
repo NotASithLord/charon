@@ -37,22 +37,66 @@ const RIFLE_YAW = 0.40;
 // where THIS body's fingertips hang (shoulder − arm length) rather than as an
 // absolute: a straight arm cannot hold a rifle above its own hands, and a
 // rifle placed there is exactly the outstretched pose that was rejected.
-const CARRY = {
+export const CARRY = {
   drop: 0.15,        // weapon centre this far above the fingertip line
   fwd: 0.17,         // in front of the spine
   right: 0.28,       // out at the strong-side hip
   yaw: RIFLE_YAW,    // muzzle carried across the body (the torch rides this)
-  // LEVEL, deliberately. A muzzle-up diagonal fits the arms better, but the
-  // torch cone and the weapon light can only be yawed, never pitched, so any
-  // barrel angle is an angle the light does not follow — and "flashlights
-  // aligned with gun nozzles" is the ask. Flat barrel, flat beam.
-  pitch: 0.0,
+  // NOSED DOWN 3 DEGREES, which is where a low-ready muzzle actually points
+  // and what the lighting host used to fake for every beam on the ship. Now it
+  // is a real barrel angle the beam and the weapon light both follow, so a man
+  // walking a dark corridor throws his torch onto the plating ahead of him.
+  pitch: -0.05,
   grip: -0.02,       // firing hand, measured along the rifle's own axis
   guard: 0.24,       // support hand, up on the handguard
-  // FIGHTING is the same carry brought up and levelled, as far as an elbowless
-  // arm can bring it: a shouldered rifle is simply not reachable on this rig
-  // (the hand would have to sit 0.30 m from a shoulder it is 0.74 m from).
-  fire: { drop: 0.17, fwd: 0.26, right: 0.20, pitch: 0.02 },
+  // SIGHTED (user: "obviously need marines leaning in and sighting their
+  // guns"). See AIM below for why this is a straight-armed presentation and
+  // not a shouldered one — the rig gives no other option.
+  // drop 0.88 puts the barrel at y 1.43 — the man's own cheek line, with the
+  // hands 0.74 m out where a straight arm can actually hold them. Lower and it
+  // slides back toward the hip carry it has to be told apart from; higher and
+  // he is aiming over his own head. yaw 0: the low-ready's 0.40 rad across the
+  // body is a carry angle, and a man shooting at something points the weapon
+  // AT it. pitch 0.19 cancels the 0.24 lean, leaving the barrel 3 degrees down
+  // in world — level enough to be aimed, low enough for the beam to land.
+  fire: { drop: 0.88, fwd: 0.61, right: 0.10, yaw: 0.0, pitch: 0.19, grip: -0.03, guard: 0.14 },
+};
+
+// AIMING, AND WHY IT LOOKS LIKE THIS.
+//
+// The one thing that decides this pose is that an arm is a single rigid
+// segment: its hand is ALWAYS exactly `armLen` (0.743 m) from a shoulder that
+// sits at (0.03, 1.29, ±0.03) — the two shoulder pivots are 6 cm apart, so for
+// this purpose both hands hang off the same point. Put both hands on one
+// straight barrel and the geometry closes: the mid-grip must be ~0.73 m from
+// that point and the BARREL MUST BE PERPENDICULAR TO THAT REACH. Solve it and
+// there are exactly two families — weapon hanging under the shoulders (the
+// low-ready carry we already ship) or weapon held out at arm's length to the
+// side. A shouldered rifle needs the firing hand 0.3 m from the shoulder; this
+// arm cannot be shorter than 0.743 m, so it does not exist on this rig, and
+// the previous pass was right to stop reaching for it.
+//
+// What DOES exist is the presentation: weapon pushed out in front at chest
+// height with the barrel level and down the man's own bearing, which is what
+// every jointless-limb shooter has ever done. Committing to it fully is what
+// makes it read — half-measures land back on the hip carry, which is the
+// complaint. The hands then sit close together along the barrel (0.14 apart
+// instead of 0.26) so neither arm has to overshoot far to reach its point.
+//
+// The rest is body language, and it is doing most of the work:
+//   lean   the whole body pitches onto the weapon (about the feet, so the
+//          legs slant into it too — he is driving forward, not standing).
+//   head   chin down and forward, tucked in behind the receiver.
+//   stance rear leg braced back, front leg under him — a bladed firing stance
+//          instead of the ATTACK clip's twitching shuffle, which was written
+//          for a flood form swinging claws and has no business under a rifle.
+// `pitch` above then cancels the lean so the barrel comes out LEVEL in world
+// and the beam leaves it pointing at what he is shooting.
+export const AIM = {
+  lean: -0.24,       // body frame, negative = forward (see _pose)
+  head: 0.28,        // chin down behind the weapon
+  stance: 0.32,      // rear/front leg split
+  rate: 6.5,         // eased in and out at this rate (≈0.2 s to commit)
 };
 const RIFLE_TIP = 0.515;   // muzzle along the rifle's own +X (RIFLE_MUZZLE.z)
 const AXIS_Z = new THREE.Vector3(0, 0, 1);   // model-frame fore/aft swing axis
@@ -142,7 +186,7 @@ function rigMetrics(parts) {
 // Solve the two arm rotations that put this body's hands on a rifle carried at
 // `cfg`, and hand back the weapon transform they were solved against so the
 // two can never be tuned apart again. Pure geometry, run once per model.
-function solveCarry(rig, over) {
+export function solveCarry(rig, over) {
   if (!rig.armR || !rig.armL) return null;
   const C = { ...CARRY, ...over };
   const y = rig.armR.pivot[1] - rig.armR.len + C.drop;
@@ -504,6 +548,59 @@ export class Agents3D {
     return 0;
   }
 
+  // How committed to the weapon this body is, 0..1, eased toward the target so
+  // the gun comes up and goes down instead of popping between two stances.
+  _aimBlend(id, want, dt) {
+    const m = (this._aimW ??= new Map());
+    const target = want ? 1 : 0;
+    let w = m.get(id);
+    if (w === undefined) w = target;                  // first sight of a body: no swing-up
+    else w += (target - w) * Math.min(1, dt * AIM.rate);
+    if (w > 0.999) w = 1; else if (w < 0.001) w = 0;
+    m.set(id, w);
+    return w;
+  }
+
+  // the body's own forward tip when engaging (see AIM)
+  _aimLean(w) { return AIM.lean * w; }
+
+  // FEET ON THE DECK, LEANING (the same rule _gaitDip enforces for the walk).
+  // A rigid leg split ±s about its hip lifts BOTH feet L(1−cos s); the lean
+  // then rotates that pair about the body origin, which drops the leading foot
+  // by L·sin s·sin(lean) and lifts the trailing one by as much. At 0.32 rad of
+  // stance and 0.24 of lean that is 7 cm of front boot buried in the plating,
+  // so the body rides up by however far the LOWER foot went under.
+  _aimDip(legLen, w, lean) {
+    if (!w) return 0;
+    const s = AIM.stance * w;
+    return legLen * ((1 - Math.cos(s)) * Math.cos(lean) - Math.abs(Math.sin(s) * Math.sin(lean)));
+  }
+
+  // The carry this body is actually holding: the relaxed low-ready, the
+  // sighted presentation, or a point between the two while it swings up.
+  // Both solves are per-model constants; only the interpolation is per-body.
+  _holdFor(set, w) {
+    if (!set.hold || !set.holdFire) return set.hold;
+    if (w <= 0) return set.hold;
+    if (w >= 1) return set.holdFire;
+    const a = set.hold, b = set.holdFire;
+    const o = (this._holdMix ??= {
+      qR: new THREE.Quaternion(), qL: new THREE.Quaternion(), rifle: {},
+    });
+    o.qR.copy(a.qR).slerp(b.qR, w);
+    o.qL.copy(a.qL).slerp(b.qL, w);
+    const ar = a.rifle, br = b.rifle, r = o.rifle;
+    r.fwd = ar.fwd + (br.fwd - ar.fwd) * w;
+    r.y = ar.y + (br.y - ar.y) * w;
+    r.right = ar.right + (br.right - ar.right) * w;
+    r.yaw = ar.yaw + (br.yaw - ar.yaw) * w;
+    r.pitch = ar.pitch + (br.pitch - ar.pitch) * w;
+    r.sh = ar.sh;
+    r.muzzleY = ar.muzzleY + (br.muzzleY - ar.muzzleY) * w;
+    r.muzzleF = ar.muzzleF + (br.muzzleF - ar.muzzleF) * w;
+    return o;
+  }
+
   // dead-sprawl stamp for bodies lying flat: limbs splayed at deterministic
   // per-body angles instead of the bind-pose T (user: corpses read as
   // cardboard cutouts half-sunk in the deck). The swing plane IS the lying
@@ -550,7 +647,7 @@ export class Agents3D {
   // animated at all and are simply placed on the weapon, and `bob` swings that
   // whole assembly — arms AND rifle together, about the shoulder line — so
   // nothing can shake the gun out of the hands.
-  _stampAnimated(set, i, clip, animT, id, hold = null, bob = 0, panic = false) {
+  _stampAnimated(set, i, clip, animT, id, hold = null, bob = 0, panic = false, aim = 0) {
     if (this._curD2 < CAST_NEAR2) this._castNear.add(set);
     const arms = hold && clip !== CLIP.DEATH;
     if (arms && bob) {
@@ -566,7 +663,16 @@ export class Agents3D {
         if (bob) this._mRot.makeRotationFromQuaternion(this._qArm.copy(this._qBob).multiply(q));
         else this._mRot.makeRotationFromQuaternion(q);
       } else {
-        const ang = this._swingFor(part, clip, animT, id, panic);
+        let ang = this._swingFor(part, clip, animT, id, panic);
+        // SIGHTED: chin tucked in behind the receiver and the feet bladed —
+        // the ATTACK cycle underneath is a flood form's claw shuffle, which
+        // twitched a rifleman's legs and bobbed his head off the sights.
+        if (aim > 0) {
+          const s = bodyRnd(id) < 0.5 ? 1 : -1;   // which foot he leads with
+          if (part === 'head') ang += (AIM.head - ang) * aim;
+          else if (part === 'legL') ang += (s * AIM.stance - ang) * aim;
+          else if (part === 'legR') ang += (-s * AIM.stance - ang) * aim;
+        }
         // ARMS IN (user: "both hands outstretched", "still looks silly"): the
         // A-pose bind holds the hands ~43° off the body, so every unarmed
         // walker swung wide-splayed arms. Adduction about model X — the only
@@ -586,6 +692,28 @@ export class Agents3D {
       this._mOut.multiplyMatrices(this._m, this._mPart);
       mesh.setMatrixAt(i, this._mOut);
     }
+  }
+
+  // Where the barrel ENDS and where it POINTS, in the body's frame, after the
+  // carry's bob and the body's lean have both swung it. The torch cone and the
+  // weapon light hang off this, which is how the beam stays on the nozzle
+  // through a stance change instead of drifting off it.
+  _aimOf(cfg, bob, lean) {
+    let f = cfg.muzzleF, y = cfg.muzzleY;
+    if (bob) {   // about the shoulder line, exactly as _carryAt swings it
+      const dy = y - cfg.sh, c = Math.cos(bob), s = Math.sin(bob);
+      const nx = f * c - dy * s; y = cfg.sh + f * s + dy * c; f = nx;
+    }
+    if (lean) {  // ...and about the feet
+      const c = Math.cos(lean), s = Math.sin(lean);
+      const nx = f * c - y * s; y = f * s + y * c; f = nx;
+    }
+    const o = (this._aimOut ??= { f: 0, y: 0, yaw: 0, elev: 0 });
+    // the bob moves the NOZZLE but is deliberately kept out of the AIM: it is
+    // a breath, and at a 16 m throw 0.045 rad of it would slide the pool on the
+    // wall by three quarters of a metre at walking cadence.
+    o.f = f; o.y = y; o.yaw = cfg.yaw; o.elev = cfg.pitch + lean;
+    return o;
   }
 
   // the breathing / walking sway of a shouldered weapon, shared by the arms
@@ -618,7 +746,7 @@ export class Agents3D {
   // That is the bright pool on the wall he is facing, and because every
   // marine faces somewhere different, a dark room fills with separate spots
   // that move as they cover their arcs.
-  _addRifleLight(nodeIdx, sx, sy, deck, elev, hSim, muzzleY = 1.15) {
+  _addRifleLight(nodeIdx, sx, sy, deck, elev, hSim, muzzleY = 1.15, yaw = RIFLE_YAW, tilt = 0) {
     const [mwx, mwz] = this.world.simToWorld(sx, sy, deck);
     const ddx = mwx - (this.viewX ?? 0), ddz = mwz - (this.viewZ ?? 0);
     const d2 = ddx * ddx + ddz * ddz;
@@ -627,7 +755,7 @@ export class Agents3D {
     // ALONG THE BARREL (user: "flashlights aligned with gun nozzles"). The
     // rifle is carried yawed across the body, so the body's heading points
     // somewhere the weapon does not.
-    const gh = hSim - RIFLE_YAW;
+    const gh = hSim - yaw;
     const hx = Math.cos(gh), hy = Math.sin(gh);
     const ox = sx + Math.cos(hSim) * 0.20 + hx * 0.55;   // muzzle
     const oy = sy + Math.sin(hSim) * 0.20 + hy * 0.55;
@@ -648,8 +776,14 @@ export class Agents3D {
     // footprint picking out what the man is actually looking at.
     // the carry solve reports where the barrel actually ends — the old
     // hardcoded 1.15 sat ~45 cm above it once the rifle came down to the hip
+    // ...and the barrel's real ELEVATION drives the aim point, so the pool
+    // rides up the wall when he sights and sits on the deck when he doesn't.
+    // The host used to nose every beam down a flat 3 degrees to stand in for
+    // this; `tilt` is the true angle and needs no compensating.
+    // clamped so a long throw aims at the deck at worst, never under it
+    const rise = Math.max(-muzzleY, Math.min(muzzleY + 1.5, Math.tan(tilt) * t));
     r.ox = owx; r.oy = elev + muzzleY; r.oz = owz;
-    r.tx = hwx; r.ty = elev + muzzleY - 0.10; r.tz = hwz;
+    r.tx = hwx; r.ty = elev + muzzleY + rise; r.tz = hwz;
     r.throw = t; r.d2 = d2;
     this.rifleLightN++;
   }
@@ -682,11 +816,11 @@ export class Agents3D {
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
     const counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
-    let clip = 0, animT = 0, curId = 0, curPanic = false, curBob = 0;
+    let clip = 0, animT = 0, curId = 0, curPanic = false, curBob = 0, curAim = 0;
     const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId, null, 0, curPanic);
     // rifle carriers: arms placed on the solved carry, not swung
     const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId,
-      clip === CLIP.ATTACK ? set.holdFire : set.hold, curBob);
+      this._holdFor(set, curAim), curBob, curPanic, curAim);
 
     const seen = new Set();
     // per-frame per-set "any instance near enough to cast into the torch cone"
@@ -742,6 +876,9 @@ export class Agents3D {
     if (this.rpos.size > buf.count * 2) {
       for (const id of this.rpos.keys()) if (!seen.has(id)) this.rpos.delete(id);
     }
+    if (this._aimW && this._aimW.size > buf.count * 2) {
+      for (const id of this._aimW.keys()) if (!seen.has(id)) this._aimW.delete(id);
+    }
     // PIXEL-LOCK a seated burrower onto the body it's converting/raising (user:
     // form, corpse and the combat form that rises must be ONE spot). The sim
     // clamps them together; snap the render position past the ease-in lag so the
@@ -775,6 +912,7 @@ export class Agents3D {
       curId = id;
       curPanic = (flags & FLAG.PANICKED) !== 0;
       curBob = this._carryBob(clip, animT, id);
+      curAim = 0;
       const rp = this.rpos.get(id);
       const deck = rp.deck;
       if (Math.abs(deck - playerDeck) > 1) continue; // invisible through opaque decks
@@ -942,37 +1080,55 @@ export class Agents3D {
           break;
         }
         case FACTION.ARMED: {
-          const gy = elev - this._gaitDip(clip, animT, id, this.armedSet.rig.legLen);
-          this._pose(wx, gy, wz, heading, 1, 1, 1, flinch);
-          stampHold(this.armedSet, counts.armed++);
-          const carry = clip === CLIP.ATTACK ? this.armedSet.holdFire : this.armedSet.hold;
-          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob);
+          const set = this.armedSet;
+          // ENGAGED OR NOT (user: "obviously need marines leaning in and
+          // sighting their guns"). _clipFor turns STATE.FIGHT/GRABBING into
+          // CLIP.ATTACK, so for a rifle carrier the clip IS the engagement
+          // flag. Eased, not switched: the weapon comes UP over ~0.2 s.
+          curAim = this._aimBlend(id, clip === CLIP.ATTACK, dt);
+          const aimLean = this._aimLean(curAim);
+          const lean = flinch + aimLean;
+          const gy = elev - this._gaitDip(clip, animT, id, set.rig.legLen)
+            - this._aimDip(set.rig.legLen, curAim, aimLean);
+          this._pose(wx, gy, wz, heading, 1, 1, 1, lean);
+          stampHold(set, counts.armed++);
+          const carry = this._holdFor(set, curAim);
+          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob, lean);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
+            // out of the NOZZLE, not the sternum (user: "flashlights aligned
+            // with gun nozzles") — and down the barrel's REAL bearing and
+            // elevation once the lean and the bob have swung it
+            const mz = this._aimOf(carry.rifle, curBob, lean);
             if (sim.fogAt(buf.nodeId[i])) { // only fog gives the shaft something to scatter off
-              // out of the NOZZLE, not the sternum (user: "flashlights aligned
-              // with gun nozzles") — the solve hands back where the barrel ends
-              this._beamAt(wx, gy + carry.rifle.muzzleY, wz, heading);
+              this._beamAt(wx, gy + mz.y, wz, heading, mz.yaw, mz.elev);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
-            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading, carry.rifle.muzzleY);
+            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading,
+              mz.y, mz.yaw, mz.elev);
           }
           break;
         }
         case FACTION.MARINE: {
           const set = (flags & FLAG.ODST) ? this.odstSet : this.marineSet;
-          const gy = elev - this._gaitDip(clip, animT, id, set.rig.legLen);
-          this._pose(wx, gy, wz, heading, 1, 1, 1, flinch);
+          curAim = this._aimBlend(id, clip === CLIP.ATTACK, dt);
+          const aimLean = this._aimLean(curAim);
+          const lean = flinch + aimLean;
+          const gy = elev - this._gaitDip(clip, animT, id, set.rig.legLen)
+            - this._aimDip(set.rig.legLen, curAim, aimLean);
+          this._pose(wx, gy, wz, heading, 1, 1, 1, lean);
           stampHold(set, (flags & FLAG.ODST) ? counts.odst++ : counts.marine++);
-          const carry = clip === CLIP.ATTACK ? set.holdFire : set.hold;
-          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob);
+          const carry = this._holdFor(set, curAim);
+          this._carryAt(wx, gy, wz, heading, carry.rifle, curBob, lean);
           this.rifle.setMatrixAt(counts.rifle++, this._m);
           if (this._needsLamp(buf.nodeId[i])) {
+            const mz = this._aimOf(carry.rifle, curBob, lean);
             if (sim.fogAt(buf.nodeId[i])) {
-              this._beamAt(wx, gy + carry.rifle.muzzleY, wz, heading);
+              this._beamAt(wx, gy + mz.y, wz, heading, mz.yaw, mz.elev);
               this.beams.setMatrixAt(counts.beam++, this._m);
             }
-            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading, carry.rifle.muzzleY);
+            this._addRifleLight(buf.nodeId[i], buf.posX[i], buf.posY[i], deck, elev, -heading,
+              mz.y, mz.yaw, mz.elev);
           }
           break;
         }
@@ -1280,11 +1436,21 @@ export class Agents3D {
   // Place a CARRIED rifle from the same solve its owner's arms were placed
   // from, so the two cannot drift apart. `floorY` is the deck under his feet:
   // the offsets are model-space, exactly as solveCarry produced them.
-  _carryAt(x, floorY, z, rotY, cfg, bob = 0) {
+  // THE GUN LEANS WITH THE MAN. `lean` is the body's own fore/aft tip — the
+  // same value _pose writes — and the carry has to eat it or the two come
+  // apart: _pose rotates the body about its FEET, so a marine who pitches
+  // forward onto his weapon left the weapon standing plumb behind his hands.
+  // Invisible at the walk's 0.045 rad; a gaping hole at the aiming lean.
+  _carryAt(x, floorY, z, rotY, cfg, bob = 0, lean = 0) {
     let ox = cfg.fwd, oy = cfg.y, pitch = cfg.pitch;
     if (bob) {   // the whole carry rotates about the shoulder line, as the arms do
       const dx = ox, dy = oy - cfg.sh, c = Math.cos(bob), s = Math.sin(bob);
       ox = dx * c - dy * s; oy = cfg.sh + dx * s + dy * c; pitch += bob;
+    }
+    if (lean) {  // ...and the body's lean rotates it about the FEET
+      const c = Math.cos(lean), s = Math.sin(lean);
+      const nx = ox * c - oy * s;
+      oy = ox * s + oy * c; ox = nx; pitch += lean;
     }
     const fx = Math.cos(rotY), fz = -Math.sin(rotY);   // +X-forward after rotY
     this._e.set(0, rotY + cfg.yaw, pitch);
@@ -1297,12 +1463,19 @@ export class Agents3D {
   // The torch points WHERE HE IS LOOKING. Riding _rifleAt put the cone on the
   // low-ready rifle, which is held across the chest — so the beam came out of
   // the marine's sternum and threw off to one side (user screenshot).
-  _beamAt(x, y, z, rotY) {
-    rotY += RIFLE_YAW;                            // down the barrel, like the light
-    const fx = Math.cos(rotY), fz = -Math.sin(rotY);
-    this._e.set(0, rotY, 0);
+  // THE CONE NOW CARRIES ELEVATION. It used to be yaw-only, which is why the
+  // carry was pinned to a level barrel and why the lighting host had to fake a
+  // flat 3-degree droop for every marine on the ship. The carry hands back its
+  // real world-frame yaw and elevation (barrel pitch plus the body's lean), so
+  // a man sighting down his rifle throws the beam where the rifle is actually
+  // pointing and a man at low-ready throws it at the deck ahead of him.
+  _beamAt(x, y, z, rotY, yaw = RIFLE_YAW, elev = 0) {
+    rotY += yaw;                                  // down the barrel, like the light
+    const fx = Math.cos(rotY) * Math.cos(elev), fz = -Math.sin(rotY) * Math.cos(elev);
+    this._e.set(0, rotY, elev);
     this._q.setFromEuler(this._e);
-    this._m.compose(this._p.set(x + fx * 0.35, y, z + fz * 0.35), this._q, this._s.set(1, 1, 1));
+    this._m.compose(this._p.set(x + fx * 0.35, y + Math.sin(elev) * 0.35, z + fz * 0.35),
+      this._q, this._s.set(1, 1, 1));
   }
 
   _rifleAt(x, y, z, rotY) {
