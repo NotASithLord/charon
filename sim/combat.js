@@ -172,6 +172,7 @@ export function resolveCombat(sim, dt) {
         anyFire = true;
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
+        sim.graph.noteBurn(node);
         // ...AND WHERE. The stream lands on what he is burning, not at the
         // room's centroid. `targets` is already id-sorted, so the nearest of
         // them is a deterministic pick with no roll behind it.

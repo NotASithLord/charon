@@ -243,12 +243,18 @@ export function createGameSync({
     if (packet.world && typeof packet.world === 'object') {
       const edgeState = packet.world.edges;
       if (Array.isArray(edgeState) && edgeState.length === sim.graph.edges.length) {
+        let lockChanged = false;
         for (let index = 0; index < edgeState.length; index++) {
           const bits = edgeState[index];
           if (!Number.isInteger(bits) || bits < 0 || bits > 3) continue;
-          sim.graph.edges[index].locked = !!(bits & 1);
-          sim.graph.edges[index].burning = !!(bits & 2);
+          const edge = sim.graph.edges[index];
+          const locked = !!(bits & 1);
+          if (edge.locked !== locked) { edge.locked = locked; lockChanged = true; }
+          edge.burning = !!(bits & 2);
         }
+        // cached flow fields read link.locked — the per-tick wipe that used
+        // to cover this apply is gone (graph.sweepBurns replaced it)
+        if (lockChanged) sim.graph.invalidatePathCache();
       }
       if (packet.world.outcome === null || packet.world.outcome === 'contained' || packet.world.outcome === 'lost') {
         sim.outcome = packet.world.outcome;

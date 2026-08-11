@@ -140,10 +140,14 @@ function setTeamSpots(n) {
   n = Math.max(0, Math.min(n, teamTorches.length));
   if (n === teamSpotN) return;
   teamSpotN = n;
-  teamTorches.forEach((L, i) => {
-    if (i < n) { if (!L.parent) { scene.add(L); scene.add(L.target); } }
-    else if (L.parent) { L.intensity = 0; scene.remove(L); scene.remove(L.target); }
-  });
+  // remove-all-then-re-add, same as LightPool.setActive (perf pass 3): keeps
+  // the scene's light ORDER a pure function of n — an append-after-shrink
+  // permutation changes the LightsNode cache key and storms every pipeline
+  // through a recompile the prewarm never covered
+  for (const L of teamTorches) {
+    if (L.parent) { L.intensity = 0; scene.remove(L); scene.remove(L.target); }
+  }
+  for (let i = 0; i < n; i++) { scene.add(teamTorches[i]); scene.add(teamTorches[i].target); }
 }
 
 // IMAGE-BASED LIGHTING (the RoomEnvironment recipe, compacted): a tiny
@@ -507,6 +511,16 @@ function toggleFloodHud() {
   // live without pretending to a resolution the sim does not have
   const tick = setInterval(render, 1200);
   floodHud = { stop() { clearInterval(tick); d.remove(); } };
+}
+
+// ?debug=1 opens both panels at load. The keys are the ergonomic way in, but
+// they are also one more thing that can be wrong when a panel does not appear
+// — this way the URL alone is the whole instruction, with no keypress, no
+// focus and no intro gate in between. The hub routes on the hash, so the flag
+// is read from either half of the URL.
+if (QP.has('debug') || location.hash.includes('debug')) {
+  toggleFloodHud();
+  toggleAudioLog();
 }
 
 // FIRE (user rule): fires are SIM objects now — the breach blaze plus the

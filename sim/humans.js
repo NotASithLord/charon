@@ -397,6 +397,7 @@ function updateMarineTick(sim, a, dt) {
           a.fuel -= sim.P.flamethrower.fuelPerCorpse;
           sim.stats.corpsesBurned++;
           sim.graph.burningUntil[a.node] = sim.t + sim.P.flamethrower.burnNodeSec;
+          sim.graph.noteBurn(a.node);
           // the fuel goes onto THAT body, not into the middle of the room —
           // and the trigger is down for the length of the squirt (see FLAMING)
           sim.graph.burnX[a.node] = corpse.x;

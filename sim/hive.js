@@ -198,6 +198,35 @@ export class Hive {
       this.believedHardness[n] += Math.max(0, s - this.believedHardness[n]);
       this.believedHumanStr[n] += Math.max(0, s - this.believedHumanStr[n]);
     }
+    // every believed* field just moved — memoized routes are stale
+    this._beliefEpoch = (this._beliefEpoch ?? 0) + 1;
+  }
+
+  // --- per-epoch route memo (perf pass 3) ---
+  // The strategic draft loops call safeAssaultPath/stealthPath in forms x
+  // candidate-nodes patterns — the measured storm was 300-550 full Dijkstras
+  // in ONE 15Hz tick every 2.5s (a metronomic 30-100ms hitch that grew with
+  // the flood). The inputs those predicates read are exactly (a) the graph's
+  // passability (locks / vents / burning — versioned by pathVersion) and
+  // (b) the believed* fields + known* sets (versioned by _beliefEpoch, which
+  // observeBlocked also rides via invalidatePathCache). Same inputs => same
+  // route, so a memo keyed on both versions is bit-identical; only the CPU
+  // time changes. Callers CONSUME paths (setPath aliases then shifts), so
+  // hits return a shallow copy — step objects are never mutated.
+  _routeMemo(kind) {
+    const g = this.sim.graph;
+    const v = (g.pathVersion ?? 0);
+    const e = (this._beliefEpoch ?? 0);
+    if (this._memoV !== v || this._memoE !== e) {
+      this._memoV = v; this._memoE = e;
+      (this._assaultMemo ??= new Map()).clear();
+      (this._stealthMemo ??= new Map()).clear();
+      (this._nbhMemo ??= new Map()).clear();
+      (this._huntMemo ??= new Map()).clear();
+    }
+    return kind === 'assault' ? this._assaultMemo
+      : kind === 'stealth' ? this._stealthMemo
+        : kind === 'nbh' ? this._nbhMemo : this._huntMemo;
   }
 
   // --- route risk (§13.8) ---
@@ -232,6 +261,10 @@ export class Hive {
   // Stealth pathing (§6.3): prefer routes around believed human presence and
   // watched vents; fall back to the direct route when there is no choice.
   stealthPath(from, to, kind) {
+    const memo = this._routeMemo('stealth');
+    const key = kind + '|' + from + '|' + to;
+    const hit = memo.get(key);
+    if (hit !== undefined) return hit === null ? null : hit.slice();
     const g = this.sim.graph;
     const layers = this._layersFor(kind);
     const base = this._passFor(kind);
@@ -241,7 +274,11 @@ export class Hive {
       if (l.kind === 'vent' && this.ventWatched(l) > 0.5) return false;
       return true;
     };
-    return g.path(from, to, layers, quiet) ?? g.path(from, to, layers, base);
+    const path = g.path(from, to, layers, quiet) ?? g.path(from, to, layers, base);
+    memo.set(key, path);
+    // callers consume paths (setPath aliases, then shift()) — never hand out
+    // the stored array, on hit OR miss
+    return path === null ? null : path.slice();
   }
   safeInfectionPath(from, to) { return this.stealthPath(from, to, 'infection'); }
 
@@ -250,12 +287,20 @@ export class Hive {
   // destination itself may be hard — that's the assault). Walking the muster
   // through the last-stand corridor was how forms trickled in one at a time.
   safeAssaultPath(from, to) {
+    const memo = this._routeMemo('assault');
+    const key = from * 4096 + to; // node counts are far below 4096
+    const hit = memo.get(key);
+    if (hit !== undefined) return hit === null ? null : hit.slice();
     const pass = (l, a, b) => {
       if (!this.bigPass(l, a, b)) return false;
       if (b !== from && b !== to && this.believedHardness[b] > 0.7) return false;
       return true;
     };
-    return this.sim.graph.path(from, to, ['std', 'shaft'], pass);
+    const path = this.sim.graph.path(from, to, ['std', 'shaft'], pass);
+    memo.set(key, path);
+    // callers consume paths (setPath aliases, then shift()) — never hand out
+    // the stored array, on hit OR miss
+    return path === null ? null : path.slice();
   }
 
   // --- sweep ETA (§6.7/§13.5): a belief, not ground truth ---
@@ -1004,9 +1049,13 @@ export class Hive {
       // all (user rule generalized): raising it is a 2 s conversion that
       // stands up right where the fighting is, vs a 7 s conversion after a
       // walk across the ship
+      // the 2-hop neighborhood is identical for every candidate — hoisted out
+      // of the find() predicate (perf pass 3: it used to re-run a fresh BFS
+      // per scanned agent, thousands of times per strategic tick late game)
+      const nearSet = new Set(sim.nodesNear(f.node, 2));
       const closeDowned = sim.agents.find((d) => !d.dead && d.faction === FACTION.COMBAT
         && d.downed && d.damage < 100 && !d.claimed
-        && sim.nodesNear(f.node, 2).includes(d.pnode ?? d.node)
+        && nearSet.has(d.pnode ?? d.node)
         && !sim.occupants(d.pnode ?? d.node).some((h) => h.hp > 0 && !h.dead
           && (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED)));
       if (closeDowned) {
@@ -1262,6 +1311,14 @@ export class Hive {
   // current contact — that's how it "seeks out civilians as soon as able."
   // Marine-held nodes are avoided (hide from the guns, hunt the soft).
   nearestHuntNode(from) {
+    const memo = this._routeMemo('hunt');
+    const hit = memo.get(from);
+    if (hit !== undefined) return hit;
+    const r = this._nearestHuntNode(from);
+    memo.set(from, r);
+    return r;
+  }
+  _nearestHuntNode(from) {
     const sim = this.sim, g = sim.graph;
     // population prior per node from live beliefs...
     const prior = new Float32Array(g.n);
@@ -1392,6 +1449,14 @@ export class Hive {
   }
 
   nearestBelievedHuman(from) {
+    const memo = this._routeMemo('nbh');
+    const hit = memo.get(from);
+    if (hit !== undefined) return hit;
+    const r = this._nearestBelievedHuman(from);
+    memo.set(from, r);
+    return r;
+  }
+  _nearestBelievedHuman(from) {
     let best = -1, bestScore = -Infinity;
     for (let n = 0; n < this.sim.graph.n; n++) {
       if (this.believedHumanStr[n] <= 0.05) continue;

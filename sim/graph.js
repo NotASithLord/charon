@@ -482,10 +482,33 @@ export class ShipGraph {
   // NOTE: hive predicates are direction-dependent (burning blocks ENTRY), so
   // there is deliberately no symmetric from/to lookup.
   invalidatePathCache() {
+    this.pathVersion = (this.pathVersion ?? 0) + 1;
     if (this._hopsCache?.size) this._hopsCache.clear();
   }
+
+  // BURN BOOKKEEPING (perf pass 3): the cache used to be wiped at the top of
+  // EVERY tick because burning-node predicates compare burningUntil against
+  // sim.t, and expiry is implicit. Now every burningUntil writer also calls
+  // noteBurn(), and sweepBurns(t) — called once per tick — invalidates only
+  // when a node actually ENTERS or LEAVES the burning set. Fields survive
+  // across strategic rounds while passability genuinely holds still.
+  noteBurn(node) {
+    const s = (this._burning ??= new Set());
+    if (!s.has(node)) { s.add(node); this._burnDirty = true; }
+  }
+  sweepBurns(t) {
+    let changed = this._burnDirty === true;
+    this._burnDirty = false;
+    const s = this._burning;
+    if (s) for (const n of s) {
+      if (this.burningUntil[n] <= t) { s.delete(n); changed = true; }
+    }
+    if (changed) this.invalidatePathCache();
+  }
+
   hops(from, to, layers, passFn) {
     const c = (this._hopsCache ??= new Map());
+    if (c.size > 512) c.clear(); // bound the field store (63-node graph: never hit in practice)
     const key = to + '|' + layers.join(',') + '|' + (passFn ? (passFn._ffid ??= ++_ffSeq) : 0);
     let ff = c.get(key);
     if (!ff) {

@@ -255,13 +255,32 @@ export class QualityGovernor {
     const budgetCap = this.hd ? 9 : Math.max(1, Math.sqrt(this.pixelBudget / ((viewportW * viewportH) || 1)));
     const cap = Math.max(floor, Math.min(window.devicePixelRatio || 1, this.hd ? 2 : R.res[1], budgetCap));
     let next = cur;
+    // EVERY resolution step reallocates the whole post chain on the next
+    // frame (the PassNode HDR target, the bloom mips and the FXAA RTT all
+    // track renderer size) — ~40-50MB of GPU texture churn, a visible
+    // hitch. The walk therefore moves in BIG steps on a COOLDOWN (perf
+    // pass 3): the old 0.15/0.1 steps on a bare 3s cadence meant a machine
+    // hovering around the thresholds — exactly what background apps cause —
+    // reallocated its render targets every 3 seconds indefinitely, a
+    // metronomic stutter the governor itself was manufacturing. The
+    // snap-above-cap correction stays immediate (boot-only) and the
+    // stranded-below-floor self-heal stays immediate (rare, one-off).
+    const resReady = now - (this._resMovedAt ?? 0) > 9000;
+    const wantAscend = (this._ema < 13 || locked) && cur < cap;
     // snap into range FIRST: boot can start above the cap (pixelRatioCap is a
     // fixed 1.25) and no other branch walks it down
     if (cur > cap + 0.01) next = cap;
-    else if (this._ema > 20 && cur > floor) next = Math.max(floor, cur - 0.15);
-    else if ((this._ema < 13 || locked) && cur < cap) next = Math.min(cap, cur + 0.1);
-    else if (cur < floor - 0.01) next = floor; // self-heal: never sit stranded below the active rung's floor
+    else if (resReady && this._ema > 20 && cur > floor) next = Math.max(floor, cur - 0.2);
+    else if (resReady && wantAscend) {
+      // ascends need TWO consecutive fast evaluations — a single quiet 3s
+      // window between background-app bursts is not proof of headroom, and
+      // a failed promotion costs two reallocation hitches (up, then down)
+      if (++this._resFast >= 2) next = Math.min(cap, cur + 0.2);
+    } else if (cur < floor - 0.01) next = floor; // self-heal: never sit stranded below the active rung's floor
+    if (!wantAscend) this._resFast = 0;
     if (Math.abs(next - cur) > 0.01) {
+      this._resMovedAt = now;
+      this._resFast = 0;
       this.renderer.setPixelRatio(next);
       this.renderer.setSize(viewportW, viewportH, false);
       this.onResize?.(viewportW, viewportH);

@@ -37,10 +37,17 @@ export class LightPool {
     n = Math.max(1, Math.min(n, this.lights.length));
     if (n === this.active) return;
     this.active = n;
-    this.lights.forEach((L, i) => {
-      if (i < n) { if (!L.parent) this.scene.add(L); }
-      else if (L.parent) { L.intensity = 0; this.scene.remove(L); }
-    });
+    // CANONICAL ORDER (perf pass 3): scene.add APPENDS, so growing the pool
+    // after a shrink used to leave the re-added lights at the END of
+    // scene.children — a light-order PERMUTATION that changes the LightsNode
+    // cache key and recompiled every pipeline into variants prewarm never
+    // saw. Removing everything and re-adding 0..n-1 in index order makes the
+    // scene's light order a pure function of n, so every rung's cache key
+    // matches what prewarm compiled.
+    for (const L of this.lights) {
+      if (L.parent) { L.intensity = 0; this.scene.remove(L); }
+    }
+    for (let i = 0; i < n; i++) this.scene.add(this.lights[i]);
   }
 
   // start a frame: forget last frame's declarations

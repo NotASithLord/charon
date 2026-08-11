@@ -4,11 +4,14 @@
 // macrotask OUTSIDE the rAF callback: the browser executes them in the
 // idle gap between vsyncs, so a heavy tick delays at most the next frame
 // instead of stacking on top of every frame's render cost. At most
-// `maxPerTask` steps per task — a tab-restore backlog drains over a few
-// tasks instead of freezing one — and a backlog deeper than
-// `dropBacklogSteps` is dropped rather than marathon-replayed.
+// `maxPerTask` steps per task; the remainder re-posts, so each backlog
+// step gets its own macrotask and a render frame can interleave between
+// them (perf pass 3: at 3 steps per task, every hard hitch — GC pause,
+// pipeline compile, target realloc — was echoed as a second long frame
+// by the burst of catch-up ticks that followed it). A backlog deeper
+// than `dropBacklogSteps` is dropped rather than marathon-replayed.
 export class TickScheduler {
-  constructor({ stepSec, run, maxPerTask = 3, dropBacklogSteps = 40 }) {
+  constructor({ stepSec, run, maxPerTask = 1, dropBacklogSteps = 40 }) {
     this.stepSec = stepSec;
     this.run = run;
     this.maxPerTask = maxPerTask;

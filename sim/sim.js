@@ -326,6 +326,7 @@ export class Sim {
     const wasBurning = g.burningUntil[node] > this.t;
     g.burningUntil[node] = this.t + this.P.flamethrower.burnNodeSec;
     g.burnX[node] = x; g.burnY[node] = y;
+    g.noteBurn(node);
     if (!wasBurning) g.invalidatePathCache();
   }
 
@@ -552,9 +553,14 @@ export class Sim {
     this.buffer.beginTick();
     this.tickCount++;
     this.t = this.tickCount * dt;
-    // the hops cache is only valid while passability inputs hold still —
-    // sim.t just moved (burning-node checks read it), so drop it
-    this.graph.invalidatePathCache();
+    // the hops cache is only valid while passability inputs hold still.
+    // sim.t just moved and burning-node predicates read it — but the ONLY
+    // way time alone flips passability is a burn timer expiring, so sweep
+    // the burning set instead of wiping the cache wholesale (perf pass 3:
+    // the old unconditional wipe forced every strategic round to rebuild
+    // up to ~64 flow fields from scratch). Lock/vent/belief mutators all
+    // invalidate at their own write sites.
+    this.graph.sweepBurns(this.t);
 
     this._refreshOccupancy();
 
@@ -800,6 +806,7 @@ export class Sim {
         const e = open.splice(this.rng.int(open.length), 1)[0];
         e.locked = true;
         if (this._reachableStd(e.a, e.b)) {
+          this.graph.invalidatePathCache(); // cached fields read link.locked
           this.log('radio', `a door mechanism seizes between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name}`, e.a);
           return;
         }
@@ -808,6 +815,7 @@ export class Sim {
     } else if (jammed.length) {
       const e = jammed[this.rng.int(jammed.length)];
       e.locked = false;
+      this.graph.invalidatePathCache(); // cached fields read link.locked
       this.log('radio', `the jammed door between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name} grinds free`, e.a);
     }
   }
