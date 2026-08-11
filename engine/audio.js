@@ -119,6 +119,7 @@ export class PositionalSynth {
     if (p) { src.connect(lp).connect(g).connect(p).connect(this.master); p.pan.value = pan; }
     else src.connect(lp).connect(g).connect(this.master);
     src.start();
+    return src; // same contract as play(): the source, or nothing if it never sounded
   }
 
   // continuous tone bed: twin detuned drones (a slow beat frequency reads

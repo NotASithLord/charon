@@ -379,6 +379,118 @@ function toggleSoundBoard() {
   document.body.appendChild(d);
 }
 
+// AUDIO LOG (user: "so i can see what's playing visually by name"). The board
+// above answers "what does X sound like"; this answers the harder one — "what
+// WAS that?" — by naming every cue as it fires. It is a HUD, not a dialog: it
+// does not take pointer lock, so you can watch it while you play.
+//   J opens it. Rows are newest-first. A cue repeating inside 1.2 s collapses
+// to a xN counter instead of scrolling the interesting things off the top,
+// which matters because a firefight is mostly `shot` and `shriek`.
+let audioLog = null;
+function toggleAudioLog() {
+  if (audioLog) { audioLog.stop(); audioLog = null; return; }
+  audio.ensure();
+  const d = document.createElement('div');
+  d.className = 'hud';
+  d.style.cssText = 'right:12px;top:180px;width:210px;z-index:6;'
+    + 'font:11px/1.5 ui-monospace,Menlo,monospace;color:#bfd4f2;'
+    + 'background:rgba(6,10,16,0.72);border:1px solid #2a3a4e;padding:8px 10px';
+  const rows = document.createElement('div');
+  const head = document.createElement('div');
+  head.style.cssText = 'color:#7fe3ff;letter-spacing:0.12em;margin-bottom:6px';
+  head.textContent = 'AUDIO LOG · J';
+  d.append(head, rows);
+  document.body.appendChild(d);
+
+  const render = () => {
+    const now = performance.now();
+    // collapse consecutive repeats walking newest -> oldest
+    const out = [];
+    for (let i = audio.cues.length - 1; i >= 0 && out.length < 12; i--) {
+      const c = audio.cues[i];
+      const last = out[out.length - 1];
+      if (last && last.name === c.name && last.far === c.far && last.t - c.t < 1200) {
+        last.n++;
+        last.t = c.t;
+        continue;
+      }
+      out.push({ name: c.name, far: c.far, t: c.t, d: c.d, positional: c.positional, n: 1 });
+    }
+    rows.textContent = '';
+    if (!out.length) {
+      const empty = document.createElement('div');
+      empty.style.color = '#4a5a6e';
+      empty.textContent = 'silence';
+      rows.appendChild(empty);
+      return;
+    }
+    for (const c of out) {
+      const age = (now - c.t) / 1000;
+      const row = document.createElement('div');
+      // the newest cue is the one you are asking about, so it stays bright and
+      // the rest dim out over ~8 s — the panel reads as a decaying tail
+      row.style.cssText = `display:flex;gap:6px;opacity:${Math.max(0.28, 1 - age / 8).toFixed(2)}`;
+      const name = document.createElement('span');
+      name.style.cssText = 'flex:1;color:' + (c.far ? '#8fa8c4' : '#dce6ff');
+      name.textContent = c.far ? `${c.name} (far)` : c.name;
+      const meta = document.createElement('span');
+      meta.style.color = '#5f7c8f';
+      meta.textContent = (c.n > 1 ? `x${c.n} ` : '') + (c.positional ? `${c.d.toFixed(0)}m` : 'ear');
+      row.append(name, meta);
+      rows.appendChild(row);
+    }
+  };
+
+  render();
+  audio.onCue = render;
+  const tick = setInterval(render, 400); // ages the opacity out while nothing fires
+  audioLog = {
+    stop() { clearInterval(tick); if (audio.onCue === render) audio.onCue = null; d.remove(); },
+  };
+}
+
+// FLOOD READOUT (user: "a flood strength/number indicator for debugging"). H
+// opens it. Everything here is read straight off sim.hive.stats — the numbers
+// the hive scored its own decisions with — so if the panel says AGGRESSIVE, it
+// is aggressive; there is no second opinion to drift.
+//   mass = infection + combat*2 + carriers*2, the same figure that arms ALL-IN
+// at >= 50 and >= 3x the believed survivors. scarcity gates the posture flip.
+let floodHud = null;
+function toggleFloodHud() {
+  if (floodHud) { floodHud.stop(); floodHud = null; return; }
+  const d = document.createElement('div');
+  d.className = 'hud';
+  d.style.cssText = 'right:12px;top:12px;width:210px;z-index:6;'
+    + 'font:11px/1.5 ui-monospace,Menlo,monospace;color:#bfd4f2;'
+    + 'background:rgba(6,10,16,0.72);border:1px solid #3a2a2e;padding:8px 10px';
+  document.body.appendChild(d);
+
+  const render = () => {
+    const s = sim.hive?.stats;
+    if (!s) { d.textContent = 'FLOOD · H — hive has not ticked yet'; return; }
+    const row = (k, v, hot) =>
+      `<div style="display:flex;gap:6px"><span style="flex:1;color:#8fa8c4">${k}</span>`
+      + `<span style="color:${hot ? '#ff8a6a' : '#dce6ff'}">${v}</span></div>`;
+    d.innerHTML = `<div style="color:#ff8a6a;letter-spacing:0.12em;margin-bottom:6px">FLOOD · H</div>`
+      + row('mass', s.mass, s.mass >= 50)
+      + row('infection', s.I)
+      + row('combat', s.C)
+      + row('carriers', s.K)
+      + row('bodies free', s.bodies)
+      + row('scarcity', s.S.toFixed(2), s.S > 1.05)
+      + row('believed alive', s.believedAlive)
+      + row('posture', s.posture, s.posture === 'AGGRESSIVE')
+      + row('phase', s.opening ? 'opening' : 'steady')
+      + (s.allIn ? '<div style="margin-top:4px;color:#ff8a6a">ALL-IN — every form converging</div>' : '');
+  };
+
+  render();
+  // the hive thinks on a 2.5 s tick; polling twice that fast is enough to look
+  // live without pretending to a resolution the sim does not have
+  const tick = setInterval(render, 1200);
+  floodHud = { stop() { clearInterval(tick); d.remove(); } };
+}
+
 // FIRE (user rule): fires are SIM objects now — the breach blaze plus the
 // ship's broken (jammed) doors, all seeded in the sim itself so the flames
 // that hurt you are exactly the flames you see. The sim's flamethrower
@@ -1586,6 +1698,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyG') fragPressed = true;
   if (e.code === 'KeyM') toggleMap();
   if (e.code === 'KeyK') toggleSoundBoard();
+  if (e.code === 'KeyJ') toggleAudioLog();
+  if (e.code === 'KeyH') toggleFloodHud();
   // WEAPON SWAP: Q. NOT 1/2 — those are the fireteam order keys (follow /
   // hold / advance) and binding a weapon to them would fire both actions off
   // one press. Silently ignored until you have actually found a flamethrower.

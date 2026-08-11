@@ -362,6 +362,13 @@ export class Hive {
     // AGGRESSIVE and the rampage/muster hunt comes online. Modeled on allIn.
     const wasAggro = this.posture === 'AGGRESSIVE';
     this.posture = ((K >= 2 && S <= 1.05) || this.allIn) ? 'AGGRESSIVE' : 'EVASIVE';
+    // DEBUG READOUT (user: a flood strength/number indicator). Every one of
+    // these already drives a decision above — mass gates allIn, S gates the
+    // posture flip, believedAlive is the denominator of the mass ratio — so the
+    // panel shows the hive's own reasoning rather than a parallel metric that
+    // could disagree with it. Refreshed on the 2.5 s strategic tick, not per
+    // frame, because that is when the hive actually thinks.
+    this.stats = { I, C, K, bodies: bodies.length, mass, S, believedAlive, allIn: this.allIn, posture: this.posture, opening: this.opening };
     if (this.posture === 'AGGRESSIVE' && !wasAggro) sim.log('hive', 'the hive turns from hit-and-run to open aggression');
 
     // re-validate queued paths against current beliefs: a route planned two

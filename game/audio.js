@@ -31,20 +31,52 @@ export class GameAudio extends PositionalSynth {
     super();
     this.ambientOneShot = 'groan'; // hull groans ride the ambience bed
     this._alts = {};
+    // AUDIO LOG (user: "so i can see what's playing visually by name"). The
+    // sound board on K plays a cue on demand; this records the ones the game
+    // fires on its own. Only cues that ACTUALLY reached the master bus land
+    // here — play() returns nothing when the name is unknown, the rate limiter
+    // swallows the call, or the source is out of earshot, and a cue you never
+    // heard has no business in a log of what you heard.
+    this.cues = [];        // ring, newest last
+    this.onCue = null;     // set by the overlay in main.js
+  }
+
+  _note(name, at, far) {
+    const c = {
+      name, far, t: performance.now(),
+      // how far away it went off, so a wall of `shriek` reads as near or distant
+      d: at ? Math.hypot(at.x - this.listener.x, at.z - this.listener.z) : 0,
+      positional: !!at,
+    };
+    this.cues.push(c);
+    if (this.cues.length > 64) this.cues.shift();
+    this.onCue?.(c);
   }
 
   // one cue, several takes: swap the chosen take in for the call's duration so
   // the engine's play() needs no notion of variants
   play(name, at = null, vol = 1, key = null, minGapMs = 90) {
     const alts = this._alts[name];
+    let r;
     if (alts && alts.length > 1) {
       const saved = this.buffers[name];
       this.buffers[name] = alts[(Math.random() * alts.length) | 0];
-      const r = super.play(name, at, vol, key, minGapMs);
+      r = super.play(name, at, vol, key, minGapMs);
       this.buffers[name] = saved;
-      return r;
+    } else {
+      r = super.play(name, at, vol, key, minGapMs);
     }
-    return super.play(name, at, vol, key, minGapMs);
+    if (r) this._note(name, at, false);
+    return r;
+  }
+
+  // the through-hull layer is a separate entry point in the engine, and a
+  // muffled boom two decks down is exactly the kind of thing you open the log
+  // to identify — so it is logged too, flagged as far
+  playFar(name, at, deckDelta, vol = 1, key = null, minGapMs = 2500) {
+    const r = super.playFar(name, at, deckDelta, vol, key, minGapMs);
+    if (r) this._note(name, at, true);
+    return r;
   }
 
   // fetch + decode the real takes over the procedural bank. Async and
