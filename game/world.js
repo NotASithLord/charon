@@ -215,7 +215,13 @@ export class World {
       (this._volBins.get(k) ?? this._volBins.set(k, []).get(k)).push(obj);
     };
     for (const [, { mat, list }] of byMat) {
-      if (list.length < 8) continue;
+      // threshold 2, not 8 (perf pass 4): the old cutoff left ~330 SMALL
+      // unmerged meshes visible per frame — emergency lamps, floor slabs,
+      // grate parts — and per-object CPU in the WebGPU renderer is the
+      // frame's dominant cost. Verified on the real scene: visible smalls
+      // collapse ~332 -> ~132 objects. Singletons (<2) must keep skipping —
+      // rebuilding a lone mesh as a new merged mesh wins nothing.
+      if (list.length < 2) continue;
       let vtot = 0, itot = 0;
       for (const m of list) {
         m.updateMatrixWorld(true);
@@ -273,6 +279,30 @@ export class World {
     for (const o of this.scene.children) {
       if (!o.isMesh || o.isInstancedMesh || skip.has(o) || binned.has(o)) continue;
       binVol(deckOf(o.position.y), thirdOf(o.position.x), o);
+    }
+    // FREEZE THE STATICS (perf pass 4). Everything in the volume bins is
+    // static by construction (doors/veils/signs/movers are excluded), yet
+    // every one paid an unconditional Matrix4.compose + world multiply per
+    // render pass, and a NodeMaterialObserver.equals walk per object per
+    // pass. Bake each matrix once, then turn both auto flags off; mark
+    // `static` so the observer walk short-circuits — EXCEPT meshes whose
+    // material animates (the flicker strips L.mat and battery lamps
+    // L.emMat flip emissiveIntensity per frame; a static-flagged mesh's
+    // material uniform copies freeze, and one-mesh-per-frame refresh would
+    // desync flicker across fixtures sharing a material).
+    const animMats = new Set();
+    for (const L of this.roomLights ?? []) {
+      if (L?.mat) animMats.add(L.mat);
+      if (L?.emMat) animMats.add(L.emMat);
+    }
+    for (const list of this._volBins.values()) {
+      for (const o of list) {
+        o.updateMatrix();
+        o.updateMatrixWorld();
+        o.matrixAutoUpdate = false;
+        o.matrixWorldAutoUpdate = false;
+        if (!animMats.has(o.material)) o.static = true;
+      }
     }
   }
 
@@ -810,10 +840,17 @@ export class World {
     // SUBTLE MARKERS (user: the glowing color blocks were the last jarring
     // low-res read) — collars are worn steel with only a faint status tint;
     // the red battery lamps above each hatch already carry the wayfinding
-    const matCollar = (lift) => new THREE.MeshStandardMaterial({
-      color: 0x59626f, roughness: 0.55, metalness: 0.6,
-      emissive: lift ? 0x1a4a55 : 0x4a3a16, emissiveIntensity: 0.18,
-    });
+    // ONE material per collar kind, not one per call (perf pass 4): a fresh
+    // material per collar gave every pad its own merge bucket, so none of
+    // them could merge; two shared materials let all collars in a volume
+    // bake into that volume's chunk. Two, not one — the emissive differs.
+    const matCollar = (lift) => (lift
+      ? (this._matCollarLift ??= new THREE.MeshStandardMaterial({
+        color: 0x59626f, roughness: 0.55, metalness: 0.6, emissive: 0x1a4a55, emissiveIntensity: 0.18,
+      }))
+      : (this._matCollarLadder ??= new THREE.MeshStandardMaterial({
+        color: 0x59626f, roughness: 0.55, metalness: 0.6, emissive: 0x4a3a16, emissiveIntensity: 0.18,
+      })));
     // NO TWO PADS ON TOP OF EACH OTHER (user report: a lift collar and a
     // ladder collar landed practically overlapping in the same corridor,
     // because each trunk picked "the clearest centre" independently). Track
@@ -960,8 +997,9 @@ export class World {
           addK(kw, kh - dh, 0.12, 0, dh + (kh - dh) / 2, kd / 2, false);            // header (walk under)
           addK(kw, 0.1, kd, 0, kh + 0.05, 0, false);                               // cap
           // the dark descent inside the doorway — an unlit void you step into
+          // (shared material so the planes merge — perf pass 4)
           const voidM = new THREE.Mesh(new THREE.PlaneGeometry(dw + 0.7, dh - 0.05),
-            new THREE.MeshBasicMaterial({ color: 0x04060a }));
+            this._matKioskVoid ??= new THREE.MeshBasicMaterial({ color: 0x04060a }));
           voidM.position.set(p.x, base + dh / 2, p.z);
           voidM.rotation.y = face;
           this.scene.add(voidM);

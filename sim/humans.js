@@ -396,6 +396,9 @@ function updateMarineTick(sim, a, dt) {
           corpse.damage = 100;
           a.fuel -= sim.P.flamethrower.fuelPerCorpse;
           sim.stats.corpsesBurned++;
+          // gate like playerFlame: extending a live burn flips no
+          // passability predicate — don't thrash the path cache
+          const wasBurning = sim.graph.burningUntil[a.node] > sim.t;
           sim.graph.burningUntil[a.node] = sim.t + sim.P.flamethrower.burnNodeSec;
           sim.graph.noteBurn(a.node);
           // the fuel goes onto THAT body, not into the middle of the room —
@@ -403,7 +406,7 @@ function updateMarineTick(sim, a, dt) {
           sim.graph.burnX[a.node] = corpse.x;
           sim.graph.burnY[a.node] = corpse.y;
           a.flamingT = sim.t;
-          sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
+          if (!wasBurning) sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
           if (sim.stats.corpsesBurned % 10 === 1) sim.log('burn', `flamethrower burning bodies in ${nd.name} (fuel ${a.fuel.toFixed(0)})`, a.node);
         }
       }

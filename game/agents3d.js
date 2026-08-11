@@ -191,7 +191,11 @@ const CAST_NEAR2 = 34 * 34;
 // that range of the matrix buffer (falls back to a full upload on builds
 // without updateRanges)
 function commitInstanced(mesh, count) {
-  mesh.count = count;
+  // never draw past the buffer (perf pass 4 shrank per-set capacities —
+  // see mkSet — so the count MUST clamp; capacities carry generous margin
+  // over each faction's theoretical maximum, this is belt-and-braces)
+  const cap = mesh.instanceMatrix.count;
+  mesh.count = count > cap ? cap : count;
   // EMPTY SETS LEAVE THE RENDER LIST (swarm finding: a count-0 InstancedMesh
   // still paid bindings processing and a full uniform upload per pass per
   // frame — and most of the 57 character part-meshes are empty most frames).
@@ -322,7 +326,7 @@ export class Agents3D {
     // drawn as one InstancedMesh per texture group, feet at y=0. The
     // carrier keeps its procedural swelling body (no source mesh exists);
     // corpses are the character meshes laid flat (burned husks stay slabs).
-    const mkSet = (name) => {
+    const mkSet = (name, cap = CAP) => {
       const parts = characterParts(name);
       const flood = name === 'infection' || name === 'combat_civ' || name === 'combat_odst';
       // FrontSide (swarm finding): DoubleSide on the densest textured meshes
@@ -341,7 +345,7 @@ export class Agents3D {
           map: p.texture, roughness: 0.78, metalness: 0.06,
           side: flood ? THREE.DoubleSide : THREE.FrontSide,
         });
-        const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
+        const mesh = new THREE.InstancedMesh(p.geometry, mat, cap);
         // every one of these matrices is rewritten each frame
         mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         mesh.count = 0;
@@ -365,17 +369,26 @@ export class Agents3D {
       set.holdFire = solveCarry(set.rig, CARRY.fire);
       return set;
     };
-    this.civSet = mkSet('civilian');
-    this.armedSet = mkSet('crew_armed');
-    this.marineSet = mkSet('marine');
+    // PER-SET CAPACITIES (perf pass 4): commitInstanced deliberately uploads
+    // the FULL matrix buffer of every non-empty mesh (partial update ranges
+    // are a documented soft spot on this backend — see commitInstanced), so
+    // buffer size IS per-frame upload traffic: 512x64B = 32KB per part mesh,
+    // ~40 live part meshes = >1MB/frame. Capacities now track each faction's
+    // real ceiling with heavy margin (crew tops out ~148 souls TOTAL; the
+    // marine detachment is ~30; a faction's renderable bodies can never
+    // exceed the ship's 296). commitInstanced clamps count at capacity as a
+    // backstop. Corpse/rifle/flash/beams/carrier keep the full 512.
+    this.civSet = mkSet('civilian', 256);
+    this.armedSet = mkSet('crew_armed', 128);
+    this.marineSet = mkSet('marine', 128);
     // ODST reserve: the marine mesh in blackout plate — the material tint
     // multiplies the texture, so green BDU armor reads as matte-black ODST
     // hardsuit with a darkened visor (user: armory ODSTs need their own skin)
-    this.odstSet = mkSet('marine');
+    this.odstSet = mkSet('marine', 128);
     for (const mesh of this.odstSet) mesh.material.color.setHex(0x3f434c);
-    this.infectionSet = mkSet('infection');
-    this.combatCivSet = mkSet('combat_civ');
-    this.combatOdstSet = mkSet('combat_odst');
+    this.infectionSet = mkSet('infection', 256);
+    this.combatCivSet = mkSet('combat_civ', 256);
+    this.combatOdstSet = mkSet('combat_odst', 128);
     // REAL CARRIER MESH: the Halo 3 carrier, GPU-skinned per instance from a
     // baked bone bank (game/carrier-model.js). Replaces the sculpted gas-sack
     // primitive — it has an actual skeleton, so its states are animation

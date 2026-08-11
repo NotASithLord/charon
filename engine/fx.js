@@ -157,14 +157,20 @@ export class FireFX {
     const N = 26;
     const seeds = new Float32Array(N);
     for (let i = 0; i < N; i++) seeds[i] = (i * 0.61803398) % 1;
-    const embers = new THREE.InstancedMesh(this._emberGeo, this._emberMat, N);
+    // per-fire geometry CLONE so this mesh can carry its own bounding
+    // sphere (instance matrices are world-space; the shared quad geo has no
+    // meaningful bounds) — a fire behind the camera then frustum-culls
+    // instead of encoding 26 instances every frame (perf pass 4)
+    const emberGeo = this._emberGeo.clone();
+    emberGeo.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3(x, elev + 2, z), 2.5 + 2.5 * scale);
+    const embers = new THREE.InstancedMesh(emberGeo, this._emberMat, N);
     _scl.setScalar(0.085 * scale);
     for (let i = 0; i < N; i++) {
       _m4.compose(_pos.set(x, elev, z), _IDENT_Q, _scl);
       embers.setMatrixAt(i, _m4);
     }
     embers.renderOrder = 4;
-    embers.frustumCulled = false;
     group.add(embers);
     // scorch burned into the deck under the fire (shared geo/mat, scaled)
     const scorch = new THREE.Mesh(this._scorchGeo, this._scorchMat);
@@ -202,7 +208,7 @@ export class FireFX {
     return best ? { x: best.x, z: best.z, d: bestD } : null;
   }
 
-  update(dt, px, pz) {
+  update(dt, px, pz, pElev = null) {
     for (const f of this.fires.values()) {
       f.t += dt;
       // gutter: incommensurate sines + a fast spit read as real fire-light —
@@ -213,7 +219,14 @@ export class FireFX {
       this.pool?.add(f.x, f.elev + 0.9, f.z, 0xff7a28, f.lum, 10 + 6 * f.scale, 1.7);
       const dx = f.x - px, dz = f.z - pz;
       const d2 = dx * dx + dz * dz;
-      if (d2 > 55 * 55) continue; // far fires: light declared, skip the rest
+      // far or 2+ decks away: the pooled light above still glows through
+      // stairwells, but the cards/embers/scorch leave the render list
+      // entirely (perf pass 4 — they used to stay live render objects).
+      // ±1 deck stays visible: wells and hatch holes give real sightlines.
+      // f.t keeps advancing, so a fire re-entering range doesn't rewind.
+      const vis = d2 <= 55 * 55 && (pElev === null || Math.abs(f.elev - pElev) < 6.3);
+      f.group.visible = vis;
+      if (!vis) continue;
       // advance the flame shader + billboard the cards toward the player
       const face = Math.atan2(px - f.x, pz - f.z);
       for (let k = 0; k < f.cards.length; k++) {
@@ -645,11 +658,14 @@ export class SparkFX {
     });
   }
 
-  update(dt, t, px, pz) {
+  update(dt, t, px, pz, pElev = null) {
     for (const s of this.sites) {
       if (s.burst < 0) {
         s.next -= dt;
-        if (s.next <= 0 && Math.hypot(s.x - px, s.z - pz) < 60) {
+        // vertical gate matches FireFX (perf pass 4): no bursts 2+ decks
+        // away — s.y is elev + 1.7 (see add() callers)
+        if (s.next <= 0 && Math.hypot(s.x - px, s.z - pz) < 60
+          && (pElev === null || Math.abs(s.y - 1.7 - pElev) < 6.3)) {
           s.burst = 0;
           s.pts.visible = true;
           s.next = 4 + Math.random() * 11; // interval to the NEXT burst

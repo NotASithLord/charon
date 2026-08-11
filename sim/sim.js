@@ -1545,13 +1545,31 @@ export class Sim {
       // crowds spread down the hallway instead of squeezing into the walls
       const along = room.w >= room.d ? 0 : 1; // 0 = x is the long axis
       const narrow = Math.min(room.w, room.d) < 6;
+      // HOIST (perf pass 4): eligibility, body radius and the mobility flag
+      // were re-evaluated per PAIR — O(k²) redundant predicate work in a
+      // packed fight room. All three read ONLY fields the pair loop never
+      // writes (it mutates x/y alone; held/leaping/move/task are written
+      // earlier in the tick), so filtering once per occupant — preserving
+      // _occ order — processes the identical pairs in the identical order
+      // with identical pushes. Do NOT sort, bucket, or spatially prune:
+      // push order is behavior.
+      const E = this._sepE ??= [];
+      const R = this._sepR ??= [];
+      const M = this._sepM ??= [];
+      let k = 0;
       for (let i = 0; i < occ.length; i++) {
         const a = occ[i];
         if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.move || this._rootingBody(a)) continue;
-        for (let j = i + 1; j < occ.length; j++) {
-          const b = occ[j];
-          if (b.dead || b.faction === FACTION.CORPSE || b.downed || b.move || this._rootingBody(b)) continue;
-          const need = this._bodyRadius(a) + this._bodyRadius(b);
+        E[k] = a;
+        R[k] = this._bodyRadius(a);
+        M[k] = !a.isPlayer && a.held !== this.tickCount && !a.leaping;
+        k++;
+      }
+      for (let i = 0; i < k; i++) {
+        const a = E[i];
+        for (let j = i + 1; j < k; j++) {
+          const b = E[j];
+          const need = R[i] + R[j];
           let dx = b.x - a.x, dy = b.y - a.y;
           const d2 = dx * dx + dy * dy;
           if (d2 >= need * need) continue;
@@ -1568,14 +1586,14 @@ export class Sim {
           }
           // an airborne body is ballistic — crowd pressure must not shove it
           // off its committed line (user: locked location until it lands)
-          const aMoves = !a.isPlayer && a.held !== this.tickCount && !a.leaping;
-          const bMoves = !b.isPlayer && b.held !== this.tickCount && !b.leaping;
+          const aMoves = M[i], bMoves = M[j];
           if (!aMoves && !bMoves) continue;
           const push = (need - dist) * relax * (aMoves && bMoves ? 0.5 : 1);
           if (aMoves) { a.x -= dx * push; a.y -= dy * push; this._clampToRoom(a, room); }
           if (bMoves) { b.x += dx * push; b.y += dy * push; this._clampToRoom(b, room); }
         }
       }
+      E.length = 0; // don't retain agent refs past the pass
     }
     // a latched grabber may have been shouldered aside — pull it back onto
     // its victim so the burrow never breaks from crowd pressure (two forms

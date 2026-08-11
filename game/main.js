@@ -2746,9 +2746,9 @@ function frame(now) {
   updateBarks(now);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
-  fire.update(dtReal, player.x, player.z);
+  fire.update(dtReal, player.x, player.z, elevOf(player.deck));
   updateFlameJets(dtReal);
-  sparks.update(dtReal, now / 1000, player.x, player.z);
+  sparks.update(dtReal, now / 1000, player.x, player.z, elevOf(player.deck));
   updateMotes(dtReal);
   updateRoomLightPool(inDark);
   updateDoorSpill();

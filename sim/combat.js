@@ -171,6 +171,11 @@ export function resolveCombat(sim, dt) {
       if (flamer && targets.length) {
         anyFire = true;
         flamer.fuel = Math.max(0, flamer.fuel - P.flamethrower.fuelPerSec * dt);
+        // read BEFORE the write extends the timer — extending a live burn
+        // changes no passability predicate, so wiping the path cache (and
+        // with it every hive route memo) each streaming tick was pure
+        // thrash; playerFlame has carried this exact gate all along
+        const wasBurning = sim.graph.burningUntil[node] > sim.t;
         sim.graph.burningUntil[node] = sim.t + P.flamethrower.burnNodeSec;
         sim.graph.noteBurn(node);
         // ...AND WHERE. The stream lands on what he is burning, not at the
@@ -185,7 +190,7 @@ export function resolveCombat(sim, dt) {
         sim.graph.burnY[node] = aim.y;
         // trigger down this tick — renderers hang the jet off it (see FLAMING)
         flamer.flamingT = sim.t;
-        sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
+        if (!wasBurning) sim.graph.invalidatePathCache(); // burning nodes gate hive pathing
         let flamePool = P.flamethrower.dps * dt;
         for (const t of targets) {
           if (flamePool <= 0) break;

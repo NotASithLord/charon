@@ -43,6 +43,47 @@ export function makeAgent(kind, node, graph) {
     chargeTargetId: -1, // sticky spatial-charge target for LOS pursuit (sim.js)
     followNode: -1,     // escort: last node re-pathed toward (humans.js)
     firePost: null,     // [x,y] firing stance a shooter holds in a firefight (sim.js _firingSlot)
+
+    // STABLE HIDDEN CLASS (perf pass 4). Every field ANY later code assigns
+    // is pre-declared here, so all agents share ONE V8 shape for their whole
+    // life. Before this, ~45 properties were appended at scattered sites
+    // (combat reactions, escort kit, hive claims, the player attach...) —
+    // each append forks the hidden class, property access in the hot tick
+    // loops goes megamorphic, and mean tick CPU roughly doubles. Measured
+    // headless: p50 tick ~2.0-2.5ms -> ~0.5-0.7ms with stable shapes.
+    //
+    // Sentinel discipline: `undefined` for every field whose readers test
+    // `!== undefined` / `?? x` or truthy-check before use (explicit
+    // undefined is observationally identical to a missing key for every
+    // read pattern in this codebase — verified: no `in`, Object.keys,
+    // hasOwnProperty, or delete ever touches an agent). Concrete falsy
+    // sentinels only where the reader semantics are proven: taskProgress 0
+    // is safe because hive.assign() (the only task-granting site) zeroes it
+    // before floodExec's `=== 0` branches can run; pnode mirrors node
+    // because nothing reassigns .node before the first _refreshOccupancy.
+    // Keep this ONE unconditional literal — per-faction conditionals would
+    // fork maps at construction and defeat the whole point.
+    dead: false, claimed: false, charging: false, isPlayer: false,
+    fromPlayer: false, closeFollow: false, followSpeed: 0, taskProgress: 0,
+    pnode: node, climbingLink: null,
+    // combat & reaction timers (sim.js / combat.js / humans.js)
+    nextShotAt: undefined, nextSwingAt: undefined, meleeUntil: undefined,
+    nextHostShotAt: undefined, _sawThreatT: undefined, _reactUntil: undefined,
+    _ffSide: undefined, _ffFlipAt: undefined, _ffBlockedSince: undefined,
+    firstStruckIn: undefined, lastHurtBy: undefined, lastHurtTick: undefined,
+    madeSure: undefined, deathImpulse: undefined,
+    // fire & flamer
+    flamingT: undefined, burnTimer: undefined, hadFlamer: undefined,
+    flamerFuel: undefined, wasArmed: undefined, hostArmed: undefined,
+    // escort / marine kit & posts (humans.js)
+    callsign: undefined, escort: undefined, mags: undefined, rounds: undefined,
+    lowCalled: undefined, dryCalled: undefined, odst: undefined,
+    lowerDecks: undefined, armingUp: undefined, fallbackNode: undefined,
+    postKey: undefined, postX: undefined, postY: undefined, postFace: undefined,
+    // flee / panic bookkeeping
+    lastFledFrom: undefined, panicUntil: undefined, desperateSince: undefined,
+    _fleeLogAt: undefined, doorBalks: undefined, doorHold: undefined,
+    _workNodes: undefined, inShaftAmbush: undefined,
   };
 }
 
