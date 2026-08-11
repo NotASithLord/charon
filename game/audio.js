@@ -137,11 +137,6 @@ export class GameAudio extends PositionalSynth {
     this.buffers.clack = mk(0.12, (t) => rnd() * Math.exp(-t * 60) + Math.sin(t * 2 * Math.PI * 400) * Math.exp(-t * 70) * 0.4);
     // grenade bounce
     this.buffers.bounce = mk(0.08, (t) => Math.sin(t * 2 * Math.PI * 240) * Math.exp(-t * 60) * 0.7 + rnd() * 0.2 * Math.exp(-t * 80));
-    // fire crackle: sputtering noise pops
-    this.buffers.crackle = mk(0.5, (t) => {
-      const pop = Math.sin(t * 2 * Math.PI * (7 + t * 5)) > 0.55 ? 1 : 0.2;
-      return rnd() * pop * Math.exp(-t * 2.2) * 0.55;
-    });
     // FLAMETHROWER ROAR. Deliberately one of the plainest things in the bank:
     // the audit killed the synthetic cues that tried to be clever (a sine
     // sweep for a scream read as a cartoon boing), and a flame is one of the

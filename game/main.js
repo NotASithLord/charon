@@ -2398,9 +2398,9 @@ function soundSweep(now) {
   }
   // (the human-death-scream sweep lived here; removed with the scream cues —
   // it tracked every living human every frame purely to fire that one sound)
-  // fire crackle from the nearest burning site
-  const nf = fire.nearest(player.x, player.z, elevOf(player.deck));
-  if (nf && nf.d < 17) audio.play('crackle', { x: nf.x, z: nf.z }, 0.85, 'crackle', 420);
+  // (the fire crackle was here; removed wholesale with its buffer. fire burns
+  // silent now — engine/fx.js still exposes nearest(), which this was its only
+  // caller for.)
   // door hisses — ONLY nearby doors, and sparsely (user: random bumping
   // around NPC clusters — this was every door any NPC tripped, ship-wide on
   // your deck, on a 120ms global throttle = constant knocking)
