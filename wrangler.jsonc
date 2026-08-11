@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "charon",
+  "compatibility_date": "2026-08-11",
+  // Static site, no build step: serve the repo as-is. .assetsignore keeps
+  // tooling, docs and .git out of the upload.
+  "assets": { "directory": "." }
+}

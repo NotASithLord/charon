@@ -1,5 +1,9 @@
+.git
 .claude
+node_modules
 dist
 docs
 scripts
+wrangler.jsonc
+package.json
 package-lock.json
