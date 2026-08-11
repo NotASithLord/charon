@@ -386,15 +386,32 @@ function toggleSoundBoard() {
 //   J opens it. Rows are newest-first. A cue repeating inside 1.2 s collapses
 // to a xN counter instead of scrolling the interesting things off the top,
 // which matters because a firefight is mostly `shot` and `shriek`.
+// A debug panel you cannot find is indistinguishable from a key that did not
+// register, and the two have very different fixes. This says which happened.
+function debugToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'hud';
+  t.style.cssText = 'left:50%;top:64px;transform:translateX(-50%);z-index:9;'
+    + 'font:12px ui-monospace,Menlo,monospace;color:#7fe3ff;letter-spacing:0.1em;'
+    + 'background:rgba(6,10,16,0.9);border:1px solid #2a3a4e;padding:5px 12px';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 1400);
+}
+
 let audioLog = null;
 function toggleAudioLog() {
-  if (audioLog) { audioLog.stop(); audioLog = null; return; }
+  if (audioLog) { audioLog.stop(); audioLog = null; debugToast('AUDIO LOG OFF'); return; }
+  debugToast('AUDIO LOG ON — top left');
   audio.ensure();
   const d = document.createElement('div');
   d.className = 'hud';
-  d.style.cssText = 'right:12px;top:180px;width:210px;z-index:6;'
+  // LEFT COLUMN. The right edge is #vitals (armor/health/ammo/FPS) from
+  // top:12px down; a panel there lands on top of the numbers you play by.
+  // Left is empty between #topbar and the tracker in the bottom corner.
+  d.style.cssText = 'left:14px;top:250px;width:210px;z-index:8;'
     + 'font:11px/1.5 ui-monospace,Menlo,monospace;color:#bfd4f2;'
-    + 'background:rgba(6,10,16,0.72);border:1px solid #2a3a4e;padding:8px 10px';
+    + 'background:rgba(6,10,16,0.82);border:1px solid #2a3a4e;padding:8px 10px';
   const rows = document.createElement('div');
   const head = document.createElement('div');
   head.style.cssText = 'color:#7fe3ff;letter-spacing:0.12em;margin-bottom:6px';
@@ -457,12 +474,13 @@ function toggleAudioLog() {
 // at >= 50 and >= 3x the believed survivors. scarcity gates the posture flip.
 let floodHud = null;
 function toggleFloodHud() {
-  if (floodHud) { floodHud.stop(); floodHud = null; return; }
+  if (floodHud) { floodHud.stop(); floodHud = null; debugToast('FLOOD READOUT OFF'); return; }
+  debugToast('FLOOD READOUT ON — top left');
   const d = document.createElement('div');
   d.className = 'hud';
-  d.style.cssText = 'right:12px;top:12px;width:210px;z-index:6;'
+  d.style.cssText = 'left:14px;top:44px;width:210px;z-index:8;'
     + 'font:11px/1.5 ui-monospace,Menlo,monospace;color:#bfd4f2;'
-    + 'background:rgba(6,10,16,0.72);border:1px solid #3a2a2e;padding:8px 10px';
+    + 'background:rgba(6,10,16,0.82);border:1px solid #3a2a2e;padding:8px 10px';
   document.body.appendChild(d);
 
   const render = () => {
