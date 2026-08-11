@@ -112,6 +112,26 @@ export class QualityGovernor {
   applyRung(i) {
     this.rung = i;
     this.apply(this.rungs[i], i);
+    if (!this.prewarming) this.fitResolution();
+  }
+
+  // Clamp immediately when a rung is selected. Pinned ?q=low/full modes never
+  // enter frame()'s adaptive branch, so deferring this work left them at the
+  // renderer's boot DPR even when it violated the selected rung.
+  fitResolution() {
+    const R = this.rungs[this.rung];
+    const viewportW = this.renderer.domElement?.clientWidth || globalThis.innerWidth || 1;
+    const viewportH = this.renderer.domElement?.clientHeight || globalThis.innerHeight || 1;
+    const floor = R.res[0];
+    const budgetCap = this.hd ? 9 : Math.max(1, Math.sqrt(this.pixelBudget / (viewportW * viewportH)));
+    const cap = Math.max(floor, Math.min(globalThis.devicePixelRatio || 1,
+      this.hd ? 2 : R.res[1], budgetCap));
+    const current = this.renderer.getPixelRatio();
+    const next = Math.max(floor, Math.min(cap, current));
+    if (Math.abs(next - current) <= 0.01) return;
+    this.renderer.setPixelRatio(next);
+    this.renderer.setSize(viewportW, viewportH, false);
+    this.onResize?.(viewportW, viewportH);
   }
 
   // Compile the recompile-heavy rung variants up front (behind a loading /

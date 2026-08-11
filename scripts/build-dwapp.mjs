@@ -12,8 +12,8 @@
 //   - a CSP that allows inline scripts, eval, blob: workers, pointer lock.
 //
 // So a compatible app is: one entry HTML + ONE self-contained script with
-// zero imports, and every binary asset carried as a data: URI. This script
-// produces exactly that, per page, into dist/dwapp/<target>/:
+// zero imports, optional local stylesheets, and every binary asset carried as
+// a data: URI. This script produces that under dist/dwapp/<target>/:
 //   index.html   — the page's own HTML with its module script pointed at
 //                  bundle.js (still type="module": esbuild's esm output has
 //                  no imports left, and an inline module script with no
@@ -23,12 +23,13 @@
 //                  generated prelude maps the rifle textures to data: URIs
 //                  through THREE.DefaultLoadingManager.setURLModifier, so
 //                  no game code changes and dev serving still works.
+//   peerd.json   — the schema-1 capability contract for the multiplayer hub.
 //
 // peerd caps (extension/peerd-distributed/apps/loader.js): 256 files,
 // 50,000,000 chars per app — printed against actuals at the end.
 
 import { build } from 'esbuild';
-import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
+import { cp, readFile, writeFile, mkdir, readdir, rm } from 'fs/promises';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -37,7 +38,7 @@ const OUT = join(ROOT, 'dist', 'dwapp');
 const TMP = join(ROOT, 'dist', '.dwapp-tmp');
 
 const TARGETS = [
-  { name: 'game', dir: 'game', assets: 'game/assets', title: 'HALO CHARON // GAME' },
+  { name: 'hub', dir: 'game', entry: 'launcher.js', assets: 'game/assets', styles: ['launcher.css'], dweb: true, title: 'CHARON // HUB' },
   { name: 'sim', dir: 'sim', title: 'Halo Charon — Sim Harness' },
   { name: 'fused', dir: 'fused', title: 'Halo Charon — Fused' },
 ];
@@ -85,7 +86,7 @@ const buildTarget = async (t) => {
     await writeFile(preludePath, prelude);
     entryLines.push(`import ${JSON.stringify(preludePath)};`);
   }
-  entryLines.push(`import ${JSON.stringify(join(pageDir, 'main.js'))};`);
+  entryLines.push(`import ${JSON.stringify(join(pageDir, t.entry ?? 'main.js'))};`);
   const entryPath = join(TMP, `entry-${t.name}.mjs`);
   await writeFile(entryPath, entryLines.join('\n'));
 
@@ -96,23 +97,42 @@ const buildTarget = async (t) => {
     bundle: true,
     format: 'esm',       // no imports remain; inline module scripts need none
     charset: 'utf8',
+    minify: true,
+    legalComments: 'inline',
     outfile: join(outDir, 'bundle.js'),
     logLevel: 'silent',
   });
 
   // --- entry HTML: same page, module script now points at the bundle ---
   const patched = html.replace(
-    /<script\s+type="module"\s+src="\.\/main\.js"><\/script>/,
+    new RegExp(`<script\\s+type="module"\\s+src="\\./${t.entry ?? 'main.js'}(?:\\?[^\"]*)?"><\\/script>`),
     '<script type="module" src="./bundle.js"></script>',
   );
   if (patched === html) throw new Error(`${t.name}: module script tag not found in index.html`);
   await writeFile(join(outDir, 'index.html'), patched);
 
-  const bundle = await readFile(join(outDir, 'bundle.js'), 'utf8');
-  const total = bundle.length + patched.length;
-  console.log(`${t.name.padEnd(6)} 2 files, ${(total / 1e6).toFixed(2)}M chars` +
+  const files = { 'index.html': patched, 'bundle.js': await readFile(join(outDir, 'bundle.js'), 'utf8') };
+  for (const style of t.styles ?? []) {
+    const css = await readFile(join(pageDir, style), 'utf8');
+    await writeFile(join(outDir, style), css);
+    files[style] = css;
+  }
+  if (t.dweb) {
+    const manifest = `${JSON.stringify({
+      schema: 1,
+      kind: 'dwapp',
+      entry: 'index.html',
+      agent: { kind: 'bound-app' },
+      capabilities: ['dweb'],
+    }, null, 2)}\n`;
+    await writeFile(join(outDir, 'peerd.json'), manifest);
+    files['peerd.json'] = manifest;
+  }
+
+  const total = Object.values(files).reduce((sum, contents) => sum + contents.length, 0);
+  console.log(`${t.name.padEnd(6)} ${Object.keys(files).length} files, ${(total / 1e6).toFixed(2)}M chars` +
     ` (peerd caps: 256 files / 50M chars${total > 2_000_000 ? '; over the 2M agent-authoring cap — install via dweb/import' : ''})`);
-  return { name: t.name, files: { 'index.html': patched, 'bundle.js': bundle } };
+  return { name: t.name, files };
 };
 
 await rm(OUT, { recursive: true, force: true });
@@ -120,5 +140,12 @@ await mkdir(TMP, { recursive: true });
 const results = [];
 for (const t of TARGETS) results.push(await buildTarget(t));
 await rm(TMP, { recursive: true, force: true });
+// Keep a ready-to-import hub snapshot in the repository as well as the full
+// dist output. This is generated from the same build, never maintained twice.
+const readyHub = join(ROOT, 'dwapp', 'hub');
+await rm(readyHub, { recursive: true, force: true });
+await mkdir(dirname(readyHub), { recursive: true });
+await cp(join(OUT, 'hub'), readyHub, { recursive: true });
 console.log(`\nwrote ${results.length} dwapps under dist/dwapp/ — each folder is a complete app:`);
-console.log('paste the two files into a peerd app (entry: index.html), or publish over the dweb.');
+console.log('import a target folder into peerd (entry: index.html), or publish it over the dweb.');
+console.log('mirrored the hub package to dwapp/hub/.');

@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HALO CHARON // GAME</title>
+<link rel="stylesheet" href="./launcher.css">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; background: #05070a; overflow: hidden; }
@@ -123,6 +125,13 @@
   #hitmarker::before, #hitmarker::after {
     content: ""; position: absolute; background: #ff5348;
   }
+  #reloadGlare {
+    position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0;
+    background:
+      radial-gradient(circle at 58% 42%, rgba(235,246,255,0.95) 0 4%, rgba(174,211,242,0.46) 15%, transparent 48%),
+      linear-gradient(115deg, transparent 20%, rgba(196,225,250,0.22) 48%, transparent 72%);
+    mix-blend-mode: screen;
+  }
   #hitmarker::before { left: 10px; top: 0; width: 2px; height: 22px; }
   #hitmarker::after { left: 0; top: 10px; width: 22px; height: 2px; }
   #dmgdir {
@@ -208,7 +217,92 @@
   @keyframes introblink { 50% { opacity: 0.15; } }
 </style>
 </head>
-<body>
+<body class="launcher-active">
+  <div id="launcher">
+    <header class="hub-top">
+      <div class="hub-brand"><span class="hub-mark" aria-hidden="true"></span><div><strong>CHARON</strong><span>PEER-TO-PEER SURVIVAL</span></div></div>
+      <nav class="hub-nav" aria-label="Primary"><button data-open-page="menu">Play</button><button data-open-page="about">About</button><button data-open-page="docs">Developer docs</button></nav>
+    </header>
+    <main class="hub-shell">
+      <section data-launch-page="menu">
+        <div class="hub-hero">
+          <div>
+            <div class="hub-kicker">UNSC Saturn Devouring · Charon-class frigate</div>
+            <h1>The ship is <span>already losing.</span></h1>
+            <p class="hub-deck">A systemic co-op survival game aboard a drifting warship. The crew fights, panics, calls for help, and dies with or without you. The thing in the lower decks learns from all of it.</p>
+            <div class="hub-actions">
+              <button class="hub-button primary" id="solo-play"><span class="num">01</span><b>PLAY SOLO</b><em>DEPLOY →</em></button>
+              <button class="hub-button" data-open-page="multiplayer"><span class="num">02</span><b>MULTIPLAYER</b><em>FORM FIRETEAM →</em></button>
+              <button class="hub-button" data-open-page="about"><span class="num">03</span><b>ABOUT CHARON</b><em>READ →</em></button>
+              <button class="hub-button" data-open-page="docs"><span class="num">04</span><b>DEVELOPER DOCS</b><em>OPEN →</em></button>
+            </div>
+            <p id="menu-notice" hidden></p>
+          </div>
+          <dl class="hub-telemetry">
+            <h2>MISSION PARAMETERS</h2>
+            <div class="telemetry-row"><dt>PLAYERS</dt><dd>1–4 ODST survivors</dd></div>
+            <div class="telemetry-row"><dt>NETWORK</dt><dd>Authenticated WebRTC mesh</dd></div>
+            <div class="telemetry-row"><dt>COMMS</dt><dd>Live fireteam voice</dd></div>
+            <div class="telemetry-row"><dt>SIMULATION</dt><dd>15 Hz systemic ship state</dd></div>
+            <div class="telemetry-row"><dt>OBJECTIVE</dt><dd>Survive what boarded</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section data-launch-page="multiplayer" hidden>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button>
+        <div class="hub-kicker">Fireteam assembly</div><h1 class="hub-page-title">Multiplayer</h1>
+        <p class="hub-copy">Every match runs peer-to-peer. In peerd, Charon uses the host’s authenticated base mesh. On the web, the same room, identity, gossip, and WebRTC primitives ship inside the page.</p>
+        <div class="hub-form">
+          <label class="hub-label" for="player-name">Callsign</label><input class="hub-input" id="player-name" maxlength="24" autocomplete="nickname" placeholder="ODST callsign">
+          <div class="hub-form-row">
+            <div><span class="hub-label">Public queue</span><button class="hub-button primary" id="quick-play"><b>QUICK MATCH</b><em>FIND FIRETEAM →</em></button><p class="hub-note">Pairs you with available survivors, up to four per fireteam.</p></div>
+            <div><span class="hub-label">Invite-only</span><button class="hub-button" id="host-private"><b>CREATE PRIVATE ROOM</b><em>GENERATE CODE →</em></button><p class="hub-note">A high-entropy room code is never listed or advertised.</p></div>
+          </div>
+          <div style="margin-top:22px"><label class="hub-label" for="invite-code">Join with invite code</label><div class="invite-copy"><input class="hub-input" id="invite-code" maxlength="48" placeholder="paste fireteam code"><button class="mini-button" id="join-private">JOIN ROOM</button></div><p id="multiplayer-error" class="hub-error" role="alert" aria-live="assertive" hidden></p></div>
+        </div>
+      </section>
+
+      <section data-launch-page="lobby" hidden>
+        <button class="hub-link hub-back" id="lobby-leave">← Leave lobby</button>
+        <div class="lobby-layout">
+          <div><div class="hub-kicker">Connected room</div><h1 class="hub-page-title" id="lobby-title">Fireteam</h1><p id="lobby-status" role="status" aria-live="polite">Opening a peer-to-peer room…</p>
+            <div id="invite-panel" class="hub-form" hidden><label class="hub-label" for="invite-value">Invite code</label><div class="invite-copy"><input class="hub-input" id="invite-value" readonly><button class="mini-button" id="copy-invite">COPY CODE</button></div><p class="hub-note">Only people with this code can address the room. Send it over a channel you trust.</p></div>
+          </div>
+          <aside class="lobby-panel">
+            <div class="lobby-head"><h2>FIRETEAM</h2><span id="lobby-count">0 / 4</span></div><ul id="lobby-roster"></ul><span class="transport-pill" id="transport-label">NEGOTIATING</span>
+            <div class="voice-row"><div><span class="hub-label">Voice channel</span><span id="voice-state" role="status" aria-live="polite">microphone off</span></div><button class="mini-button" id="voice-toggle">ENABLE</button></div>
+            <button class="hub-button primary" id="lobby-start" hidden><b>DEPLOY FIRETEAM</b><em>START →</em></button>
+          </aside>
+        </div>
+      </section>
+
+      <section data-launch-page="about" hidden>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button><div class="hub-kicker">Project briefing</div><h1 class="hub-page-title">About Charon</h1>
+        <div class="hub-copy"><p>Charon is a browser-native survival simulation set aboard the UNSC Saturn Devouring. It does not wait for the player: marines sweep compartments, civilians spread panic, radios fail, bodies become resources, and the Flood chooses where pressure will hurt most.</p><p>Solo and co-op use the same ship simulation. Multiplayer adds live ODST presence, shared weapon damage and explosions, and room voice over authenticated peer-to-peer links. There is no match server in the gameplay path.</p></div>
+        <div class="hub-grid"><article class="hub-card"><span class="index">SYSTEM 01</span><h2>AUTONOMOUS SHIP</h2><p>Every crew member and hostile form acts inside a deterministic 15 Hz simulation.</p></article><article class="hub-card"><span class="index">SYSTEM 02</span><h2>SHARED INCIDENT</h2><p>Co-op peers inhabit the same seeded outbreak and replicate combat actions in real time.</p></article><article class="hub-card"><span class="index">SYSTEM 03</span><h2>LOCAL-FIRST</h2><p>The complete game, assets, networking client, and docs can travel as one peerd dwapp.</p></article></div>
+      </section>
+
+      <section data-launch-page="docs" hidden>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button><div class="hub-kicker">Developer reference</div><h1 class="hub-page-title">Docs</h1>
+        <div class="docs-layout">
+          <nav class="docs-tabs" role="tablist" aria-label="Developer documentation"><button id="docs-tab-overview" role="tab" data-doc-tab="overview" aria-controls="docs-panel-overview" aria-selected="true">01 · Overview</button><button id="docs-tab-network" role="tab" data-doc-tab="network" aria-controls="docs-panel-network" aria-selected="false" tabindex="-1">02 · Networking</button><button id="docs-tab-dwapp" role="tab" data-doc-tab="dwapp" aria-controls="docs-panel-dwapp" aria-selected="false" tabindex="-1">03 · dwapp package</button><button id="docs-tab-run" role="tab" data-doc-tab="run" aria-controls="docs-panel-run" aria-selected="false" tabindex="-1">04 · Run & test</button></nav>
+          <div>
+            <article id="docs-panel-overview" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-overview" data-doc-panel="overview"><h2>Architecture overview</h2><p>Charon separates the deterministic ship simulation from rendering and player input. The simulation writes one packed agent buffer; the 3D layer consumes it without owning world state.</p><h3>PRIMARY SURFACES</h3><ul><li><code>sim/</code> — ship graph, factions, combat, commands, and deterministic ticks.</li><li><code>game/</code> — first-person controls, 3D world, HUD, audio, and the hub launcher.</li><li><code>multiplayer/</code> — room abstraction, lobby protocol, game synchronization, and voice.</li></ul></article>
+            <article id="docs-panel-network" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-network" data-doc-panel="network" hidden><h2>Multiplayer protocol</h2><p>The peerd build calls the consent-gated dwapp bridge. The web build bundles peerd’s identity, room, mesh, gossip, presence, direct-message, and WebRTC transport primitives.</p><h3>FLOW</h3><ul><li>Join a lobby and authenticate peers with did:key identities.</li><li>Quick Match partitions ready peers into fireteams of four; private lobby messages require a DID-bound invite HMAC.</li><li>A proposal/ack/commit barrier freezes membership before deployment.</li><li>The fireteam leaves matchmaking for an isolated match room.</li><li>The authority advances the ship simulation and sends delta checkpoints; player poses and validated actions use direct WebRTC messages.</li><li>Voice uses native RTP/Opus; bounded SDP/ICE signaling uses authenticated direct messages.</li></ul><pre>lobby → ready → proposal / ack / commit → match room
+                                           ↘ direct state, actions, voice</pre></article>
+            <article id="docs-panel-dwapp" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-dwapp" data-doc-panel="dwapp" hidden><h2>peerd dwapp package</h2><p>The hub output contains a schema-1 <code>peerd.json</code> declaring <code>kind: "dwapp"</code>, one entry HTML document, one stylesheet, and one self-contained module bundle. Assets are embedded as data URIs so the opaque-origin sandbox performs no relative fetches.</p><h3>BRIDGE OPERATIONS USED</h3><p><code>hello</code>, <code>join</code>, <code>leave</code>, <code>presence</code>, <code>announce</code>, <code>subscribe</code>, <code>publish</code>, and the room voice operations. Raw WebRTC and microphone handles remain sealed in peerd’s trusted parent.</p><pre>npm run build:dwapp
+# output: dist/dwapp/hub/</pre></article>
+            <article id="docs-panel-run" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-run" data-doc-panel="run" hidden><h2>Run and verify</h2><p>Use any static server for the web build. Multiplayer requires a secure browser context outside localhost because microphone capture and WebCrypto are secure-context APIs.</p><pre>npm run serve
+npm run multiplayer
+npm run determinism
+npm run build:dwapp</pre></article>
+          </div>
+        </div>
+      </section>
+      <footer class="hub-footer"><span>CHARON NETWORK PROTOCOL v2</span><span>WEBGPU · WEBGL2 · WEBRTC · PEERD DWEB</span></footer>
+    </main>
+  </div>
   <canvas id="c"></canvas>
   <div class="hud" id="topbar"><b>UNSC SATURN DEVOURING</b> · <span id="clock">0:00</span> · <span id="room">—</span></div>
   <div class="hud" id="vitals">
@@ -225,8 +319,10 @@
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>
+  <div id="reloadGlare" aria-hidden="true"></div>
   <div id="dmgdir"></div>
   <canvas id="tracker" width="150" height="150"></canvas>
+  <div class="hud" id="networkHud" hidden><span id="networkState">P2P · 1 ONLINE</span><button id="gameVoice" type="button">MIC LIVE</button></div>
   <div id="frags">4 FRAG</div>
   <div id="order">FIRETEAM: FOLLOW</div>
   <div id="mapview" class="mv-hidden">
@@ -244,7 +340,7 @@
        the boot (three.js + world build) hides behind it; main.js replaces
        the text the moment the type roll starts (user: first render must be
        a Loading… in the intro typeface) -->
-  <div id="intro">
+  <div id="intro" role="button" tabindex="0" aria-label="Mission briefing. Press Enter to advance.">
     <div id="introText">Loading…</div>
     <div id="introMission"></div>
     <div id="introHint">any key or click — skip</div>
@@ -256,6 +352,6 @@
     <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · G frag · E scavenge ammo/flamethrower · Q swap weapon · M tac map · 1 follow / 2 hold / 3 advance (fireteam) ·
       ladders/stairs: stand at one, press L — always takes you to the other end · your fireteam follows you · ESC frees the mouse</p>
   </div>
-  <script type="module" src="./main.js"></script>
+  <script type="module" src="./launcher.js?v=3"></script>
 </body>
 </html>

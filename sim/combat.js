@@ -28,6 +28,26 @@ export function sightRangeAt(sim, node) {
   return sim.fogAt(node) ? m * P.fogSightMult : m;
 }
 
+// The physical payload of a Flood whip. Kept pure so headless verification
+// can pin the standing/running/jumping ordering independently of the ragdoll
+// renderer. Direction is in sim X/Y; Agents3D maps sim Y directly to world Z.
+export function combatMeleeImpulse(attacker, target, swing) {
+  let dx = target.x - attacker.x, dy = target.y - attacker.y;
+  const d = Math.hypot(dx, dy);
+  if (d > 1e-6) { dx /= d; dy /= d; }
+  else { dx = Math.cos(attacker.heading || 0); dy = Math.sin(attacker.heading || 0); }
+  const jumping = !!attacker.leaping || (attacker.hoverY || 0) > 0.05;
+  const charging = !!attacker.charging;
+  return {
+    kind: 'melee', dirX: dx, dirY: dy,
+    speed: swing.standSpeed + (charging ? swing.chargeBonus : 0) + (jumping ? swing.jumpBonus : 0),
+    up: jumping ? swing.jumpUp : swing.standUp,
+    spin: jumping ? swing.jumpSpin : swing.standSpin,
+    kick: jumping ? swing.jumpKick : swing.standKick,
+    jumping,
+  };
+}
+
 export function resolveCombat(sim, dt) {
   const P = sim.P;
 
@@ -414,8 +434,12 @@ export function resolveCombat(sim, dt) {
           // cooldown — discrete hits that knock chunks off armor, with a
           // real recovery gap between swings to shoot it in
           if (range <= P.combat.meleeRangeM && sim.t >= (f.nextSwingAt ?? 0)) {
-            f.nextSwingAt = sim.t + P.combat.combatForm.swing.cooldownSec;
-            sim.hurtHuman(best, P.combat.combatForm.swing.dmg, f.id);
+            const swing = P.combat.combatForm.swing;
+            f.nextSwingAt = sim.t + swing.cooldownSec;
+            f.meleeUntil = sim.t + swing.animSec;
+            f.animTime = 0; // the tentacle strike starts at contact, not mid-cycle
+            f.heading = Math.atan2(best.y - f.y, best.x - f.x);
+            sim.hurtHuman(best, swing.dmg, f.id, combatMeleeImpulse(f, best, swing));
           }
           // the armed minority spray the host's weapon one-handed (lore) —
           // discrete wild shots, mostly missing
@@ -485,7 +509,7 @@ export function isFlood(a) {
 // integrity -> downed -> (self-revive | reanimate | permanent) per §7.
 // `by` (attacker agent id) feeds hit feedback: the FLINCH render flag and
 // the form's shoot-back retargeting — getting shot is now a stimulus.
-export function hurtFloodForm(sim, a, dmg, isFlame, by = -1) {
+export function hurtFloodForm(sim, a, dmg, isFlame, by = -1, impact = null) {
   const P = sim.P;
   if (by >= 0 && dmg > 0) { a.lastHurtBy = by; a.lastHurtTick = sim.tickCount; }
   if (a.faction === FACTION.INFECTION) {
@@ -502,6 +526,7 @@ export function hurtFloodForm(sim, a, dmg, isFlame, by = -1) {
   if (isFlame) a.damage = Math.min(100, a.damage + dmg * 2);
   else if (a.downed) a.damage = Math.min(95, a.damage + dmg);
   if (a.hp <= 0 && !a.downed) {
+    if (impact) a.deathImpulse = impact;
     if (isFlame) a.damage = 100;
     if (a.faction === FACTION.CARRIER) { explodeCarrier(sim, a); return; }
     a.hp = 0;
@@ -531,6 +556,9 @@ export function humanDeathToCorpse(sim, a) {
   corpse.state = STATE.DEAD;
   corpse.damage = 15; // shot up a little, still carrier food
   corpse.x = a.x; corpse.y = a.y;
+  corpse.lastHurtBy = a.lastHurtBy;
+  corpse.lastHurtTick = a.lastHurtTick;
+  corpse.deathImpulse = a.deathImpulse ?? null;
   // the host's weapon falls with the body — a combat form raised from it
   // picks the weapon back up (lore)
   corpse.wasArmed = a.faction === FACTION.ARMED || a.faction === FACTION.MARINE;

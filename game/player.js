@@ -16,7 +16,7 @@ import { elevOf } from './world.js';
 import { ODST } from './fps-data.js';
 
 export class Player extends FpsController {
-  constructor(canvas, world, sim, startNode, physics) {
+  constructor(canvas, world, sim, startNode, physics, existingAgent = null) {
     const n = sim.graph.node(startNode);
     const [wx, wz] = world.simToWorld(n.x, n.y, n.deck);
     super({
@@ -40,7 +40,7 @@ export class Player extends FpsController {
     this.armor = ODST.armor;
     this.sinceHit = 99;
 
-    this.agent = sim.attachPlayer(startNode, { odst: true });
+    this.agent = existingAgent ?? sim.attachPlayer(startNode, { odst: true });
     this._lastHp = this.agent.hp;
 
     this._syncAgent();

@@ -636,6 +636,7 @@ export class SparkFX {
     }
     pts.renderOrder = 4;
     pts.frustumCulled = false;
+    pts.visible = false;
     this.scene.add(pts);
     this.sites.push({
       x, y, z, pts,
@@ -650,13 +651,14 @@ export class SparkFX {
         s.next -= dt;
         if (s.next <= 0 && Math.hypot(s.x - px, s.z - pz) < 60) {
           s.burst = 0;
+          s.pts.visible = true;
           s.next = 4 + Math.random() * 11; // interval to the NEXT burst
         }
         continue;
       }
       s.burst += dt;
       const p = s.burst / 0.45;
-      if (p >= 1) { s.burst = -1; s.pts.material.opacity = 0; continue; }
+      if (p >= 1) { s.burst = -1; s.pts.material.opacity = 0; s.pts.visible = false; continue; }
       // hard stab of light with a fast flicker, sparks arcing down under gravity
       this.pool?.add(s.x, s.y, s.z, 0x9fc8ff, (1 - p) * (7 + Math.sin(t * 90) * 4), 7, 2.0);
       s.pts.material.opacity = 1 - p;

@@ -5,7 +5,7 @@
 
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
-import { hurtFloodForm } from '../sim/combat.js';
+import { combatMeleeImpulse, hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf, DOOR_W } from './world.js';
 import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
@@ -23,6 +23,7 @@ import { PhysicsWorld, initRapier, PHYS_DT } from '../engine/physics/physics-wor
 import { PostFX } from '../engine/post.js';
 import { LightPool } from '../engine/lights.js';
 import { createRenderer, installDeviceLostReload, QualityGovernor, TickScheduler } from '../engine/runtime.js';
+import { createGameSync } from '../multiplayer/game-sync.js';
 
 const canvas = document.getElementById('c');
 // PERF (user: unusable frame rate on an M4 Air): MSAA off — the post chain
@@ -33,6 +34,7 @@ const canvas = document.getElementById('c');
 // fragment bill drops ~2.6x. `?hd=1` opts back into full resolution;
 // `?q=low` / `?q=full` pin the quality ladder (see RUNGS below).
 const QP = new URLSearchParams(location.search);
+const LAUNCH = globalThis.__charonLaunch ?? { mode: 'solo', session: null };
 const HD = QP.has('hd');
 const QTIER = QP.get('q');
 // WEBGPU (user: a discrete GPU behind WebGL can be hostage to the OS's
@@ -188,6 +190,9 @@ scene.add(lamp);
 // the only one of the two that casts.
 const torch = new THREE.SpotLight(0xeaf2ff, 0, 30, 0.22, 0.4, 2);
 const torchTarget = new THREE.Object3D();
+const _torchRifleBase = new THREE.Vector3();
+const _torchRifleTip = new THREE.Vector3();
+const _torchRifleDirection = new THREE.Vector3();
 scene.add(torch, torchTarget);
 torch.target = torchTarget;
 torch.castShadow = true;
@@ -213,7 +218,8 @@ const _torchDir = new THREE.Vector3(); // per-frame scratch (was allocating one 
 // HALF-RATE SHADOWS: the WebGPU renderer throttles per-light — the loop
 // stamps shadow.needsUpdate at 30Hz instead of every frame
 torch.shadow.autoUpdate = false;
-torch.shadow.mapSize.set(1024, 1024);
+const fixedShadowSize = renderer.backend.isWebGPUBackend && !HD ? 768 : 1024;
+torch.shadow.mapSize.set(fixedShadowSize, fixedShadowSize);
 torch.shadow.camera.near = 0.3;
 torch.shadow.camera.far = 32;
 torch.shadow.bias = -0.002;
@@ -227,7 +233,7 @@ torch.shadow.intensity = 0.62;
 // --- boot: random ship every run unless a seed is pinned in the URL
 // (?seed=... for a reproducible one), starting flood kept light (20
 // infection forms, no combat forms/carriers yet) ---
-const seedFromUrl = new URLSearchParams(location.search).get('seed');
+const seedFromUrl = LAUNCH.seed || new URLSearchParams(location.search).get('seed');
 const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
 
 // SAFETY NET (engine/runtime.js): device loss reloads onto the WebGL2
@@ -246,7 +252,17 @@ world.shadowCull = agents.shadowCull = !QP.has('nosc');
 // spawn: CIC on the command deck (user tuning) — an ODST detail with a fireteam.
 // Created synchronously WITHOUT physics so the intro/UI never blocks on the
 // wasm load.
-const player = new Player(canvas, world, sim, sim.graph.byId.get('cic'));
+const cic = sim.graph.byId.get('cic');
+const networkPlayers = new Map();
+const networkSquads = new Map();
+if (LAUNCH.session) {
+  for (const did of [...new Set(LAUNCH.members || [LAUNCH.session.did])].sort()) {
+    const agent = sim.attachPlayer(cic, { odst: true });
+    networkPlayers.set(did, agent);
+    networkSquads.set(did, sim.attachPlayerSquad(agent, 3));
+  }
+}
+const player = new Player(canvas, world, sim, cic, null, networkPlayers.get(LAUNCH.session?.did));
 
 // Rapier physics: the player's authoritative horizontal collision, built from
 // the same wall meshes the world just extruded (world.collisionBoxes()). Loaded
@@ -261,7 +277,56 @@ initRapier().then(() => {
   player.attachPhysics(physics);
 }).catch((e) => console.error('[charon] Rapier physics failed to initialise:', e));
 agents.playerId = player.agent.id;
-const fireteam = sim.attachPlayerSquad(player.agent, 3);
+const fireteam = networkSquads.get(LAUNCH.session?.did) ?? sim.attachPlayerSquad(player.agent, 3);
+const gameSync = createGameSync({
+  session: LAUNCH.session,
+  scene,
+  world,
+  sim,
+  player,
+  agents,
+  name: LAUNCH.name || 'ODST',
+  members: LAUNCH.members || [],
+  host: LAUNCH.host,
+  hostOrder: LAUNCH.hostOrder || [],
+  playerAgents: networkPlayers,
+});
+const isSimAuthority = () => !LAUNCH.session || gameSync?.isAuthority();
+if (LAUNCH.session) {
+  const networkHud = document.getElementById('networkHud');
+  const networkState = document.getElementById('networkState');
+  const gameVoice = document.getElementById('gameVoice');
+  networkHud.hidden = false;
+  const updateNetwork = () => {
+    const online = new Set(LAUNCH.session.roster().map((peer) => peer.did));
+    const peers = (LAUNCH.members || [...online]).filter((did) => online.has(did)).length;
+    networkState.textContent = `P2P · ${peers} ONLINE · ${LAUNCH.session.transport === 'peerd' ? 'PEERD' : 'WEBRTC'}`;
+  };
+  const updateVoice = (status) => {
+    gameVoice.textContent = !status?.active ? 'ENABLE MIC'
+      : status.playbackBlocked ? 'ENABLE AUDIO' : status.muted ? 'MIC MUTED' : 'MIC LIVE';
+  };
+  LAUNCH.session.on('roster', updateNetwork);
+  LAUNCH.session.on('voice', updateVoice);
+  updateNetwork();
+  LAUNCH.session.voiceStatus().then(updateVoice).catch(() => updateVoice(null));
+  gameVoice.addEventListener('click', async () => {
+    gameVoice.disabled = true;
+    try {
+      const status = await LAUNCH.session.voiceStatus().catch(() => ({ active: false, muted: false }));
+      const next = status.playbackBlocked
+        ? await LAUNCH.session.resumeVoicePlayback()
+        : status.active ? await LAUNCH.session.setVoiceMuted(!status.muted)
+        : await LAUNCH.session.startVoice({ startMuted: false });
+      updateVoice(next);
+    } catch (error) {
+      updateVoice(null);
+      gameVoice.title = error?.message || 'Microphone unavailable';
+    } finally {
+      gameVoice.disabled = false;
+    }
+  });
+}
 // MARINE TACNET (user request): the sim view's plan, filtered to what the
 // marine teams actually see. Intel accumulates whether the map is open or not.
 const marineMap = new MarineMap(
@@ -442,7 +507,7 @@ agents.rifle.castShadow = true;
 // the governor walks it per machine — resolution first inside a rung, then
 // down a rung when pinned at the floor and still slow, back up after a
 // long stable stretch. Every machine finds its own level; no guessing.
-//   0  full: PCFSoft 1024 shadows @30Hz, 10 lights, bloom 0.5, 36 motes
+//   0  full: PCFSoft 1024 shadows @30Hz (768 on WebGPU laptops), 10 lights, bloom 0.5, 36 motes
 //   1  tighter res window, shadow map 768
 //   2  shadow map 512, 8 lights, bloom 0.375        (one recompile)
 //   3  shadows OFF                                  (one recompile)
@@ -452,11 +517,11 @@ agents.rifle.castShadow = true;
 // ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
 let _shadowAt = 0; // torch shadow refresh clock (wall time, not frame parity)
 const RUNGS = [
-  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 6, teamSpots: 7 },
-  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, motes: 36, rag: 48, rifleLights: 6, teamSpots: 7 },
-  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 10, bloom: 0.375, motes: 24, rag: 32, rifleLights: 4, teamSpots: 4 },
-  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, motes: 24, rag: 24, rifleLights: 3, teamSpots: 3 },
-  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, motes: 12, rag: 16, rifleLights: 2, teamSpots: 2 },
+  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, litePost: false, motes: 36, rag: 48, rifleLights: 6, teamSpots: 7 },
+  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, litePost: false, motes: 36, rag: 48, rifleLights: 6, teamSpots: 7 },
+  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 10, bloom: 0.375, litePost: false, motes: 24, rag: 32, rifleLights: 4, teamSpots: 4 },
+  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, litePost: true, motes: 24, rag: 24, rifleLights: 3, teamSpots: 3 },
+  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, litePost: true, motes: 12, rag: 16, rifleLights: 2, teamSpots: 2 },
 ];
 // whole-frame pixel budget: huge windows can't buy retina supersampling on
 // an integrated GPU — the cap yields before the budget does (HD opts out)
@@ -491,6 +556,7 @@ const governor = new QualityGovernor({
     lightPool.setActive(R.lights);
     setTeamSpots(R.teamSpots ?? 3);
     post.setBloomScale(R.bloom);
+    post.setLite(R.litePost);
     motes.setCount(R.motes);
     // CPU lever (swarm finding: the ladder shed only GPU cost): fewer live
     // ragdoll solvers on the low rungs — the cap gates new flops, extras
@@ -869,8 +935,13 @@ intro.addEventListener('click', () => {
   if (introDone) dismissIntro();
   else { introChars = INTRO_TOTAL; introRender(); }
 });
-window.addEventListener('keydown', () => {
-  if (!introGone && !introDone) { introChars = INTRO_TOTAL; introRender(); }
+window.addEventListener('keydown', (event) => {
+  if (introGone) return;
+  if (!introDone) { introChars = INTRO_TOTAL; introRender(); }
+  else if (event.code === 'Enter' || event.code === 'Space') {
+    event.preventDefault();
+    dismissIntro();
+  }
 });
 const ghostAlive = () => {
   const gh = sim.playerConvertedTo ? sim.byId.get(sim.playerConvertedTo) : null;
@@ -1628,7 +1699,7 @@ function solidsForShot() {
   return world.wallMeshes.concat(world.doorPanelMeshes ?? []);
 }
 
-function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
+function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage, melee = false) {
   camera.getWorldDirection(_dir);
   _rt.crossVectors(_dir, camera.up).normalize();
   _up.crossVectors(_rt, _dir).normalize();
@@ -1662,13 +1733,21 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   rifleMesh.updateWorldMatrix(true, false);
   const muzzle = RIFLE_MUZZLE.clone().applyMatrix4(rifleMesh.matrixWorld);
   agents.playerShot(muzzle, end);
+  gameSync?.shot(muzzle, end);
   muzzleFlash.position.copy(muzzle);
   muzzleFlash.intensity = 8;
   if (best) {
     // parity (user rule): a combat form soaks the same fire from the player
     // as from any marine — its durability lives in the sim's hp, not in a
     // player-only multiplier
-    hurtFloodForm(sim, best, dmg, false, player.agent.id);
+    const impact = melee ? combatMeleeImpulse({
+      ...player.agent,
+      charging: Math.hypot(player.vx, player.vz) > ODST.walkSpeed,
+      leaping: !player.onGround,
+      hoverY: player.onGround ? 0 : Math.max(0.1, player.h),
+    }, best, sim.P.combat.combatForm.swing) : null;
+    hurtFloodForm(sim, best, dmg, false, player.agent.id, impact);
+    gameSync?.hitFlood(best.id, dmg);
     hitFlash = 1;
     audio.play('tick', null, 0.5, 'tick', 40);
   } else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }
@@ -1783,6 +1862,9 @@ function throwFrag() {
 }
 
 const fragRay = new THREE.Raycaster();
+const _fragMove = new THREE.Vector3();
+const _fragNormal = new THREE.Vector3();
+const _fragVelocity = new THREE.Vector3();
 function stepFrags(dt) {
   for (let i = liveFrags.length - 1; i >= 0; i--) {
     const f = liveFrags[i];
@@ -1790,15 +1872,15 @@ function stepFrags(dt) {
     const p = f.mesh.position;
     const nx = p.x + f.vx * dt, ny = p.y + f.vy * dt, nz = p.z + f.vz * dt;
     // wall bounce: cast along this frame's motion
-    const mv = new THREE.Vector3(nx - p.x, ny - p.y, nz - p.z);
+    const mv = _fragMove.set(nx - p.x, ny - p.y, nz - p.z);
     const dist = mv.length();
     if (dist > 1e-6) {
-      fragRay.set(p, mv.clone().normalize());
+      fragRay.set(p, mv.normalize());
       fragRay.far = dist + 0.09;
       const hit = fragRay.intersectObjects(solidsForShot(), false)[0];
       if (hit) {
-        const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-        const v = new THREE.Vector3(f.vx, f.vy, f.vz);
+        const n = _fragNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+        const v = _fragVelocity.set(f.vx, f.vy, f.vz);
         v.sub(n.multiplyScalar(2 * v.dot(n))).multiplyScalar(FRAG.bounce);
         f.vx = v.x; f.vy = v.y; f.vz = v.z;
         audio.play('bounce', { x: p.x, z: p.z }, 0.7, 'bounce', 60);
@@ -1827,6 +1909,7 @@ function stepFrags(dt) {
     if (f.fuse <= 0) {
       const [sx, sy] = world.worldToSim(p.x, p.z, f.deck);
       sim.explodeAt(f.deck, sx, sy, FRAG.radiusM, FRAG.damage, player.agent.id);
+      gameSync?.explosion(f.deck, sx, sy, FRAG.radiusM, FRAG.damage);
       // tell the renderer where the blast landed so bodies it kills get thrown
       // and flail, and bodies already down get re-flung (cosmetic; render-only)
       agents.noteExplosion(f.deck, p.x, p.z, FRAG.radiusM);
@@ -2194,7 +2277,9 @@ function updateBarks(now) {
 // --- main loop ---
 let physAcc = 0;
 let _trackerAt = 0, _observeAt = 0, _sweepAt = 0; // subsystem throttle clocks (perf pass 2)
+let _lightingAt = 0;
 let _smYaw = 0, _smPitch = 0, _bobPhase = 0, _bobAmp = 0; // viewmodel sway/bob (first-strike feel)
+let reloadFlashJank = 0;
 let _fpsEma = 16.7, _fpsWorst = 0, _fpsShownAt = 0; // top-right perf readout
 // sim ticks run OUTSIDE the rAF task (engine/runtime.js TickScheduler):
 // the browser executes them in the idle gap between vsyncs
@@ -2246,7 +2331,7 @@ function frame(now) {
   reloadPressed = false; meleePressed = false;
   for (const ev of wevents) {
     if (ev.t === 'fire') { traceShot(ev.offAng, ev.offRad); audio.play('shot', null, 0.9); }
-    else if (ev.t === 'melee_hit') { traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage); audio.play('thud', null, 0.8); }
+    else if (ev.t === 'melee_hit') { traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage, true); audio.play('thud', null, 0.8); }
     else if (ev.t === 'reload_start') audio.play('clack', null, 0.7);
     else if (ev.t === 'dry') audio.play('clack', null, 0.4);
   }
@@ -2287,9 +2372,11 @@ function frame(now) {
     _bobPhase += dtReal * 9 * speed01 * (player.onGround ? 1 : 0);
     const gunBobY = Math.sin(_bobPhase * 2) * 0.012 * _bobAmp;
     let tilt = 0;
+    reloadFlashJank = 0;
     if (weapon.reloading) {
       const ph = 1 - weapon.reloadT / weapon.def.reloadS;
       tilt = -0.85 * Math.sin(Math.min(ph * Math.PI, Math.PI));
+      reloadFlashJank = Math.sin(Math.min(ph * Math.PI, Math.PI));
     }
     const meleeSwing = weapon.meleeT > 0 ? Math.sin((1 - weapon.meleeT / weapon.meleeDuration) * Math.PI) : 0;
     viewmodel.position.x = GUN_TUNE.x + swayX - meleeSwing * 0.07;
@@ -2320,10 +2407,11 @@ function frame(now) {
     }
   }
 
-  ticker.add(dtReal); // due sim ticks run between vsyncs, never on the frame
+  if (isSimAuthority()) ticker.add(dtReal); // multiplayer peers render host checkpoints; only the elected host advances the world
 
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
+  gameSync?.update(dtReal, now);
   // the sweep voices 10-15Hz sim data; every one-shot has a >=220ms throttle
   // window, so scanning at 15Hz instead of every frame is inaudible (swarm)
   if (now - _sweepAt > 66) { _sweepAt = now; soundSweep(now); }
@@ -2345,8 +2433,12 @@ function frame(now) {
   hemi.color.setRGB(0.62 + hemiPulse * 0.35, 0.70 - hemiPulse * 0.4, 0.82 - hemiPulse * 0.55);
   // seeded room lighting: your lamp follows the room fixture's state, so a
   // faulty compartment strobes around you and a dead one goes near-black
-  world.updateLights(now * 0.001);
-  world.updateDarkness(sim, player.agent.node, dtReal);
+  if (now - _lightingAt >= 66) {
+    const lightingDt = Math.min(0.2, (now - _lightingAt) / 1000);
+    _lightingAt = now;
+    world.updateLights(now * 0.001);
+    world.updateDarkness(sim, player.agent.node, lightingDt);
+  }
   // TOTAL DARKNESS (user rule): an unlit room — flood-darkened OR just a dead
   // fixture — has NO ambient wash at all. The only light is what actually
   // emits: your flashlight, the red emergency lamps over the hatches, fire,
@@ -2384,10 +2476,27 @@ function frame(now) {
     const tp = player.cameraPose();
     const tdir = _torchDir;
     camera.getWorldDirection(tdir);
+    if (reloadFlashJank > 0.001) {
+      // The lamp is rail-mounted: while the support hand rolls the rifle up
+      // for a magazine change, the beam follows the real viewmodel barrel
+      // instead of remaining supernaturally fixed at the reticle.
+      rifleMesh.updateWorldMatrix(true, false);
+      _torchRifleBase.copy(RIFLE_MUZZLE);
+      _torchRifleBase.z -= 0.5;
+      _torchRifleBase.applyMatrix4(rifleMesh.matrixWorld);
+      _torchRifleTip.copy(RIFLE_MUZZLE).applyMatrix4(rifleMesh.matrixWorld);
+      _torchRifleDirection.subVectors(_torchRifleTip, _torchRifleBase).normalize();
+      tdir.lerp(_torchRifleDirection, reloadFlashJank * 0.94).normalize();
+    }
     torch.position.set(tp.x, tp.y - 0.1, tp.z);
     // spill apex out past the muzzle — see the note where it is built
     torchSpill.position.set(tp.x + tdir.x * 0.75, tp.y - 0.1 + tdir.y * 0.75, tp.z + tdir.z * 0.75);
     torchTarget.position.set(tp.x + tdir.x * 10, tp.y + tdir.y * 10, tp.z + tdir.z * 10);
+    // In darkness the close, off-axis splash catches the visor while the gun
+    // crosses the eye line. It is deliberately tied to the beam motion and
+    // darkness: a lit-room reload never produces a generic white screen flash.
+    const glare = (inDark ? 0.68 : inFog ? 0.24 : 0) * reloadFlashJank * reloadFlashJank;
+    setStyle('reloadGlare', 'opacity', glare.toFixed(3));
   }
   // fog wall: global exponential-ish fog closes in inside a spore room
   const fogTarget = inFog ? sim.P.darkness.fogViewM + 3 : inDark ? 34 : 60;

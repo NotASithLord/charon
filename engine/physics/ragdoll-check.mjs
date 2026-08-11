@@ -275,5 +275,31 @@ let ok = true;
     `closest tip-to-axis=${worstKeepIn === 1e9 ? 'n/a' : worstKeepIn.toFixed(3)} vs keep-out=${keep.toFixed(3)}`);
 }
 
+// 12) a high-speed body cannot tunnel through a closed bulkhead. This fake
+// swept contact has the same callback contract as game/world.js: the solver
+// must project the root to the free side and reflect its inward velocity.
+{
+  const sys = new RagdollSystem(RP);
+  const wallX = 2;
+  sys.spawn(301, { x: 0, y: 1, z: 0, heading: 0, deck: 1 },
+    { dirX: 1, dirZ: 0, speed: 18, up: 2.5, spin: 12, kick: 10 },
+    () => 0, null,
+    (fromX, fromZ, toX, toZ, radius) => {
+      if (toX + radius < wallX) return null;
+      return { x: wallX - radius - 0.001, z: fromZ, nx: -1, nz: 0 };
+    });
+  let farthestX = -Infinity;
+  let reflected = false;
+  for (let step = 0; step < 120; step++) {
+    sys.step(1 / 60);
+    const rag = sys.get(301);
+    farthestX = Math.max(farthestX, rag.rootPos[0]);
+    if (rag.vel[0] < 0) reflected = true;
+  }
+  ok &= assert('melee-launched bodies collide with bulkheads without tunnelling',
+    farthestX < wallX && reflected,
+    `farthestX=${farthestX.toFixed(3)} wallX=${wallX} reflected=${reflected}`);
+}
+
 console.log(ok ? '\nragdoll-check OK' : '\nragdoll-check FAILED');
 process.exit(ok ? 0 : 1);
