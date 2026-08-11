@@ -11,7 +11,8 @@
     "physics": "node engine/physics/physics-check.mjs",
     "ragdoll": "node engine/physics/ragdoll-check.mjs",
     "commands": "node sim/command-check.js",
-    "build:dwapp": "node scripts/build-dwapp.mjs"
+    "build:dwapp": "node scripts/build-dwapp.mjs",
+    "deploy": "wrangler pages deploy . --project-name=halo-charon-poc --commit-dirty=true"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"

@@ -1,0 +1,5 @@
+.claude
+dist
+docs
+scripts
+package-lock.json
