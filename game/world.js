@@ -1827,6 +1827,25 @@ export class World {
     return false;
   }
 
+  // Cosmetic ragdolls need the solid world the player sees, including a door
+  // that has not slid clear yet. Sim movement intentionally treats an
+  // unlocked doorway as passable (it opens for living movers); a corpse has no
+  // mover record, so this stricter point test keeps a melee-launched body from
+  // ghosting through the visible panels.
+  ragdollBlocked(deck, wx, wz, radius = 0.3) {
+    const [sx, sy] = this.worldToSim(wx, wz, deck);
+    if (!this.isWalkable(deck, sx, sy) || this.propBlocked(deck, sx, sy)) return true;
+    for (const d of this.doors) {
+      if (d.deck !== deck || d.open01 >= 0.92) continue;
+      const dx = wx - d.x, dz = wz - d.z;
+      const along = dx * Math.cos(d.phi) + dz * Math.sin(d.phi);
+      const through = -dx * Math.sin(d.phi) + dz * Math.cos(d.phi);
+      const closedHalf = (this._doorPW * 0.5) * (1 - d.open01);
+      if (Math.abs(through) <= radius + 0.14 && Math.abs(along) <= closedHalf + radius) return true;
+    }
+    return false;
+  }
+
   // cover props block the player (checked separately so door throats above
   // can still grant passage through walls)
   propBlocked(deck, sx, sy) {

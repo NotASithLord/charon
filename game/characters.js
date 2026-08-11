@@ -9,6 +9,7 @@ import { CHARACTERS } from './characters-data.js';
 
 const texLoader = new THREE.TextureLoader();
 const texCache = {};
+const partCache = new Map();
 const texFor = (name) => {
   if (!texCache[name]) {
     const t = texLoader.load(`./assets/characters/${name}.png`);
@@ -24,8 +25,9 @@ const texFor = (name) => {
 // legL/legR) and `pivot` its joint position in model space — the renderer
 // swings each limb about its pivot for the procedural walk/attack cycles.
 export const characterParts = (name) => {
+  if (partCache.has(name)) return partCache.get(name);
   const model = CHARACTERS[name];
-  return model.groups.map((g) => {
+  const parts = model.groups.map((g) => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.norm, 3));
@@ -33,4 +35,6 @@ export const characterParts = (name) => {
     geo.setIndex(g.idx);
     return { part: g.part, pivot: model.pivots[g.part] ?? null, geometry: geo, texture: texFor(g.tex) };
   });
+  partCache.set(name, parts);
+  return parts;
 };

@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HALO CHARON // GAME</title>
+<link rel="stylesheet" href="./launcher.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #05070a; overflow: hidden; }
+  body { font: 13px/1.4 "SF Mono", "Cascadia Code", Consolas, monospace; color: #c8d2e0; }
+  #c { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hud { position: absolute; z-index: 5; pointer-events: none; }
+  #topbar { top: 12px; left: 14px; }
+  #topbar b { color: #e8eef7; font-size: 15px; }
+  #room { color: #7fd1a0; font-size: 15px; font-weight: 700; }
+  #vitals { top: 12px; right: 14px; text-align: right; }
+  #hp { font-size: 16px; font-weight: 700; color: #7fd1a0; }
+  #hp.low { color: #ff6a4d; }
+  /* CE AR reticle (ported from first-strike): circle of 4 arcs + dot,
+     blooming with weapon spread via --sp (set per frame from spreadDeg) */
+  #crosshair {
+    --sp: 14px;
+    top: 50%; left: 50%; width: 0; height: 0;
+    filter: drop-shadow(0 0 2px rgba(10,30,70,0.9));
+  }
+  #crosshair .ring {
+    position: absolute;
+    width: calc(26px + 2 * var(--sp)); height: calc(26px + 2 * var(--sp));
+    left: calc(-13px - var(--sp)); top: calc(-13px - var(--sp));
+    border: 1.5px solid rgba(140,215,255,0.95);
+    border-radius: 50%;
+    -webkit-mask: conic-gradient(from 20deg,
+      #000 0 50deg, transparent 50deg 90deg,
+      #000 90deg 140deg, transparent 140deg 180deg,
+      #000 180deg 230deg, transparent 230deg 270deg,
+      #000 270deg 320deg, transparent 320deg 360deg);
+    mask: conic-gradient(from 20deg,
+      #000 0 50deg, transparent 50deg 90deg,
+      #000 90deg 140deg, transparent 140deg 180deg,
+      #000 180deg 230deg, transparent 230deg 270deg,
+      #000 270deg 320deg, transparent 320deg 360deg);
+  }
+  #crosshair .dot {
+    position: absolute; width: 2.4px; height: 2.4px;
+    left: -1.2px; top: -1.2px; border-radius: 50%;
+    background: rgba(140,215,255,0.95);
+  }
+  /* the radio log: bottom half of the right edge only — the top half stays
+     clear glass so the panel costs less field of view (user note) */
+  #logwrap {
+    top: 52%; right: 0; bottom: 0; width: 384px;
+    background: linear-gradient(to left, rgba(7,10,14,0.92), rgba(7,10,14,0.78));
+    border-left: 1px solid #1c2430; border-top: 1px solid #1c2430;
+    padding: 10px 14px 12px;
+    display: flex; flex-direction: column;
+  }
+  #logwrap h2 { font-size: 12px; color: #6a7686; letter-spacing: 1.5px; margin-bottom: 8px; }
+  #log { flex: 1; overflow-y: auto; font-size: 13.5px; line-height: 1.5; }
+  #log .ev { padding: 1.5px 0; color: #9aa7b8; }
+  #log .t { color: #4a5568; }
+  #log .ev-hive, #log .ev-carrier { color: #7fd1a0; }
+  #log .ev-rampage { color: #ff6a4d; font-weight: 700; }
+  #log .ev-convert { color: #b15fd9; }
+  #log .ev-radio { color: #6aa4f0; }
+  #log .ev-combat { color: #d0a24a; }
+  #log .ev-ambush, #log .ev-bait { color: #ffd23f; }
+  #log .ev-duct { color: #8a7fb0; font-style: italic; }
+  #log .ev-end { color: #fff; font-weight: 700; }
+  #log .spk { color: #cfe0ff; font-weight: 700; letter-spacing: 0.04em; }
+  #nameplate {
+    position: absolute; z-index: 6; transform: translate(-50%, -100%);
+    font-weight: 700; font-size: 11px; letter-spacing: 0.14em;
+    text-shadow: 0 0 5px #000, 0 1px 2px #000;
+    pointer-events: none; white-space: nowrap; display: none;
+  }
+  #nameplate.np-marine { color: #8ed49a; }
+  #nameplate.np-crew { color: #a8c6ea; }
+  #nameplate.np-flood { color: #e06a55; }
+  #nameplate.np-corpse { color: #8a8f96; }
+  #roomState { margin-top: 3px; font-size: 11.5px; letter-spacing: 0.08em; text-align: right; }
+  /* live perf readout (debug/benchmark across hardware) */
+  #fpsMeter { margin-top: 3px; font-size: 11px; letter-spacing: 0.06em; text-align: right; color: #5f6c7c; }
+  #fpsMeter b { font-weight: 700; }
+  #fpsMeter.fps-good b { color: #7fd08a; }
+  #fpsMeter.fps-mid b { color: #d8c86a; }
+  #fpsMeter.fps-bad b { color: #e06a55; }
+  #roomState.rs-steady { color: #7fd08a; }
+  #roomState.rs-soft { color: #d8c86a; }
+  #roomState.rs-harsh { color: #e09a4a; }
+  #roomState.rs-dead { color: #e06a55; }
+  #overlay {
+    position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(4, 6, 9, 0.88); text-align: center; cursor: pointer;
+  }
+  #overlay h1 { font-size: 28px; color: #e8eef7; letter-spacing: 2px; }
+  #overlay p { color: #8a97a8; max-width: 520px; }
+  #overlay .keys { color: #6a7686; font-size: 12px; }
+  #overlay.hidden { display: none; }
+  #pinned {
+    top: 58%; left: 50%; transform: translateX(-50%);
+    color: #ff6a4d; font-weight: 700; font-size: 18px; display: none;
+  }
+  #vitals .bar {
+    width: 170px; height: 9px; margin: 3px 0 0 auto;
+    background: rgba(20,26,36,0.8); border: 1px solid #2a3547; border-radius: 2px;
+    overflow: hidden;
+  }
+  #armorBar { height: 100%; width: 100%; background: #6fb0f0; transition: width 0.1s; }
+  #healthBar { height: 100%; width: 100%; background: #d8574a; transition: width 0.1s; }
+  #hpText { color: #8fb5e8; font-size: 12px; margin-top: 2px; }
+  #ammo { color: #e8d98c; font-size: 16px; font-weight: 700; margin-top: 4px; }
+  #hint {
+    top: 64%; left: 50%; transform: translateX(-50%); display: none;
+    color: #e8d98c; font-size: 15px; font-weight: 700;
+    background: rgba(8, 11, 15, 0.75); padding: 6px 14px; border-radius: 5px;
+    border: 1px solid #3a3616;
+  }
+
+  #hitmarker {
+    position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
+    transform: translate(-50%, -50%) rotate(45deg); pointer-events: none; opacity: 0;
+  }
+  #hitmarker::before, #hitmarker::after {
+    content: ""; position: absolute; background: #ff5348;
+  }
+  #reloadGlare {
+    position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0;
+    background:
+      radial-gradient(circle at 58% 42%, rgba(235,246,255,0.95) 0 4%, rgba(174,211,242,0.46) 15%, transparent 48%),
+      linear-gradient(115deg, transparent 20%, rgba(196,225,250,0.22) 48%, transparent 72%);
+    mix-blend-mode: screen;
+  }
+  #hitmarker::before { left: 10px; top: 0; width: 2px; height: 22px; }
+  #hitmarker::after { left: 0; top: 10px; width: 22px; height: 2px; }
+  #dmgdir {
+    position: absolute; left: 50%; top: 50%; width: 130px; height: 130px;
+    margin: -65px 0 0 -65px; pointer-events: none; opacity: 0; border-radius: 50%;
+  }
+  #dmgdir::before {
+    content: ""; position: absolute; left: 50%; top: -6px; margin-left: -22px;
+    width: 44px; height: 16px; border-radius: 50% 50% 0 0;
+    background: radial-gradient(ellipse at 50% 100%, rgba(255,40,32,0.9), rgba(255,40,32,0));
+  }
+  #tracker {
+    position: absolute; left: 14px; bottom: 14px; width: 150px; height: 150px;
+    opacity: 0.88; pointer-events: none;
+  }
+  #frags {
+    position: absolute; right: 16px; bottom: 44px; color: #9fd4ff;
+    font: 14px/1 "SF Mono", Menlo, monospace; letter-spacing: 1px; text-align: right;
+  }
+  #order {
+    position: absolute; right: 16px; bottom: 22px; color: #6a8fb5;
+    font: 11px/1 "SF Mono", Menlo, monospace; letter-spacing: 1px; text-align: right;
+  }
+  /* MARINE TACNET map view (M): the ops picture — schematic always known,
+     contents only where marine teams have eyes */
+  #mapview {
+    position: absolute; top: 0; left: 0; right: 410px; bottom: 0; z-index: 8;
+    background: rgba(4, 6, 9, 0.94);
+  }
+  #mapview.mv-hidden { display: none; }
+  #mapcanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #maptitle {
+    position: absolute; top: 10px; left: 14px; color: #8fb5e8;
+    font-size: 13px; font-weight: 700; letter-spacing: 2px;
+  }
+  #maplegend {
+    position: absolute; bottom: 10px; left: 14px; right: 14px; color: #4a5568;
+    font-size: 11px;
+  }
+  #mapside {
+    position: absolute; top: 34px; left: 14px; width: 252px;
+    background: rgba(7, 10, 14, 0.85); border: 1px solid #1c2430; border-radius: 4px;
+    padding: 8px 10px; font-size: 11.5px; max-height: 70%; overflow-y: auto;
+  }
+  #mapside .mrow { padding: 3px 0; border-bottom: 1px solid #141a24; }
+  #mapside .mrow:last-child { border-bottom: none; }
+  #mapside .mhead { display: flex; justify-content: space-between; color: #6a7686; }
+  #mapside .mhead b { color: #c8d2e0; }
+  #mapside .mrow > span:first-child { color: #8fb5e8; }
+  #mapside .mrow b { color: #e8eef7; }
+  #mapside .pips { margin-left: 6px; }
+  #mapside .pips i {
+    display: inline-block; width: 9px; height: 9px; margin-right: 2px;
+    border-radius: 1px;
+  }
+  #mapside .obj { color: #6a7686; font-size: 10.5px; }
+  #mapside .obj em { color: #ff6a4d; font-style: normal; font-weight: 700; }
+  /* INTRO (user request): a military report that types itself out — any key
+     or click reveals it all, then a click deploys you */
+  #intro {
+    position: absolute; inset: 0; z-index: 12; background: #020409;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  #introText {
+    width: min(700px, 86vw); white-space: pre-wrap;
+    font-size: 14px; line-height: 1.68; color: #9fc8ac;
+    text-shadow: 0 0 9px rgba(110, 220, 155, 0.22);
+  }
+  #introText::after {
+    content: "▊"; color: #b8e8c8; animation: introblink 0.9s steps(1) infinite;
+  }
+  #introMission {
+    width: min(700px, 86vw); margin-top: 10px; white-space: pre-wrap;
+    font-size: 17px; font-weight: 700; letter-spacing: 2px; color: #ff6a4d;
+    text-shadow: 0 0 12px rgba(255, 90, 60, 0.35);
+  }
+  #introHint {
+    position: absolute; bottom: 26px; left: 0; right: 0; text-align: center;
+    color: #4a5568; font-size: 12px; letter-spacing: 1.5px;
+  }
+  #introHint.ready { color: #e8d98c; font-size: 14px; animation: introblink 1.1s steps(1) infinite; }
+  @keyframes introblink { 50% { opacity: 0.15; } }
+</style>
+</head>
+<body class="launcher-active">
+  <div id="launcher">
+    <header class="hub-top">
+      <div class="hub-brand"><span class="hub-mark" aria-hidden="true"></span><div><strong>CHARON</strong><span>PEER-TO-PEER SURVIVAL</span></div></div>
+      <nav class="hub-nav" aria-label="Primary"><button data-open-page="menu">Play</button><button data-open-page="about">About</button><button data-open-page="docs">Developer docs</button></nav>
+    </header>
+    <main class="hub-shell">
+      <section data-launch-page="menu">
+        <div class="hub-hero">
+          <div>
+            <div class="hub-kicker">UNSC Saturn Devouring · Charon-class frigate</div>
+            <h1>The ship is <span>already losing.</span></h1>
+            <p class="hub-deck">A systemic co-op survival game aboard a drifting warship. The crew fights, panics, calls for help, and dies with or without you. The thing in the lower decks learns from all of it.</p>
+            <div class="hub-actions">
+              <button class="hub-button primary" id="solo-play"><span class="num">01</span><b>PLAY SOLO</b><em>DEPLOY →</em></button>
+              <button class="hub-button" data-open-page="multiplayer"><span class="num">02</span><b>MULTIPLAYER</b><em>FORM FIRETEAM →</em></button>
+              <button class="hub-button" data-open-page="about"><span class="num">03</span><b>ABOUT CHARON</b><em>READ →</em></button>
+              <button class="hub-button" data-open-page="docs"><span class="num">04</span><b>DEVELOPER DOCS</b><em>OPEN →</em></button>
+            </div>
+            <p id="menu-notice" hidden></p>
+          </div>
+          <dl class="hub-telemetry">
+            <h2>MISSION PARAMETERS</h2>
+            <div class="telemetry-row"><dt>PLAYERS</dt><dd>1–4 ODST survivors</dd></div>
+            <div class="telemetry-row"><dt>NETWORK</dt><dd>Authenticated WebRTC mesh</dd></div>
+            <div class="telemetry-row"><dt>COMMS</dt><dd>Live fireteam voice</dd></div>
+            <div class="telemetry-row"><dt>SIMULATION</dt><dd>15 Hz systemic ship state</dd></div>
+            <div class="telemetry-row"><dt>OBJECTIVE</dt><dd>Survive what boarded</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section data-launch-page="multiplayer" hidden>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button>
+        <div class="hub-kicker">Fireteam assembly</div><h1 class="hub-page-title">Multiplayer</h1>
+        <p class="hub-copy">Every match runs peer-to-peer. In peerd, Charon uses the host’s authenticated base mesh. On the web, the same room, identity, gossip, and WebRTC primitives ship inside the page.</p>
+        <div class="hub-form">
+          <label class="hub-label" for="player-name">Callsign</label><input class="hub-input" id="player-name" maxlength="24" autocomplete="nickname" placeholder="ODST callsign">
+          <div class="hub-form-row">
+            <div><span class="hub-label">Public queue</span><button class="hub-button primary" id="quick-play"><b>QUICK MATCH</b><em>FIND FIRETEAM →</em></button><p class="hub-note">Pairs you with available survivors, up to four per fireteam.</p></div>
+            <div><span class="hub-label">Invite-only</span><button class="hub-button" id="host-private"><b>CREATE PRIVATE ROOM</b><em>GENERATE CODE →</em></button><p class="hub-note">A high-entropy room code is never listed or advertised.</p></div>
+          </div>
+          <div style="margin-top:22px"><label class="hub-label" for="invite-code">Join with invite code</label><div class="invite-copy"><input class="hub-input" id="invite-code" maxlength="48" placeholder="paste fireteam code"><button class="mini-button" id="join-private">JOIN ROOM</button></div><p id="multiplayer-error" class="hub-error" role="alert" aria-live="assertive" hidden></p></div>
+        </div>
+      </section>
+
+      <section data-launch-page="lobby" hidden>
+        <button class="hub-link hub-back" id="lobby-leave">← Leave lobby</button>
+        <div class="lobby-layout">
+          <div><div class="hub-kicker">Connected room</div><h1 class="hub-page-title" id="lobby-title">Fireteam</h1><p id="lobby-status" role="status" aria-live="polite">Opening a peer-to-peer room…</p>
+            <div id="invite-panel" class="hub-form" hidden><label class="hub-label" for="invite-value">Invite code</label><div class="invite-copy"><input class="hub-input" id="invite-value" readonly><button class="mini-button" id="copy-invite">COPY CODE</button></div><p class="hub-note">Only people with this code can address the room. Send it over a channel you trust.</p></div>
+          </div>
+          <aside class="lobby-panel">
+            <div class="lobby-head"><h2>FIRETEAM</h2><span id="lobby-count">0 / 4</span></div><ul id="lobby-roster"></ul><span class="transport-pill" id="transport-label">NEGOTIATING</span>
+            <div class="voice-row"><div><span class="hub-label">Voice channel</span><span id="voice-state" role="status" aria-live="polite">microphone off</span></div><button class="mini-button" id="voice-toggle">ENABLE</button></div>
+            <button class="hub-button primary" id="lobby-start" hidden><b>DEPLOY FIRETEAM</b><em>START →</em></button>
+          </aside>
+        </div>
+      </section>
+
+      <section data-launch-page="about" hidden>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button><div class="hub-kicker">Project briefing</div><h1 class="hub-page-title">About Charon</h1>
+        <div class="hub-copy"><p>Charon is a browser-native survival simulation set aboard the UNSC Saturn Devouring. It does not wait for the player: marines sweep compartments, civilians spread panic, radios fail, bodies become resources, and the Flood chooses where pressure will hurt most.</p><p>Solo and co-op use the same ship simulation. Multiplayer adds live ODST presence, shared weapon damage and explosions, and room voice over authenticated peer-to-peer links. There is no match server in the gameplay path.</p></div>
+        <div class="hub-grid"><article class="hub-card"><span class="index">SYSTEM 01</span><h2>AUTONOMOUS SHIP</h2><p>Every crew member and hostile form acts inside a deterministic 15 Hz simulation.</p></article><article class="hub-card"><span class="index">SYSTEM 02</span><h2>SHARED INCIDENT</h2><p>Co-op peers inhabit the same seeded outbreak and replicate combat actions in real time.</p></article><article class="hub-card"><span class="index">SYSTEM 03</span><h2>LOCAL-FIRST</h2><p>The complete game, assets, networking client, and docs can travel as one peerd dwapp.</p></article></div>
+      </section>
+
+      <section data-launch-page="docs" hidden>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button><div class="hub-kicker">Developer reference</div><h1 class="hub-page-title">Docs</h1>
+        <div class="docs-layout">
+          <nav class="docs-tabs" role="tablist" aria-label="Developer documentation"><button id="docs-tab-overview" role="tab" data-doc-tab="overview" aria-controls="docs-panel-overview" aria-selected="true">01 · Overview</button><button id="docs-tab-network" role="tab" data-doc-tab="network" aria-controls="docs-panel-network" aria-selected="false" tabindex="-1">02 · Networking</button><button id="docs-tab-dwapp" role="tab" data-doc-tab="dwapp" aria-controls="docs-panel-dwapp" aria-selected="false" tabindex="-1">03 · dwapp package</button><button id="docs-tab-run" role="tab" data-doc-tab="run" aria-controls="docs-panel-run" aria-selected="false" tabindex="-1">04 · Run & test</button></nav>
+          <div>
+            <article id="docs-panel-overview" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-overview" data-doc-panel="overview"><h2>Architecture overview</h2><p>Charon separates the deterministic ship simulation from rendering and player input. The simulation writes one packed agent buffer; the 3D layer consumes it without owning world state.</p><h3>PRIMARY SURFACES</h3><ul><li><code>sim/</code> — ship graph, factions, combat, commands, and deterministic ticks.</li><li><code>game/</code> — first-person controls, 3D world, HUD, audio, and the hub launcher.</li><li><code>multiplayer/</code> — room abstraction, lobby protocol, game synchronization, and voice.</li></ul></article>
+            <article id="docs-panel-network" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-network" data-doc-panel="network" hidden><h2>Multiplayer protocol</h2><p>The peerd build calls the consent-gated dwapp bridge. The web build bundles peerd’s identity, room, mesh, gossip, presence, direct-message, and WebRTC transport primitives.</p><h3>FLOW</h3><ul><li>Join a lobby and authenticate peers with did:key identities.</li><li>Quick Match partitions ready peers into fireteams of four; private lobby messages require a DID-bound invite HMAC.</li><li>A proposal/ack/commit barrier freezes membership before deployment.</li><li>The fireteam leaves matchmaking for an isolated match room.</li><li>The authority advances the ship simulation and sends delta checkpoints; player poses and validated actions use direct WebRTC messages.</li><li>Voice uses native RTP/Opus; bounded SDP/ICE signaling uses authenticated direct messages.</li></ul><pre>lobby → ready → proposal / ack / commit → match room
+                                           ↘ direct state, actions, voice</pre></article>
+            <article id="docs-panel-dwapp" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-dwapp" data-doc-panel="dwapp" hidden><h2>peerd dwapp package</h2><p>The hub output contains a schema-1 <code>peerd.json</code> declaring <code>kind: "dwapp"</code>, one entry HTML document, one stylesheet, and one self-contained module bundle. Assets are embedded as data URIs so the opaque-origin sandbox performs no relative fetches.</p><h3>BRIDGE OPERATIONS USED</h3><p><code>hello</code>, <code>join</code>, <code>leave</code>, <code>presence</code>, <code>announce</code>, <code>subscribe</code>, <code>publish</code>, and the room voice operations. Raw WebRTC and microphone handles remain sealed in peerd’s trusted parent.</p><pre>npm run build:dwapp
+# output: dist/dwapp/hub/</pre></article>
+            <article id="docs-panel-run" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-run" data-doc-panel="run" hidden><h2>Run and verify</h2><p>Use any static server for the web build. Multiplayer requires a secure browser context outside localhost because microphone capture and WebCrypto are secure-context APIs.</p><pre>npm run serve
+npm run multiplayer
+npm run determinism
+npm run build:dwapp</pre></article>
+          </div>
+        </div>
+      </section>
+      <footer class="hub-footer"><span>CHARON NETWORK PROTOCOL v2</span><span>WEBGPU · WEBGL2 · WEBRTC · PEERD DWEB</span></footer>
+    </main>
+  </div>
+  <canvas id="c"></canvas>
+  <div class="hud" id="topbar"><b>UNSC SATURN DEVOURING</b> · <span id="clock">0:00</span> · <span id="room">—</span></div>
+  <div class="hud" id="vitals">
+    <div class="bar"><div id="armorBar"></div></div>
+    <div class="bar"><div id="healthBar"></div></div>
+    <div id="hpText">50 | 45</div>
+    <div id="deckLabel">DECK —</div>
+    <div id="ammo">60 / 240</div>
+    <div id="roomState">—</div>
+    <div id="fpsMeter"></div>
+  </div>
+  <div class="hud" id="crosshair"><span class="ring"></span><span class="dot"></span></div>
+  <div id="nameplate"></div>
+  <div class="hud" id="hint"></div>
+  <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
+  <div id="hitmarker"></div>
+  <div id="reloadGlare" aria-hidden="true"></div>
+  <div id="dmgdir"></div>
+  <canvas id="tracker" width="150" height="150"></canvas>
+  <div class="hud" id="networkHud" hidden><span id="networkState">P2P · 1 ONLINE</span><button id="gameVoice" type="button">MIC LIVE</button></div>
+  <div id="frags">4 FRAG</div>
+  <div id="order">FIRETEAM: FOLLOW</div>
+  <div id="mapview" class="mv-hidden">
+    <canvas id="mapcanvas"></canvas>
+    <div id="maptitle">MARINE TACNET — UNSC SATURN DEVOURING</div>
+    <div id="mapside"></div>
+    <div id="maplegend">M close · the schematic is always known — contacts, bodies and lights-out
+      show only where a marine team (or you) has eyes; red ◇ = last-seen report, fading with age</div>
+  </div>
+  <div class="hud" id="logwrap">
+    <h2>SHIP ACTIVITY</h2>
+    <div id="log"></div>
+  </div>
+  <!-- static markup paints on the FIRST frame, before any module loads —
+       the boot (three.js + world build) hides behind it; main.js replaces
+       the text the moment the type roll starts (user: first render must be
+       a Loading… in the intro typeface) -->
+  <div id="intro" role="button" tabindex="0" aria-label="Mission briefing. Press Enter to advance.">
+    <div id="introText">Loading…</div>
+    <div id="introMission"></div>
+    <div id="introHint">any key or click — skip</div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">HALO CHARON</h1>
+    <p id="ovText">You are a lone crew member aboard the UNSC Saturn Devouring, a Charon-class frigate. Something hit the hangar deck.
+      The ship's marines, crew — and whatever came aboard — act entirely on their own. Survive.</p>
+    <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · G frag · E scavenge ammo · M tac map · 1 follow / 2 hold / 3 advance (fireteam) ·
+      ladders/stairs: stand at one, press L — always takes you to the other end · your fireteam follows you · ESC frees the mouse</p>
+  </div>
+  <script type="module" src="./bundle.js"></script>
+</body>
+</html>

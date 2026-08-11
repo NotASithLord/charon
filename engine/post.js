@@ -115,6 +115,27 @@ export class PostFX {
     this.post.outputColorTransform = false;
     this.post.outputNode = fxaaFn;
 
+    // The lower quality rungs need a genuinely cheaper graph, not the same
+    // bloom + grade RTT + FXAA chain at fewer pixels. This keeps the essential
+    // HDR exposure, ACES fit, vignette, and sRGB conversion in one fullscreen
+    // pass while dropping bloom mips, chromatic-aberration taps, animated
+    // grain, the intermediate LDR target, and FXAA.
+    const liteGrade = Fn(() => {
+      const uvN = uv();
+      const cc = uvN.sub(0.5);
+      const r2 = dot(cc, cc);
+      const x = scol.sample(uvN).rgb.mul(uE);
+      const c = clamp(
+        x.mul(x.mul(2.51).add(0.03)).div(x.mul(x.mul(2.43).add(0.59)).add(0.14)),
+        0.0, 1.0).toVar();
+      c.mulAssign(smoothstep(0.32, 0.85, r2).mul(0.34).oneMinus());
+      return vec4(pow(max(c, 0.0), vec3(1.0 / 2.2)), 1.0);
+    })();
+    this.litePost = new THREE.RenderPipeline(renderer);
+    this.litePost.outputColorTransform = false;
+    this.litePost.outputNode = liteGrade;
+    this.lite = false;
+
     this._scene = scene;
     this._camera = camera;
   }
@@ -127,12 +148,14 @@ export class PostFX {
   // stepping down to 0.25 on the lowest rung)
   setBloomScale(s) { this.bloomNode.setResolutionScale(s); }
 
+  setLite(value) { this.lite = !!value; }
+
   // PassNode/BloomNode track renderer size + pixel ratio on their own
   setSize() {}
 
   render(scene, camera, timeSec) {
     if (!this.enabled) { this.renderer.render(scene, camera); return; }
     this._uTime.value = timeSec % 100;
-    this.post.render();
+    (this.lite ? this.litePost : this.post).render();
   }
 }

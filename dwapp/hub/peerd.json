@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "kind": "dwapp",
+  "entry": "index.html",
+  "agent": {
+    "kind": "bound-app"
+  },
+  "capabilities": [
+    "dweb"
+  ]
+}

@@ -54,6 +54,7 @@ function commitInstanced(mesh, count) {
 function makeInstanced(scene, geo, color, emissive = 0x000000, emissiveIntensity = 0.4) {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.15, emissive, emissiveIntensity });
   const mesh = new THREE.InstancedMesh(geo, mat, CAP);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   mesh.count = 0;
   mesh.frustumCulled = false;
   scene.add(mesh);
@@ -91,6 +92,7 @@ export class Agents3D {
         side: flood ? THREE.DoubleSide : THREE.FrontSide,
       });
       const mesh = new THREE.InstancedMesh(p.geometry, mat, CAP);
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.count = 0;
       mesh.frustumCulled = false;
       mesh.userData.part = p.part;
@@ -218,6 +220,8 @@ export class Agents3D {
     this._blasts = [];         // recent explosions (grenades): {deck, cx, cz, r, ttl} —
                                // deaths inside one get a big radial flailing launch, and a
                                // blast re-flings bodies already on the deck
+    this._seen = new Set();
+    this._counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
   }
 
   // The game calls this when a grenade detonates (game/main.js stepFrags). It
@@ -312,13 +316,21 @@ export class Agents3D {
         if (part === 'head') return 0.08;
         return 0;
       case CLIP.ATTACK:
-        // raised, flailing swipes — claws up and hammering (positive =
-        // forward on this rig, same sign fix as the rifle hold)
-        if (part === 'armL') return 1.0 + Math.sin(ph * 1.7) * 0.55;
-        if (part === 'armR') return 1.0 + Math.sin(ph * 1.7 + 2.1) * 0.55;
-        if (part === 'legL') return s * 0.25;
-        if (part === 'legR') return -s * 0.25;
-        if (part === 'head') return Math.sin(ph) * 0.1;
+        // One authored-looking 580 ms whip: the right tentacle leads in a
+        // huge overhand/cross-body lash and the left follows a beat later.
+        // `animTime` resets on the actual damage event, so the visual contact
+        // and the physical impulse share the same beat.
+        {
+          const u = Math.max(0, Math.min(1, t / 0.58));
+          const lead = Math.sin(Math.min(1, u / 0.62) * Math.PI);
+          const followU = Math.max(0, Math.min(1, (u - 0.16) / 0.72));
+          const follow = Math.sin(followU * Math.PI);
+          if (part === 'armR') return 0.18 + lead * 2.35;
+          if (part === 'armL') return 0.12 + follow * 1.95;
+          if (part === 'legL') return -lead * 0.22;
+          if (part === 'legR') return lead * 0.32;
+          if (part === 'head') return -lead * 0.18;
+        }
         return 0;
       case CLIP.WRITHE:
         // infection form: tripod legs skitter, sensory stalks quiver
@@ -397,7 +409,16 @@ export class Agents3D {
       // pure forward pitch keeps the elbows flared. Rifle carriers also
       // ADDUCT — the X-rotation pulls the hands in toward the weapon's
       // centerline, closing the silhouette.
-      if (hold && clip !== CLIP.DEATH && (part === 'armL' || part === 'armR')) {
+      if (!hold && clip === CLIP.ATTACK && (part === 'armL' || part === 'armR')) {
+        // The converted host's long arm meshes are tentacles in silhouette.
+        // A second shoulder axis makes them slash across the victim instead
+        // of merely windmilling forward like ordinary human arms.
+        const u = Math.max(0, Math.min(1, animT / 0.58));
+        const lash = Math.sin(u * Math.PI);
+        this._eAttack ??= new THREE.Euler();
+        this._eAttack.set((part === 'armR' ? -0.92 : 0.72) * lash, 0, ang);
+        this._mRot.makeRotationFromEuler(this._eAttack);
+      } else if (hold && clip !== CLIP.DEATH && (part === 'armL' || part === 'armR')) {
         this._eHold ??= new THREE.Euler();
         this._eHold.set(part === 'armR' ? 0.52 : -0.52, 0, ang);
         this._mRot.makeRotationFromEuler(this._eHold);
@@ -492,12 +513,14 @@ export class Agents3D {
     // age recent blasts (a death registers a frame or two after the boom)
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
-    const counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
+    const counts = this._counts;
+    for (const key in counts) counts[key] = 0;
     let clip = 0, animT = 0, curId = 0;
     const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId);
     const stampHold = (set, i) => this._stampAnimated(set, i, clip, animT, curId, true); // rifle carriers
 
-    const seen = new Set();
+    const seen = this._seen;
+    seen.clear();
     // per-frame per-set "any instance near enough to cast into the torch cone"
     (this._castNear ??= new Set()).clear();
     this._curD2 = 0; // stays 0 (always cast) until the camera position is known
@@ -1132,6 +1155,26 @@ export class Agents3D {
           s.x = x; s.z = z;
           s.y = elevOf(deck) + this.world.ceilHeightAt(deck, x, z) - 0.15;
           return s.y;
+        },
+        (fromX, fromZ, toX, toZ, radius) => {
+          if (!this.world.ragdollBlocked(deck, toX, toZ, radius)) return null;
+          // Swept bisection prevents a fast pounce launch from tunnelling
+          // through a thin door panel between fixed ragdoll substeps.
+          let lo = 0, hi = 1;
+          for (let step = 0; step < 8; step++) {
+            const mid = (lo + hi) * 0.5;
+            const x = fromX + (toX - fromX) * mid;
+            const z = fromZ + (toZ - fromZ) * mid;
+            if (this.world.ragdollBlocked(deck, x, z, radius)) hi = mid;
+            else lo = mid;
+          }
+          const dx = toX - fromX, dz = toZ - fromZ;
+          const dl = Math.hypot(dx, dz) || 1;
+          return {
+            x: fromX + dx * Math.max(0, lo - 0.01),
+            z: fromZ + dz * Math.max(0, lo - 0.01),
+            nx: -dx / dl, nz: -dz / dl,
+          };
         });
       if (!rag) return false; // disabled at the system level
       this._ragSeen.add(id);
@@ -1197,6 +1240,13 @@ export class Agents3D {
     let dirX = 0, dirZ = 0, known = false, speed = R.launchSpeed;
 
     const agent = this.sim.byId.get(id);
+    if (agent?.deathImpulse?.kind === 'melee') {
+      const hit = agent.deathImpulse;
+      return {
+        dirX: hit.dirX, dirZ: hit.dirY,
+        speed: hit.speed, up: hit.up, spin: hit.spin, kick: hit.kick,
+      };
+    }
     if (agent && agent.lastHurtBy != null && agent.lastHurtBy >= 0) {
       const src = this.sim.byId.get(agent.lastHurtBy);
       if (src && !src.dead && src.deck === deck && src.id !== id) {

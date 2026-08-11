@@ -440,11 +440,12 @@ export class Sim {
     }
   }
 
-  hurtHuman(a, dmg, by = -1) {
+  hurtHuman(a, dmg, by = -1, impact = null) {
     if (a.hp <= 0 || a.dead) return;
     if (by >= 0 && dmg > 0) { a.lastHurtBy = by; a.lastHurtTick = this.tickCount; }
     a.hp -= dmg;
     if (a.hp <= 0) {
+      if (impact) a.deathImpulse = impact;
       this.stats.humansDead++;
       if (a.faction === FACTION.MARINE) {
         const squad = this.squads[a.squad];
@@ -1882,6 +1883,14 @@ export class Sim {
 
   _clipFor(a) {
     if (a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) return CLIP.DEATH;
+    // Combat forms only play the violent tentacle swipe when a discrete melee
+    // event actually fires. Closing on a victim remains a run, and the
+    // recovery window returns to an alert idle instead of looping fake hits.
+    if (a.faction === FACTION.COMBAT) {
+      if ((a.meleeUntil ?? -1) > this.t) return CLIP.ATTACK;
+      if (a.move || a.charging || a.leaping) return CLIP.RUN;
+      return CLIP.IDLE;
+    }
     if (a.state === STATE.GRABBING || a.state === STATE.FIGHT) return CLIP.ATTACK;
     if (a.faction === FACTION.INFECTION) return a.move ? CLIP.RUN : CLIP.WRITHE;
     // close-follow escorts move in real space with NO a.move — they were

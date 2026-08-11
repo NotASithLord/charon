@@ -186,7 +186,14 @@ export const PARAMS = {
     // trades a man for a form more often than not, 3 marines win clean.
     // swing: 18 dmg / 0.9 s = the same 20 dps sustained, delivered in chunks.
     combatForm: { hp: 90, dps: 20, hpJitter: 0.18,   // spawn hp varies ±18%
-                  swing: { dmg: 18, cooldownSec: 0.9 } },
+                  swing: {
+                    dmg: 18, cooldownSec: 0.9, animSec: 0.58,
+                    // A grounded whip drops a body nearby. A running strike
+                    // carries farther; an airborne pounce can clear a room.
+                    standSpeed: 5.5, chargeBonus: 3.5, jumpBonus: 7.0,
+                    standUp: 2.5, jumpUp: 5.2, standSpin: 10, jumpSpin: 17,
+                    standKick: 9, jumpKick: 15,
+                  } },
     hostWeaponDps: 5,          // nominal (shaft pools / hive estimates)
     // the armed MINORITY of forms spray the host's weapon one-handed and
     // wildly (lore) — suppressive noise more than marksmanship

@@ -181,7 +181,7 @@ export class RagdollSystem {
   // evicting the oldest ASLEEP body first (already settled — least missed),
   // falling back to the oldest overall; the evicted id then renders as a plain
   // static corpse via the caller's fallback path.
-  spawn(id, pose, impulse, groundYAt, ceilYAt) {
+  spawn(id, pose, impulse, groundYAt, ceilYAt, collideXZ = null) {
     const p = this.p;
     if (p.maxActive <= 0) return null;
     if (!this._byId.has(id)) this._evictIfFull();
@@ -206,6 +206,7 @@ export class RagdollSystem {
       limbState,           // part -> { q, omega }
       groundYAt,
       ceilYAt,
+      collideXZ,
       asleep: false,
       sleepT: 0,
       seq: this._seq++,
@@ -298,11 +299,32 @@ export class RagdollSystem {
     const p = this.p;
 
     // 1) gravity + semi-implicit integrate of the root
+    const prevX = r.rootPos[0], prevZ = r.rootPos[2];
     r.vel[1] -= p.gravity * dt;
     r.rootPos[0] += r.vel[0] * dt;
     r.rootPos[1] += r.vel[1] * dt;
     r.rootPos[2] += r.vel[2] * dt;
     r.rootQuat = qintegrate(r.rootQuat, r.omega, dt);
+    // Bulkheads, props, and door panels are render-world collision. The
+    // callback projects a swept root back to the last free point and supplies
+    // a contact normal; reflecting only the inward component loses energy and
+    // turns a high-momentum melee launch into the expected door/wall slam.
+    if (r.collideXZ) {
+      const hit = r.collideXZ(prevX, prevZ, r.rootPos[0], r.rootPos[2], p.bodyRadius);
+      if (hit) {
+        r.rootPos[0] = hit.x; r.rootPos[2] = hit.z;
+        const nl = Math.hypot(hit.nx, hit.nz) || 1;
+        const nx = hit.nx / nl, nz = hit.nz / nl;
+        const vn = r.vel[0] * nx + r.vel[2] * nz;
+        if (vn < 0) {
+          const bounce = (1 + p.restitution) * vn;
+          r.vel[0] -= nx * bounce;
+          r.vel[2] -= nz * bounce;
+          r.omega[0] += nz * Math.abs(vn) * 0.35;
+          r.omega[2] -= nx * Math.abs(vn) * 0.35;
+        }
+      }
+    }
 
     // 2) floor contact for the two capsule ends (feet-end + head-end). The
     // torso is a capsule from y=radius to y=bodyLen-radius in model space; two
