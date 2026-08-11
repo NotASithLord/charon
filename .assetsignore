@@ -1,5 +1,6 @@
 .git
 .claude
+.wrangler
 node_modules
 dist
 docs
