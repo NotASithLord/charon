@@ -13,8 +13,9 @@ import { PositionalSynth } from '../engine/audio.js';
 // a repeated cue doesn't machine-gun the same waveform.
 const SAMPLES = {
   boom: ['boom.wav', 'boom2.wav'],               // carrier rupture / blast
-  scream: ['scream.wav', 'scream2.wav'],         // a human being taken
-  deathScream: ['deathScream.wav'],
+  // NO SCREAMS (user: "its terrible, just rip it out wholesale"). Both the
+  // real takes and the procedural voices are gone, along with every call site
+  // — this is not a MUTED entry with the calls left standing.
   growl: ['growl.wav', 'growl2.wav'],            // combat form moving
   shriek: ['shriek.wav', 'shriek2.wav'],         // infection form
   // MARINE BARKS: real voice lines, one take each. Deliberately NOT variants —
@@ -116,18 +117,6 @@ export class GameAudio extends PositionalSynth {
       const env = Math.exp(-t * 34);
       return rnd() * 1.2 * env + Math.sin(t * 2 * Math.PI * 70) * Math.exp(-t * 25) * 0.8;
     });
-    // panic scream — a human voice, not a slide whistle (user: the old pure
-    // sine falling 950->50Hz read as a cartoon "boing" and ruined the vibe):
-    // harmonic stack with vibrato and a ragged noise breath, pitch holding
-    // high then breaking down only slightly
-    this.buffers.scream = mk(0.6, (t) => {
-      const f = 760 - t * 260 + Math.sin(t * 2 * Math.PI * 7.3) * 38; // vibrato, shallow fall
-      const ph = t * 2 * Math.PI * f;
-      const voice = Math.sin(ph) * 0.42 + Math.sin(ph * 2.01) * 0.22 + Math.sin(ph * 3.02) * 0.1;
-      const rasp = rnd() * 0.3 * (Math.sin(t * 2 * Math.PI * 31) > -0.4 ? 1 : 0.4); // torn edge
-      const env = Math.min(1, t * 22) * Math.exp(-Math.max(0, t - 0.32) * 7);
-      return (voice + rasp) * env * 0.9;
-    });
     // infection chitter: dry skitter — quieter, faster-decaying clicks so it
     // reads as chitin on deck plate, not a bouncing ball
     this.buffers.chitter = mk(0.3, (t) => {
@@ -199,14 +188,6 @@ export class GameAudio extends PositionalSynth {
       const f = 60 + Math.sin(t * 2 * Math.PI * 1.7) * 18;
       const env = Math.min(1, t * 4) * Math.exp(-Math.max(0, t - 0.9) * 5);
       return (Math.sin(t * 2 * Math.PI * f) * 0.5 + rnd() * 0.4 * pop) * env * 0.7;
-    });
-    // human death scream: a real voice breaking — starts high, cracks, dies
-    this.buffers.deathScream = mk(1.0, (t) => {
-      const crack = t > 0.35 ? Math.sin(t * 90) * 120 : 0;
-      const f = 620 - t * 380 + Math.sin(t * 2 * Math.PI * 6.5) * 45 + crack;
-      const v = Math.sin(t * 2 * Math.PI * f) * 0.5 + rnd() * 0.22;
-      const env = Math.min(1, t * 25) * Math.exp(-Math.max(0, t - 0.55) * 6);
-      return v * env;
     });
     // hull groan: the ship's bones flexing — long metallic moan
     this.buffers.groan = mk(2.2, (t) => {

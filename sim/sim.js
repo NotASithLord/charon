@@ -70,6 +70,7 @@ export class Sim {
     this.armoryLocked = true; // the sealed reserve (init.js locked the blastdoor)
     this.marinesKnowRevive = false; // flips at the first witnessed revive (reviveWitnessed)
     this.outcome = null;
+    this.outcomeAt = null; // sim seconds at the moment it was decided
 
     this.stats = {
       conversions: 0, conversionsRound: 0, humansConverted: 0,
@@ -1924,15 +1925,28 @@ export class Sim {
 
   _checkOutcome() {
     if (this.outcome) return;
+    // A DOWNED FORM ONLY COUNTS IF IT CAN STILL GET UP. Bullets cap damage at
+    // 95 (only flame crosses 100), so clearing the ship with rifles alone
+    // leaves a scatter of downed forms that are never "safely dead" — and the
+    // old test counted every one of them as live Flood, which made a
+    // no-flamethrower run unwinnable no matter how completely you cleared it.
+    // Two things can raise a downed form: its own self-revive, scheduled at
+    // the moment it went down (reviveAt >= 0; -1 means the roll failed and it
+    // will never rise on its own), or another form reanimating it. The clauses
+    // above already return true for every active form and carrier — i.e. for
+    // everything capable of reanimating anything — so by the time we reach a
+    // downed form here, its self-revive schedule is the only way back.
     const anyFlood = this.agents.some((a) => !a.dead &&
       (isActiveFloodForm(a) || a.faction === FACTION.CARRIER ||
-        (a.faction === FACTION.COMBAT && a.downed && a.damage < 100)));
+        (a.faction === FACTION.COMBAT && a.downed && a.damage < 100 && a.reviveAt >= 0)));
     const anyHuman = this.agents.some((a) => !a.dead && isLivingHuman(a));
     if (!anyFlood) {
       this.outcome = 'contained';
+      this.outcomeAt = this.t; // frozen: the clock keeps running, the result does not
       this.log('end', `OUTBREAK CONTAINED at ${fmtTime(this.t)} — the ship survives`);
     } else if (!anyHuman) {
       this.outcome = 'lost';
+      this.outcomeAt = this.t;
       this.log('end', `SHIP LOST at ${fmtTime(this.t)} — the Flood owns the Saturn Devouring`);
     }
   }

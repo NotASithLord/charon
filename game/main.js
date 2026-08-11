@@ -748,7 +748,40 @@ governor.prewarm(scene, camera, {
     for (const v of world.darkVeils) {
       if (v && !v.visible) { warmed.push([v, 'visible', false]); v.visible = true; }
     }
-    return () => { for (const [o, k, val] of warmed) o[k] = val; };
+    // materials that exist ONLY in runtime-spawned meshes (perf pass 3 —
+    // they compiled synchronously mid-fight, always at the worst moment):
+    // the thrown frag's plain standard material, and the flamethrower jet
+    // rig (heavy fbm TSL graph) that _rig() builds lazily on first burst
+    const warmFrag = new THREE.Mesh(fragGeo, fragMat);
+    warmFrag.position.set(0, -50, 0);
+    scene.add(warmFrag);
+    jets.frame();
+    jets.emit(0, -50, 0, 0, 1, 0, 0.5, 0);
+    jets.update(0.016, 0, 0, 0);
+    // agent sets cast shadows in play (curated by distance): flip every
+    // caster on so compileRung's warm render also builds the shadow-depth
+    // pipeline variants the first close-quarters fight would otherwise
+    // compile mid-frame
+    const prevCull = agents.shadowCull;
+    agents.shadowCull = world.shadowCull = false;
+    return () => {
+      for (const [o, k, val] of warmed) o[k] = val;
+      scene.remove(warmFrag);
+      jets.frame();
+      jets.update(0.016, 0, 0, 0); // hides the warmed rig
+      agents.shadowCull = world.shadowCull = prevCull;
+    };
+  },
+  // compile against the targets the game ACTUALLY renders into (see the
+  // engine note: pipelines are target-format specific): the scene against
+  // the PassNode HDR target asynchronously, then one real post render to
+  // build the fullscreen chain, bloom mips, bind groups and — with the
+  // casters forced on above — the shadow-depth pipelines, all behind the
+  // intro instead of mid-fight
+  compileRung: async (R) => {
+    await post.compileScene();
+    if (torch.castShadow) { torch.shadow.needsUpdate = true; _shadowAt = performance.now(); }
+    post.render(scene, camera, 0);
   },
 });
 
@@ -1107,6 +1140,74 @@ function endScreen(title, text, final = true) {
     ? 'reload the page for a new run (add ?seed=... for a specific ship)'
     : 'click to keep watching';
   overlay.classList.remove('hidden');
+}
+
+// VICTORY (user). Clearing the ship should say so, say how fast, and be worth
+// posting. Ranks are Halo's own difficulty names, on the clock:
+//   LEGENDARY under 5:00 · HEROIC under 7:00 · otherwise MISSION ACCOMPLISHED.
+// The time is sim.outcomeAt — frozen at the moment the last form went down,
+// not read afterwards off a clock that is still running.
+const VICTORY_RANKS = [
+  { under: 300, name: 'LEGENDARY', color: '#ffcf5a',
+    blurb: 'Under five minutes. The ship was never even close to lost.' },
+  { under: 420, name: 'HEROIC', color: '#9fd8ff',
+    blurb: 'Under seven minutes. Fast enough that most of the crew are still breathing.' },
+  { under: Infinity, name: 'MISSION ACCOMPLISHED', color: '#7fd1a0',
+    blurb: 'It took a while, but the Saturn Devouring survives.' },
+];
+function victoryScreen() {
+  // the frame loop calls this every frame for as long as the outcome stands;
+  // endScreen guards itself, the card below does not (it would rebuild 60x a
+  // second and wipe the "copied to clipboard" note as fast as you could read it)
+  if (ended) return;
+  const secs = sim.outcomeAt ?? sim.t;
+  const time = fmtTime(secs);
+  const rank = VICTORY_RANKS.find((r) => secs < r.under);
+  endScreen('OUTBREAK CONTAINED', rank.blurb);
+  // the seed rides in from ?seed= / the lobby config, so it is untrusted text
+  const escq = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  overlay.querySelector('#victoryCard')?.remove();
+  const card = document.createElement('div');
+  card.id = 'victoryCard';
+  card.style.cssText = 'margin:18px auto 0;max-width:520px;text-align:center;'
+    + 'font:13px/1.7 ui-monospace,Menlo,monospace';
+  const share = `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${time} — ${rank.name}. #HaloCharon`;
+  const url = location.origin + location.pathname;
+  card.innerHTML =
+    `<div style="font:700 26px/1.2 ui-monospace,Menlo,monospace;letter-spacing:0.14em;color:${rank.color}">${rank.name}</div>`
+    + `<div style="margin-top:10px;color:#8fa8c4;letter-spacing:0.18em;font-size:11px">FINAL TIME</div>`
+    + `<div style="font:700 40px/1.1 ui-monospace,Menlo,monospace;color:#e8eef7">${time}</div>`
+    + `<div style="margin-top:14px;color:#6a7686">${sim.stats.combatFormsDowned} forms put down · seed ${escq(sim.seed)}</div>`
+    + `<div id="shareRow" style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap"></div>`
+    + `<div id="shareNote" style="margin-top:8px;height:16px;color:#7fd1a0;font-size:11px"></div>`;
+  overlay.querySelector('.keys').before(card);
+
+  const row = card.querySelector('#shareRow');
+  const note = card.querySelector('#shareNote');
+  const mkBtn = (label, fn) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'background:#16283a;color:#9fd8ff;border:1px solid #2f4a63;'
+      + 'padding:7px 16px;font:11px ui-monospace,monospace;letter-spacing:0.1em;cursor:pointer';
+    b.onclick = fn;
+    row.appendChild(b);
+    return b;
+  };
+  mkBtn('COPY RESULT', async () => {
+    try {
+      await navigator.clipboard.writeText(`${share}\n${url}`);
+      note.textContent = 'copied to clipboard';
+    } catch { note.textContent = 'clipboard blocked — select the text above'; }
+  });
+  mkBtn('POST TO X', () => {
+    window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(share)}&url=${encodeURIComponent(url)}`,
+      '_blank', 'noopener');
+  });
+  // phones and Safari get the real share sheet; everything else has the two above
+  if (navigator.share) {
+    mkBtn('SHARE…', () => navigator.share({ title: 'Halo Charon', text: share, url }).catch(() => {}));
+  }
 }
 
 let lastEvent = 0;
@@ -1604,7 +1705,10 @@ function renderLog() {
   }
   if (added) {
     while (log.childNodes.length > 400) log.removeChild(log.firstChild);
-    if (atBottom) log.scrollTop = log.scrollHeight;
+    // a huge scrollTop clamps to the bottom WITHOUT reading scrollHeight —
+    // the read after the appends above forced a second synchronous reflow
+    // on every frame that logged an event (perf pass 3)
+    if (atBottom) log.scrollTop = 1e9;
   }
 }
 
@@ -1634,8 +1738,8 @@ function updateNameplate() {
   const a = best.a;
   _npVec.set(best.wx, best.labelY, best.wz).project(camera);
   if (_npVec.z > 1) { np.style.display = 'none'; return; }
-  np.style.left = `${(_npVec.x * 0.5 + 0.5) * canvas.clientWidth}px`;
-  np.style.top = `${Math.max(20, (-_npVec.y * 0.5 + 0.5) * canvas.clientHeight)}px`;
+  np.style.left = `${(_npVec.x * 0.5 + 0.5) * canvasW}px`;
+  np.style.top = `${Math.max(20, (-_npVec.y * 0.5 + 0.5) * canvasH)}px`;
   np.className = a.faction === 4 || a.faction === 5 ? 'np-flood'
     : a.faction === 6 ? 'np-corpse'
       : a.faction === 2 || a.odst ? 'np-marine' : 'np-crew';
@@ -1705,8 +1809,15 @@ window.__perf = () => {
   };
 };
 
+// canvas client size, cached on resize (perf pass 3): the per-frame
+// clientWidth/clientHeight reads in the nameplate and reticle paths forced
+// a synchronous reflow right after the frame's HUD writes dirtied layout —
+// the classic write-then-read layout thrash, every combat frame. The canvas
+// is inset:0 so the window size IS the client size.
+let canvasW = 1280, canvasH = 720;
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
+  canvasW = w; canvasH = h;
   renderer.setSize(w, h, false);
   post.setSize(w, h);
   camera.aspect = w / h;
@@ -1839,10 +1950,14 @@ function shotCandidates() {
 // real physics for shots (user note): a bullet stops at the nearest solid
 // wall or CLOSED door before it ever reaches an agent standing behind it —
 // no shooting through bulkheads. Doors mid-slide count as solid too.
+let _shotSolids = null;
 function solidsForShot() {
   // door panels are two InstancedMeshes now — raycast hits any panel
-  // (slid-open panels sit inside walls, which stop the ray themselves)
-  return world.wallMeshes.concat(world.doorPanelMeshes ?? []);
+  // (slid-open panels sit inside walls, which stop the ray themselves).
+  // Both lists are fixed after world build — concat once, not per ray
+  // (this ran per bullet at full-auto rate, per frame per live frag, and
+  // per frame while the flamer burned)
+  return _shotSolids ??= world.wallMeshes.concat(world.doorPanelMeshes ?? []);
 }
 
 function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage, melee = false) {
@@ -2221,9 +2336,8 @@ function drawTracker(now) {
 // fight was a wall of overlapping bangs, and adjacent-deck fire was a raw
 // 'thud'. Now: same-deck gunfire is capped at the 3 NEAREST firing rooms,
 // other decks collapse into ONE soft distant rumble, and the flood/human
-// horror layer (growls, shrieks, gurgles, death screams) does the storytelling.
+// horror layer (growls, shrieks, gurgles) does the storytelling.
 let chitterAt = 0, growlAt = 0, shriekAt = 0, gurgleAt = 0;
-const _aliveHumans = new Map(); // id -> {x, y, deck} — for death screams
 function soundSweep(now) {
   const g = sim.graph;
   // same-deck gunfire: nearest 3 firing rooms only, quieter with distance
@@ -2251,19 +2365,11 @@ function soundSweep(now) {
     audio.playFar('farFight', { x: f.wx, z: f.wz }, f.dd, 0.9, `far${f.n}`, 3400);
   }
   if (offDeck.length) audio.play('rumble', null, 0.09, 'offdeck', 2600);
-  for (let n = 0; n < g.n; n++) {
-    if (sim.tickCount - sim.screamTick[n] > 1 || sim.screamTick[n] < 5) continue;
-    const nd = g.node(n);
-    const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
-    if (nd.deck === player.deck) {
-      // 2.8s per room (was 700ms — a metronome of screams during any panic)
-      audio.play('scream', { x: wx, z: wz }, 0.65, `scr${n}`, 2800);
-    } else if (Math.abs(nd.deck - player.deck) === 1) {
-      // someone dying one deck away — a faint cry through the plating
-      audio.playFar('deathScream', { x: wx, z: wz }, 1, 0.5, `fscr${n}`, 4000);
-    }
-  }
-  // --- flood proximity (user: flood sounds and screams when they are nearby) ---
+  // NO SCREAM CUES (user: "its terrible, just rip it out wholesale"). The sim
+  // still tracks screamTick — it is what carries panic between rooms and puts
+  // "screams coming from X" on the radio net — but nothing plays a voice for
+  // it any more. The growls, shrieks and gunfire carry the horror instead.
+  // --- flood proximity (user: flood sounds when they are nearby) ---
   let nearCombat = null, nearCarrier = null, charging = null;
   for (const a of sim.agents) {
     if (a.dead || a.deck !== player.deck) continue;
@@ -2290,25 +2396,8 @@ function soundSweep(now) {
     audio.play('gurgle', { x: nearCarrier.wx, z: nearCarrier.wz }, 0.9);
     gurgleAt = now;
   }
-  // --- human death screams (user: human screams when they die and you're close) ---
-  for (const a of sim.agents) {
-    const isHuman = a.faction === 0 || a.faction === 1 || a.faction === 2;
-    const alive = isHuman && !a.dead && a.hp > 0 && !a.downed;
-    const was = _aliveHumans.get(a.id);
-    if (alive) {
-      // mutate in place (swarm finding: a fresh record per human per sweep
-      // was ~9k short-lived objects a second)
-      if (was) { was.x = a.x; was.y = a.y; was.deck = a.deck; }
-      else _aliveHumans.set(a.id, { x: a.x, y: a.y, deck: a.deck });
-    } else if (was) {
-      _aliveHumans.delete(a.id);
-      if (!a.isPlayer && Math.abs(was.deck - player.deck) <= 1) {
-        const [wx, wz] = world.simToWorld(was.x, was.y, was.deck);
-        const d = Math.hypot(wx - player.x, wz - player.z);
-        if (d < 30) audio.play('deathScream', { x: wx, z: wz }, was.deck === player.deck ? 0.95 : 0.5, 'death', 350);
-      }
-    }
-  }
+  // (the human-death-scream sweep lived here; removed with the scream cues —
+  // it tracked every living human every frame purely to fire that one sound)
   // fire crackle from the nearest burning site
   const nf = fire.nearest(player.x, player.z, elevOf(player.deck));
   if (nf && nf.d < 17) audio.play('crackle', { x: nf.x, z: nf.z }, 0.85, 'crackle', 420);
@@ -2545,7 +2634,7 @@ function frame(now) {
   // reticle bloom (first-strike CE reticle): arc radius tracks true spread
   {
     const spreadRad = weapon.spreadDeg * Math.PI / 180;
-    const focal = 0.5 * (canvas.clientHeight || 720) / Math.tan((72 * Math.PI / 180) / 2);
+    const focal = 0.5 * (canvasH || 720) / Math.tan((72 * Math.PI / 180) / 2);
     const sp = `${(Math.tan(spreadRad) * focal).toFixed(1)}px`;
     if (_hudCache['xh:sp'] !== sp) {
       _hudCache['xh:sp'] = sp;
@@ -2829,7 +2918,7 @@ function frame(now) {
         ? 'What was left of you is finally still.'
         : 'The ship fights on without you. The last thing you hear is the hive, singing.');
   } else if (sim.outcome === 'contained') {
-    endScreen('OUTBREAK CONTAINED', 'The marines burned it out. The Saturn Devouring survives.');
+    victoryScreen();
   } else if (!ended && !shownLost && sim.tickCount % 30 === 0) {
     const othersAlive = sim.agents.some((a) => !a.dead && a.hp > 0 && !a.isPlayer
       && (a.faction === 0 || a.faction === 1 || a.faction === 2));

@@ -118,8 +118,21 @@ export class World {
     this._signShown = best;
   }
 
-  simToWorld(sx, sy, deck) { return [sx, sy - this.bandCenter(deck)]; }
-  worldToSim(wx, wz, deck) { return [wx, wz + this.bandCenter(deck)]; }
+  // Both return a REUSED scratch pair (perf pass 3): every caller in the
+  // codebase destructures immediately (verified — no site retains the
+  // array), and these run in per-agent per-frame loops — ~12k fresh
+  // 2-arrays/sec of pure GC feed at 60fps with 200 agents. Do not hold a
+  // reference to the returned array across another call.
+  simToWorld(sx, sy, deck) {
+    const out = this._s2w ??= [0, 0];
+    out[0] = sx; out[1] = sy - this.bandCenter(deck);
+    return out;
+  }
+  worldToSim(wx, wz, deck) {
+    const out = this._w2s ??= [0, 0];
+    out[0] = wx; out[1] = wz + this.bandCenter(deck);
+    return out;
+  }
 
   // Oriented collision boxes for the Rapier physics world (physics/physics-
   // world.js). Every solid vertical surface the player must not cross — walls,
@@ -1222,7 +1235,11 @@ export class World {
       else if (min === dW) wx = g.wellCx - g.wellHx - 0.45;
       else wx = g.wellCx + g.wellHx + 0.45;
     }
-    return [wx, wz];
+    // reused scratch pair, same contract as simToWorld (perf pass 3):
+    // callers destructure immediately; this runs per agent per frame
+    const out = this._clampT ??= [0, 0];
+    out[0] = wx; out[1] = wz;
+    return out;
   }
 
   // Same dodge for the GRAND STAIR WELL at entry level (user: NPCs clop
@@ -1246,7 +1263,10 @@ export class World {
       else if (min === dW) wx = g.wellCx - g.wellHx - 0.5;
       else wx = g.wellCx + g.wellHx + 0.5;
     }
-    return [wx, wz];
+    // reused scratch pair, same contract as simToWorld (perf pass 3)
+    const out = this._clampW ??= [0, 0];
+    out[0] = wx; out[1] = wz;
+    return out;
   }
 
   // ---- sliding doors (user note): panels that open for ANY movement near

@@ -140,6 +140,14 @@ export class PostFX {
     this._camera = camera;
   }
 
+  // Compile the scene's materials against the PASS target (the HDR
+  // half-float RT the scene actually renders into every frame). WebGPU
+  // pipelines are target-format specific — compiling against the canvas
+  // (renderer.compileAsync's default) warms nothing this chain uses.
+  compileScene() {
+    return this.scenePass.compileAsync(this.renderer);
+  }
+
   // main.js grades exposure every frame — keep the old property surface
   get exposure() { return this._uExposure.value; }
   set exposure(v) { this._uExposure.value = v; }

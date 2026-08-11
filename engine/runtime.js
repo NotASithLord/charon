@@ -140,7 +140,17 @@ export class QualityGovernor {
   // visible so their pipelines compile too — it must return a restore
   // function, which ALWAYS runs (a failed compile that left warm state
   // applied once read as a fully-dark scene).
-  async prewarm(scene, camera, { order, forceWarm } = {}) {
+  //
+  // `compileRung(rungDef, index)` — REQUIRED for hosts with a post chain
+  // (perf pass 3): WebGPU pipelines are RENDER-TARGET-FORMAT specific, and
+  // the default renderer.compileAsync(scene, camera) compiles against the
+  // CANVAS. A host whose scene pass renders into an HDR PassNode target was
+  // prewarming variants the real frame never uses — every material still
+  // compiled synchronously on first sight, mid-game, which is the exact
+  // shader storm prewarm exists to prevent. The host callback compiles
+  // against its own targets (e.g. PassNode.compileAsync + one real post
+  // render for the fullscreen chain and shadow-depth pipelines).
+  async prewarm(scene, camera, { order, forceWarm, compileRung } = {}) {
     if (this.pinned) return;
     this.prewarming = true;
     const start = this.rung;
@@ -161,8 +171,11 @@ export class QualityGovernor {
       try {
         for (const i of seq) {
           this.applyRung(i);
+          const compile = compileRung
+            ? Promise.resolve(compileRung(this.rungs[i], i))
+            : this.renderer.compileAsync(scene, camera);
           const timedOut = await Promise.race([
-            this.renderer.compileAsync(scene, camera).then(() => false),
+            compile.then(() => false),
             new Promise((r) => setTimeout(() => r(true), DEADLINE_MS)),
           ]);
           if (timedOut) {
