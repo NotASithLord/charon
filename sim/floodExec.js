@@ -237,7 +237,13 @@ export function updateFloodTick(sim, dt) {
         const believed = hive.beliefs.get(t.targetId);
         const goal = sim.floodSenses(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
         const samePhys = (a.pnode ?? a.node) === (target.pnode ?? target.node) && a.deck === target.deck;
-        if (samePhys && Math.hypot(target.x - a.x, target.y - a.y) <= sim.P.combat.grabRangeM) {
+        // ...but NOT while it is still in the air. A pounce (sim.js
+        // _commitLeap, combat.pounce) launches from ~2 m, which means it
+        // crosses the 1.4 m grab gate mid-flight; latching there clamps the
+        // pod onto the target's back and kills the arc after ~0.6 m. It lands
+        // on the spot it committed to and latches on the NEXT tick — which is
+        // also what lets you side-step the pounce and be missed.
+        if (samePhys && !a.leaping && Math.hypot(target.x - a.x, target.y - a.y) <= sim.P.combat.grabRangeM) {
           // it has physically REACHED the body (user note: real space logic —
           // no pinning someone from across a hangar): latch on, pin them, and
           // take them. An unarmed civilian is converted almost instantly; an
@@ -258,9 +264,15 @@ export function updateFloodTick(sim, dt) {
           a.heading = target.heading;
           const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
           if (a.grabTimer >= need && !target.dead) convertHuman(sim, a, target);
-        } else if (samePhys && a.grabTimer > 0) {
+        } else if (samePhys && !a.leaping && a.grabTimer > 0) {
           // latched but momentarily out of the range gate (host spun away
-          // this same tick): stay committed — snap back onto them
+          // this same tick): stay committed — snap back onto them.
+          // NOT while airborne. Adding !a.leaping to the latch above made this
+          // the fall-through for a pouncing form, and it writes the pod onto
+          // the target's back unconditionally — i.e. it teleports a body
+          // mid-flight, which is the exact "forms steering in the air" the
+          // user has reported twice. Every exit from GRABBING zeroes
+          // grabTimer today, so this is one missing reset away from live.
           a.x = target.x - Math.cos(target.heading) * 0.45;
           a.y = target.y - Math.sin(target.heading) * 0.45;
         } else if (samePhys) {

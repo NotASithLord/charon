@@ -39,7 +39,15 @@ export function makeAgent(kind, node, graph) {
     lastMovedAt: 0,  // for ambush "stationary" checks
     animTime: 0,
     dragging: -1,    // corpse id being dragged
-    hoverY: 0, leaping: false, leapDist0: 0, leapTX: 0, leapTY: 0, leapHeading: 0, // Flood leap arc (sim.js _spatialSteer)
+    // Flood leap arc, all committed at launch by sim.js _commitLeap: the
+    // landing spot, the facing, the apex and the "landed" tolerance (the long
+    // combat charge and the infection form's 2 m pounce fly different arcs).
+    hoverY: 0, leaping: false, leapDist0: 0, leapTX: 0, leapTY: 0, leapHeading: 0,
+    leapPeak: 0, leapLand: 0,
+    // ...plus the two terms that GUARANTEE it comes down: last tick's distance
+    // to the landing spot (no progress = it is as landed as it can get) and a
+    // flight budget in ticks. A distance test alone can be unsatisfiable.
+    leapRem: 0, leapTicks: 0,
     chargeTargetId: -1, // sticky spatial-charge target for LOS pursuit (sim.js)
     followNode: -1,     // escort: last node re-pathed toward (humans.js)
     firePost: null,     // [x,y] firing stance a shooter holds in a firefight (sim.js _firingSlot)

@@ -21,7 +21,8 @@ export const FLAG = {
   IN_SHAFT: 1 << 9,
   ARMED_HOST: 1 << 10, // combat form whose host carried a weapon (render with gun)
   CHARGING: 1 << 11,   // combat form in a lunge/charge burst (render sprint)
-  LEAPING: 1 << 13,    // combat form airborne mid-leap (render lifted off the floor)
+  LEAPING: 1 << 13,    // flood form airborne mid-arc — a combat form's long charge
+                       // OR an infection form's 2 m pounce (render lifted off the floor)
   ODST: 1 << 14,       // armory-reserve ODST (render in black plate)
   // TRIGGER DOWN ON THE FLAMETHROWER this instant. FLAMER says a man carries
   // the thing; this says fuel is leaving the nozzle right now, which is the

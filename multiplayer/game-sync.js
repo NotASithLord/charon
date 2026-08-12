@@ -49,6 +49,13 @@ function agentRow(agent) {
     pack(agent.heading), pack(agent.animTime), agent.dead ? 1 : 0,
     agent.downed ? 1 : 0, agent.helpless ? 1 : 0, agent.panicked ? 1 : 0,
     pack(agent.meleeUntil ?? -1),
+    // THE ARC, so a remote peer sees the hop instead of a body skating it flat
+    // along the deck. hoverY alone would leave the pose wrong — agents3d reads
+    // the LEAPING flag for the tuck/lean and the sim derives that flag from
+    // hoverY, so both terms have to be on the wire for the two ends to agree.
+    // Two integers per row, and only a body actually in the air is ever
+    // non-zero, so the delta cache still suppresses everyone on the floor.
+    pack(agent.hoverY ?? 0), agent.leaping ? 1 : 0,
   ];
   const hit = agent.deathImpulse;
   if (hit?.kind === 'melee') row.push(
@@ -84,7 +91,11 @@ function snapshotState(sim, cache, full) {
 }
 
 function validSnapshotRow(row, graph) {
-  return Array.isArray(row) && (row.length === 17 || row.length === 23)
+  // 19 fields, or 25 with a melee death impulse on the tail. The two added at
+  // 17/18 are the leap arc (see agentRow); the layout change is why
+  // PROTOCOL_VERSION moved — a peer on the old shape rejects every row rather
+  // than misreading one.
+  return Array.isArray(row) && (row.length === 19 || row.length === 25)
     && packedIntegers(row.slice(0, 12))
     && Number.isSafeInteger(row[0]) && row[0] > 0
     && Number.isInteger(row[1]) && row[1] >= 0 && row[1] <= 6
@@ -97,7 +108,9 @@ function validSnapshotRow(row, graph) {
     && row[9] >= 0 && row[9] <= 10_000 * WIRE_SCALE
     && row.slice(12, 16).every((flag) => flag === 0 || flag === 1)
     && Number.isSafeInteger(row[16]) && row[16] >= -WIRE_SCALE && row[16] <= 10_000 * WIRE_SCALE
-    && row.slice(17).every((value) => Number.isSafeInteger(value) && Math.abs(value) <= 100 * WIRE_SCALE);
+    && Number.isSafeInteger(row[17]) && row[17] >= 0 && row[17] <= 100 * WIRE_SCALE // hoverY: up, never down
+    && (row[18] === 0 || row[18] === 1)                                             // leaping
+    && row.slice(19).every((value) => Number.isSafeInteger(value) && Math.abs(value) <= 100 * WIRE_SCALE);
 }
 
 export function createGameSync({
@@ -192,7 +205,7 @@ export function createGameSync({
     const live = new Set();
     for (const row of rows) {
       const [id, faction, state, node, x, y, deck, hp, maxHp, damage,
-        heading, animTime, dead, downed, helpless, panicked, meleeUntil] = row;
+        heading, animTime, dead, downed, helpless, panicked, meleeUntil, hoverY, leaping] = row;
       live.add(id);
       let agent = sim.byId.get(id);
       if (!agent) {
@@ -209,6 +222,10 @@ export function createGameSync({
         agent.y = unpack(y);
         agent.deck = deck;
         agent.heading = unpack(heading);
+        // part of the pose, like the heading: without these a remote peer
+        // planted every flood form on the deck and the arc read as a skate.
+        agent.hoverY = unpack(hoverY);
+        agent.leaping = leaping === 1;
         agent.move = null;
         agent.path.length = 0;
       }
@@ -217,9 +234,9 @@ export function createGameSync({
       agent.damage = unpack(damage);
       agent.animTime = unpack(animTime);
       agent.meleeUntil = unpack(meleeUntil);
-      agent.deathImpulse = row.length === 23 ? {
-        kind: 'melee', dirX: unpack(row[17]), dirY: unpack(row[18]),
-        speed: unpack(row[19]), up: unpack(row[20]), spin: unpack(row[21]), kick: unpack(row[22]),
+      agent.deathImpulse = row.length === 25 ? {
+        kind: 'melee', dirX: unpack(row[19]), dirY: unpack(row[20]),
+        speed: unpack(row[21]), up: unpack(row[22]), spin: unpack(row[23]), kick: unpack(row[24]),
       } : null;
       agent.dead = !!dead;
       agent.downed = !!downed;
