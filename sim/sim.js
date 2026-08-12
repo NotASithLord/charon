@@ -984,6 +984,12 @@ export class Sim {
       // an open space with prey abandons its track and closes on the body
       // itself — see _spatialSteer
       if (this._spatialSteer(a, dt)) continue;
+      // ...and if it DIDN'T steer this body, nobody is flying an arc for it,
+      // so the flag has to come off here. _spatialSteer bails before its arc
+      // block whenever the prey dies, the hive retasks the form, or it starts
+      // a move — and a.leaping left set freezes that body out of the crowd
+      // separation pass and fire avoidance permanently.
+      if (a.leaping) { a.leaping = false; a.leapDist0 = 0; }
       if (a.state === STATE.FIGHT || a.state === STATE.GRABBING || a.state === STATE.COWER || a.state === STATE.AMBUSHING) {
         if (!a.move) {
           // fighters/grabbers/ambushers HOLD where they stand — sliding to a
@@ -1438,10 +1444,15 @@ export class Sim {
       if (a.task?.kind !== TASK.GRAB || a.hp <= 0) return false;
       const t = this.byId.get(a.task.targetId);
       if (!t || t.dead || t.hp <= 0 || t.deck !== a.deck || (t.pnode ?? t.node) !== pn) return false;
-      if (Math.hypot(t.x - a.x, t.y - a.y) <= P.combat.grabRangeM) return false; // latched — floodExec runs the grab
+      // a pod already IN THE AIR flies its whole committed hop: bailing out
+      // here the moment it crossed the grab gate dropped it after ~0.6 m of a
+      // 2 m arc. floodExec's latch waits for it to land (matching !a.leaping
+      // gate there), so the pounce still ends in a grab, one tick later.
+      if (!a.leaping && Math.hypot(t.x - a.x, t.y - a.y) <= P.combat.grabRangeM) return false; // latched — floodExec runs the grab
       target = t;
       stopAt = P.combat.grabRangeM * 0.6;
-      mps = P.movement.baseMps * this._speedMult(a) * P.speed.infectionLunge; // skittering leap
+      mps = P.movement.baseMps * this._speedMult(a) * P.speed.infectionLunge
+        * (a.leaping ? P.speed.infectionPounce : 1); // skittering lunge, then the committed hop
       a.charging = true;
     } else return false;
 
@@ -1453,22 +1464,34 @@ export class Sim {
 
     // LEAP decision — BEFORE the advance, so a leap COMMITS to a fixed landing
     // point and flies a ballistic arc to it (user: you can side-step and dodge
-    // it) instead of curving through the air to track your live position. Only
-    // a charging combat form, in a tall hold, over a long enough gap.
+    // it) instead of curving through the air to track your live position.
+    //
+    // TWO rules commit an arc, and they are opposite shapes. Neither is a
+    // special case of the other, so they are decided separately:
+    //   canLeap   — a CHARGING COMBAT form crossing a LONG gap in a TALL hold.
+    //   canPounce — an INFECTION form that has gotten within 2 m of a LIVE
+    //               target (user: "when they get within 2 meters of a live
+    //               target the infection forms should leap through the air at
+    //               him in an arc, locking the arc into the place they were
+    //               standing"). Short, low and fast; deliberately NOT gated on
+    //               headroom — see combat.pounce.clearM for why.
     const LEAP_MIN = 5, PEAK_FRAC = 0.25;
+    const C = P.combat;
     const clearH = clearHeightOf(room);
     const canLeap = a.faction === FACTION.COMBAT && a.charging && clearH > CLEAR_H + 0.5;
+    // LIVE, which is the user's own word and the thing that matters here: a
+    // form heading for a BODY is on TASK.CONVERT/REANIMATE and never reaches
+    // this branch, but a GRAB target can die under it mid-approach — pouncing
+    // the husk would sail it clean over the corpse it came to burrow into.
+    const canPounce = a.faction === FACTION.INFECTION
+      && !target.dead && target.hp > 0 && !target.downed && target.faction !== FACTION.CORPSE;
     const gap = Math.hypot(target.x - a.x, target.y - a.y);
-    if (canLeap && !a.leaping && gap > LEAP_MIN) {
-      a.leaping = true; a.leapDist0 = gap;
-      a.leapTX = target.x; a.leapTY = target.y; // committed landing spot at launch
-      // COMMITTED POUNCE (user: "their body direction and location are both
-      // locked until they land"). The landing spot was already committed, but
-      // the heading was recomputed from the CURRENT position every tick, so a
-      // form nudged sideways in the air kept swivelling to face its target —
-      // it read as steering mid-flight. Freeze the facing at the launch too.
-      a.leapHeading = Math.atan2(target.y - a.y, target.x - a.x);
-    } else if (a.leaping && !canLeap) {
+    if (!a.leaping && canLeap && gap > LEAP_MIN) {
+      this._commitLeap(a, target, gap, Math.min(gap * PEAK_FRAC, clearH - 2.2), 0.35);
+    } else if (!a.leaping && canPounce && gap > C.grabRangeM && gap <= C.pounce.rangeM) {
+      // apex CLAMPED under the ceiling instead of the hop being gated on it
+      this._commitLeap(a, target, gap, Math.min(C.pounce.peakM, clearH - C.pounce.clearM), C.pounce.landM);
+    } else if (a.leaping && !canLeap && !canPounce) {
       a.leaping = false; a.leapDist0 = 0;
     }
 
@@ -1486,16 +1509,30 @@ export class Sim {
       this._clampToRoom(a, room); // stay inside the room's real footprint
     }
 
-    // arc height from progress along the committed leap (0 at launch and land);
-    // peak scales with the room's headroom, stays below the ceiling + body
+    // arc height from progress along the committed leap (0 at launch and land)
     if (a.leaping) {
       const rem = Math.hypot(a.leapTX - a.x, a.leapTY - a.y);
       const p = Math.max(0, Math.min(1, 1 - rem / Math.max(0.5, a.leapDist0)));
-      a.hoverY = Math.min(a.leapDist0 * PEAK_FRAC, clearH - 2.2) * 4 * p * (1 - p);
-      if (rem <= 0.35) { a.leaping = false; a.leapDist0 = 0; } // landed — re-acquire next tick
+      a.hoverY = a.leapPeak * 4 * p * (1 - p);
+      if (rem <= a.leapLand) { a.leaping = false; a.leapDist0 = 0; } // landed — re-acquire next tick
     }
     a.animTime += dt;
     return true;
+  }
+
+  // COMMIT AN ARC. The user has asked twice for this shape ("their body
+  // direction and location are both locked until they land"), so EVERY term
+  // of the flight is frozen here at launch — landing spot, facing, apex, and
+  // the tolerance that counts as landed. Nothing downstream re-derives any of
+  // them from the target's live position, which is what lets you side-step a
+  // leap; and freezing the apex means a body that crosses into a room with a
+  // different ceiling mid-flight doesn't jump height in the air.
+  _commitLeap(a, target, gap, peak, land) {
+    a.leaping = true; a.leapDist0 = gap;
+    a.leapTX = target.x; a.leapTY = target.y;
+    a.leapHeading = Math.atan2(target.y - a.y, target.x - a.x);
+    a.leapPeak = Math.max(0, peak);
+    a.leapLand = land;
   }
 
   // PERSONAL SPACE (user rule): every body is SOLID — two agents can never

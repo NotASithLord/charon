@@ -237,7 +237,13 @@ export function updateFloodTick(sim, dt) {
         const believed = hive.beliefs.get(t.targetId);
         const goal = sim.floodSenses(a.node).includes(target.node) ? target.node : (believed?.node ?? target.node);
         const samePhys = (a.pnode ?? a.node) === (target.pnode ?? target.node) && a.deck === target.deck;
-        if (samePhys && Math.hypot(target.x - a.x, target.y - a.y) <= sim.P.combat.grabRangeM) {
+        // ...but NOT while it is still in the air. A pounce (sim.js
+        // _commitLeap, combat.pounce) launches from ~2 m, which means it
+        // crosses the 1.4 m grab gate mid-flight; latching there clamps the
+        // pod onto the target's back and kills the arc after ~0.6 m. It lands
+        // on the spot it committed to and latches on the NEXT tick — which is
+        // also what lets you side-step the pounce and be missed.
+        if (samePhys && !a.leaping && Math.hypot(target.x - a.x, target.y - a.y) <= sim.P.combat.grabRangeM) {
           // it has physically REACHED the body (user note: real space logic —
           // no pinning someone from across a hangar): latch on, pin them, and
           // take them. An unarmed civilian is converted almost instantly; an

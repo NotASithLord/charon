@@ -1354,7 +1354,14 @@ export class Agents3D {
         }
         case FACTION.INFECTION: {
           const pulse = 1 + Math.sin(this.sim.t * 7 + id) * 0.15;
-          this._pose(wx, elev - this._gaitDip(clip, animT, id, this.infectionSet.rig.legLen),
+          // POUNCE: a pod that has committed its 2 m hop (sim combat.pounce)
+          // rides the arc off the deck. This case used to plant every pod on
+          // the floor unconditionally — hoverY was only read by the combat
+          // form's branch — so an infection form mid-pounce skated the hop
+          // flat instead of flying it. (The gait dip is the run's footfall
+          // bob; there are no feet on the plating to bob against in the air.)
+          const hover = rp.hoverY || 0;
+          this._pose(wx, elev + hover - (hover ? 0 : this._gaitDip(clip, animT, id, this.infectionSet.rig.legLen)),
             wz, heading, pulse, pulse, pulse, flinch);
           stamp(this.infectionSet, counts.infection++);
           break;

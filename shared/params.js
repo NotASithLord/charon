@@ -239,6 +239,29 @@ export const PARAMS = {
     // measured in actual meters — not "anywhere inside the same room record"
     meleeRangeM: 2.2,          // combat-form claws/lunge reach
     grabRangeM: 1.4,           // an infection form must actually reach the body (a short leap latches)
+    // POUNCE (user: "when they get within 2 meters of a live target the
+    // infection forms should leap through the air at him in an arc, locking
+    // the arc into the place they were standing"). The OPPOSITE shape to the
+    // combat form's long committed charge (sim.js LEAP_MIN): a short hop that
+    // launches just outside grabRangeM, so the pod lands ON the spot its
+    // target was standing and the next tick's latch takes them there.
+    pounce: {
+      rangeM: 2.0,   // launch radius — and only at a LIVE target: a form crossing
+                     // to a body walks onto it, jumping would carry it past the
+                     // corpse it came to burrow into
+      peakM: 0.8,    // apex of the hop. Not the long leap's 25%-of-distance rule:
+                     // that gives 0.5 m over 2 m, and the renderer eases hoverY
+                     // with a ~0.07 s time constant against a ~0.25 s hop, so a
+                     // lower apex smooths away to a body that never left the deck
+      clearM: 1.2,   // pod body + margin that must fit above the apex. The apex is
+                     // CLAMPED under this, never GATED on it — gating a 2 m hop on
+                     // a tall hold (what the long leap does) would mean pods only
+                     // ever pounce in the hangars, never in the corridors where
+                     // they actually get within 2 m of you
+      landM: 0.15,   // "landed" tolerance. The long leap's 0.35 m is 18% of a 2 m
+                     // hop — it would end the arc with the pod still a quarter of
+                     // a metre up, and it would snap to the deck
+    },
     stompRangeM: 4.0,          // boots/point-fire kill skittering forms only up close
     podAccMult: 0.45,          // a skittering pod is a small fast rifle target
     rifleFalloffM: 12,         // full NPC rifle effect inside this — beyond it, a dark
@@ -331,6 +354,10 @@ export const PARAMS = {
     // and leaps (~4.4 m/s). Must comfortably beat civilianFlee or no grab
     // ever lands in open space (grabs now require physical reach).
     infectionLunge: 3.5,
+    // ...and once the 2 m pounce commits (combat.pounce) it goes faster still.
+    // Deliberately small: the hop is only ~4 sim ticks long at 15 Hz as it is,
+    // and a bigger burst leaves the render's arc smoothing nothing to draw.
+    infectionPounce: 1.2,
   },
   // REAL DISTANCES (user note): the map is laid out in meters and travel
   // time = distance / speed — the foundation for the navigable 3D map.
