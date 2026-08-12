@@ -1360,7 +1360,15 @@ export class Agents3D {
           // form's branch — so an infection form mid-pounce skated the hop
           // flat instead of flying it. (The gait dip is the run's footfall
           // bob; there are no feet on the plating to bob against in the air.)
-          const hover = rp.hoverY || 0;
+          // ...and OFF THE DECK is a threshold, not `!== 0`. rp.hoverY is an
+          // exponential ease (k = dt*14) toward the sim's value, so after a
+          // landing it approaches zero and never arrives: from a 0.8 m apex at
+          // 60 fps it takes 2,798 frames — 47 s — to reach a denormal, and it
+          // can stall there outright (h - h*k rounds back to h). For that whole
+          // window a truthy test read as "airborne", so the pod rode an epsilon
+          // offset with its footfall bob switched off. A millimetre is under
+          // the render's own precision; the threshold clears in 26 frames.
+          const hover = rp.hoverY > 1e-3 ? rp.hoverY : 0;
           this._pose(wx, elev + hover - (hover ? 0 : this._gaitDip(clip, animT, id, this.infectionSet.rig.legLen)),
             wz, heading, pulse, pulse, pulse, flinch);
           stamp(this.infectionSet, counts.infection++);
@@ -1369,7 +1377,11 @@ export class Agents3D {
         case FACTION.COMBAT: {
           const charging = flags & FLAG.CHARGING;
           const leaping = flags & FLAG.LEAPING;
-          const hover = rp.hoverY || 0;
+          // thresholded for the same reason as the infection case above: the
+          // eased hoverY decays toward zero without reaching it, so a truthy
+          // test suppressed this form's gait dip for the rest of the run after
+          // its first leap.
+          const hover = rp.hoverY > 1e-3 ? rp.hoverY : 0;
           // a reviving form slides from where its ragdoll settled back to the
           // sim node over the rise telegraph, so it reads continuous instead of
           // teleporting on frame one. (from is null for a normal combat form.)

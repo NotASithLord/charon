@@ -952,6 +952,17 @@ export class Sim {
     const g = this.graph;
     for (const a of this.agents) {
       a.hoverY = 0; // reset the leap arc each tick; _spatialSteer re-sets it
+      // NOBODY IS FLYING A BODY THIS LOOP SKIPS. _spatialSteer is the only
+      // thing that sets a.leaping, so every path out of this loop that never
+      // reaches it has to drop the flag. The one below (steer declined it)
+      // was covered; these early exits were not, and a combat form SHOT DOWN
+      // mid-leap kept a.leaping set for the rest of the run — measured 16,328
+      // consecutive ticks on charon-2 — which locked it out of fire avoidance
+      // and left a stale committed arc to resume from if it was ever raised.
+      if (a.leaping && (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0
+        || a.isPlayer || a.closeFollow || a.held === this.tickCount)) {
+        a.leaping = false; a.leapDist0 = 0; a.leapTicks = 0;
+      }
       if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0) continue;
       // the player's body is moved by the game, not the pathfinder
       if (a.isPlayer) { a.animTime += dt; continue; }
@@ -989,7 +1000,7 @@ export class Sim {
       // block whenever the prey dies, the hive retasks the form, or it starts
       // a move — and a.leaping left set freezes that body out of the crowd
       // separation pass and fire avoidance permanently.
-      if (a.leaping) { a.leaping = false; a.leapDist0 = 0; }
+      if (a.leaping) { a.leaping = false; a.leapDist0 = 0; a.leapTicks = 0; }
       if (a.state === STATE.FIGHT || a.state === STATE.GRABBING || a.state === STATE.COWER || a.state === STATE.AMBUSHING) {
         if (!a.move) {
           // fighters/grabbers/ambushers HOLD where they stand — sliding to a
@@ -1368,12 +1379,29 @@ export class Sim {
     }
   }
 
+  // Nearest LIVE body sharing this room, inside `range` metres. This is the
+  // pounce's own trigger — the user's rule is a DISTANCE ("when they get
+  // within 2 meters of a live target"), so it must not depend on what the
+  // hive told the form to do. Ties break on id, matching floodExec's
+  // point-blank scan, so the choice is replay-stable.
+  _preyWithin(a, pn, range) {
+    let best = null, bestD = Infinity;
+    for (const h of this._occ[pn]) {
+      if (h.dead || h.hp <= 0 || h.downed) continue;
+      if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
+      const d = Math.hypot(h.x - a.x, h.y - a.y);
+      if (d > range) continue;
+      if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && h.id < (best?.id ?? Infinity))) { bestD = d; best = h; }
+    }
+    return best;
+  }
+
   // REAL SPACE COMBAT (user note): an enemy is engaged where it physically
   // IS, the moment both bodies share an open space — inside a room that's
   // immediate (rooms are convex; nothing blocks the sightline), not when a
   // pathfinding "move" happens to complete at the room's center. A combat
   // form abandons its track and runs straight AT its victim's live position;
-  // an infection form with a grab order closes the last meters the same way.
+  // an infection form closes the last meters the same way — order or no order.
   // combat.js gates claws/grabs on these same real distances.
   _spatialSteer(a, dt) {
     const P = this.P;
@@ -1441,9 +1469,30 @@ export class Sim {
       mps = P.movement.baseMps * this._speedMult(a) * (a.charging ? P.speed.chargeMult : 1) * (a.leaping ? 1.56 : 1);
       a.state = STATE.FIGHT;
     } else if (a.faction === FACTION.INFECTION) {
-      if (a.task?.kind !== TASK.GRAB || a.hp <= 0) return false;
-      const t = this.byId.get(a.task.targetId);
-      if (!t || t.dead || t.hp <= 0 || t.deck !== a.deck || (t.pnode ?? t.node) !== pn) return false;
+      if (a.hp <= 0) return false;
+      let t = a.task?.kind === TASK.GRAB ? this.byId.get(a.task.targetId) : null;
+      if (t && (t.dead || t.hp <= 0 || t.deck !== a.deck || (t.pnode ?? t.node) !== pn)) t = null;
+      // WITHIN 2 METRES OF A LIVE TARGET IS THE WHOLE RULE (user), not "within
+      // 2 metres AND the hive happened to hand this pod a grab order". Gating
+      // the pounce on TASK.GRAB made it fire exactly as often as the hive
+      // issued grabs, which is a seed lottery: over 20-minute headless runs
+      // charon-2/charon-3 issue 34/39 grabs and pounce 27/20 times, while
+      // charon-1 and charon-4 issue ZERO and never pounced once. The pod's
+      // spatial engagement now matches the combat form's above, which has
+      // always been task-independent for the same reason — a form that
+      // physically shares a space with prey engages it. Measured with a live
+      // target walking the ship: pods passed inside 2 m of it on a MOVE or
+      // SCOUT errand and skittered straight by, 30 ticks on charon-1 alone.
+      // A form already burrowing into a body is COMMITTED and never
+      // re-targeted (the same exclusion floodExec's point-blank lunge makes).
+      if (!t && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
+        // ...and once airborne, ANY live body in the room keeps it flying: the
+        // arc re-derives nothing from a target (landing spot, facing, apex and
+        // budget were all frozen at launch), so losing the one it launched at
+        // must not drop it out of the air half way through the hop.
+        t = this._preyWithin(a, pn, a.leaping ? Infinity : P.combat.pounce.rangeM);
+      }
+      if (!t) return false;
       // a pod already IN THE AIR flies its whole committed hop: bailing out
       // here the moment it crossed the grab gate dropped it after ~0.6 m of a
       // 2 m arc. floodExec's latch waits for it to land (matching !a.leaping
@@ -1487,12 +1536,12 @@ export class Sim {
       && !target.dead && target.hp > 0 && !target.downed && target.faction !== FACTION.CORPSE;
     const gap = Math.hypot(target.x - a.x, target.y - a.y);
     if (!a.leaping && canLeap && gap > LEAP_MIN) {
-      this._commitLeap(a, target, gap, Math.min(gap * PEAK_FRAC, clearH - 2.2), 0.35);
+      this._commitLeap(a, target, room, mps, Math.min(gap * PEAK_FRAC, clearH - 2.2), 0.35);
     } else if (!a.leaping && canPounce && gap > C.grabRangeM && gap <= C.pounce.rangeM) {
       // apex CLAMPED under the ceiling instead of the hop being gated on it
-      this._commitLeap(a, target, gap, Math.min(C.pounce.peakM, clearH - C.pounce.clearM), C.pounce.landM);
+      this._commitLeap(a, target, room, mps, Math.min(C.pounce.peakM, clearH - C.pounce.clearM), C.pounce.landM);
     } else if (a.leaping && !canLeap && !canPounce) {
-      a.leaping = false; a.leapDist0 = 0;
+      a.leaping = false; a.leapDist0 = 0; a.leapTicks = 0;
     }
 
     // aim at the committed landing spot while airborne, else the live target
@@ -1514,7 +1563,23 @@ export class Sim {
       const rem = Math.hypot(a.leapTX - a.x, a.leapTY - a.y);
       const p = Math.max(0, Math.min(1, 1 - rem / Math.max(0.5, a.leapDist0)));
       a.hoverY = a.leapPeak * 4 * p * (1 - p);
-      if (rem <= a.leapLand) { a.leaping = false; a.leapDist0 = 0; } // landed — re-acquire next tick
+      a.leapTicks--;
+      // THREE WAYS DOWN, and the last two exist because the first one is a
+      // DISTANCE test — which a body can be physically unable to satisfy.
+      //   rem <= leapLand : the ordinary landing, right on the committed spot.
+      //   no progress     : the step was eaten (a clamp, a room boundary) —
+      //                     this is as close as this body will ever get, so
+      //                     it is down. Without it a form hangs at its apex
+      //                     with leaping=true forever, frozen out of crowd
+      //                     separation, fire avoidance and the grab latch
+      //                     (measured: 16,328 consecutive airborne ticks on
+      //                     charon-2, and every seed with a doorway grab).
+      //   budget spent    : belt and braces, so no reachable state anywhere
+      //                     leaves a body in the air indefinitely.
+      if (rem <= a.leapLand || rem >= a.leapRem - 1e-4 || a.leapTicks <= 0) {
+        a.leaping = false; a.leapDist0 = 0; a.leapTicks = 0;
+        a.hoverY = 0; // touch down ON the deck, not part-way up the arc
+      } else a.leapRem = rem;
     }
     a.animTime += dt;
     return true;
@@ -1527,12 +1592,36 @@ export class Sim {
   // them from the target's live position, which is what lets you side-step a
   // leap; and freezing the apex means a body that crosses into a room with a
   // different ceiling mid-flight doesn't jump height in the air.
-  _commitLeap(a, target, gap, peak, land) {
-    a.leaping = true; a.leapDist0 = gap;
-    a.leapTX = target.x; a.leapTY = target.y;
-    a.leapHeading = Math.atan2(target.y - a.y, target.x - a.x);
+  _commitLeap(a, target, room, mps, peak, land) {
+    // LAND WHERE THIS BODY IS ALLOWED TO BE. The spot used to be the target's
+    // raw position, and "landed" is a distance test against it — but every
+    // tick of the flight is clamped to the room inset by the body radius
+    // (_clampToRoom), while _pnodeOf still calls a body "in this room" up to
+    // 0.4 m OUTSIDE the rect. A player backed into a doorway — exactly what
+    // you do when a pod charges — or an NPC interpolating onto a shared
+    // wall's door therefore sat up to r + 0.4 m outside the pod's reachable
+    // set, so `rem` bottomed out above leapLand and the form never came down.
+    // Clamping here also keeps the latch honest: the worst-case gap left at
+    // touchdown is r + 0.4 m, well inside grabRangeM.
+    const r = this._bodyRadius(a);
+    const hw = Math.max(0, room.w / 2 - r), hd = Math.max(0, room.d / 2 - r);
+    a.leapTX = Math.max(room.x - hw, Math.min(room.x + hw, target.x));
+    a.leapTY = Math.max(room.y - hd, Math.min(room.y + hd, target.y));
+    a.leaping = true;
+    // measured to the spot it will REACH, not to the target: the arc height is
+    // progress along leapDist0, so scaling it by an unreachable gap would put
+    // the body down while it was still climbing.
+    const dx = a.leapTX - a.x, dy = a.leapTY - a.y;
+    a.leapDist0 = Math.hypot(dx, dy);
+    a.leapRem = a.leapDist0;
+    a.leapHeading = Math.atan2(dy, dx);
     a.leapPeak = Math.max(0, peak);
     a.leapLand = land;
+    // Flight budget, in ticks. Sized off the LAUNCH speed, which is the slow
+    // one — both arcs accelerate once airborne (speed.infectionPounce, and
+    // the combat leap's 1.56x) — so it cannot clip an arc still making
+    // progress, while still bounding the flight absolutely.
+    a.leapTicks = Math.ceil(a.leapDist0 / Math.max(0.02, mps * this.dt)) + 6;
   }
 
   // PERSONAL SPACE (user rule): every body is SOLID — two agents can never
@@ -2077,7 +2166,12 @@ export class Sim {
     // stream leaves the nozzle pointing where he is pointing. Render output
     // only: _clipFor is read nowhere but writeBuffer.
     if (this.t - (a.flamingT ?? -99) < 0.5) return CLIP.ATTACK;
-    if (a.faction === FACTION.INFECTION) return a.move ? CLIP.RUN : CLIP.WRITHE;
+    // A POD IN THE AIR IS NOT WRITHING ON A FLOOR. A pouncing form has no
+    // a.move (_spatialSteer nulls the track to engage), so it fell through to
+    // WRITHE and thrashed against imaginary plating for the whole hop. The
+    // combat form's branch above already returns RUN while leaping for the
+    // same reason; the pod's arc gets the same treatment.
+    if (a.faction === FACTION.INFECTION) return a.move || a.leaping ? CLIP.RUN : CLIP.WRITHE;
     // close-follow escorts move in real space with NO a.move — they were
     // rendering IDLE while sliding (user: no walking animation). Their real
     // speed this tick picks the cycle.

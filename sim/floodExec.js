@@ -264,9 +264,15 @@ export function updateFloodTick(sim, dt) {
           a.heading = target.heading;
           const need = target.faction === FACTION.CIVILIAN ? sim.P.combat.civilianGrabSec : sim.P.combat.infectionGrabSec;
           if (a.grabTimer >= need && !target.dead) convertHuman(sim, a, target);
-        } else if (samePhys && a.grabTimer > 0) {
+        } else if (samePhys && !a.leaping && a.grabTimer > 0) {
           // latched but momentarily out of the range gate (host spun away
-          // this same tick): stay committed — snap back onto them
+          // this same tick): stay committed — snap back onto them.
+          // NOT while airborne. Adding !a.leaping to the latch above made this
+          // the fall-through for a pouncing form, and it writes the pod onto
+          // the target's back unconditionally — i.e. it teleports a body
+          // mid-flight, which is the exact "forms steering in the air" the
+          // user has reported twice. Every exit from GRABBING zeroes
+          // grabTimer today, so this is one missing reset away from live.
           a.x = target.x - Math.cos(target.heading) * 0.45;
           a.y = target.y - Math.sin(target.heading) * 0.45;
         } else if (samePhys) {
