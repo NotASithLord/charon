@@ -43,7 +43,16 @@ export function meleeArcDistance(px, pz, feetY, fx, fz, tx, ty, tz, radius, reac
   const dy = ty - feetY;
   if (dy > MELEE_RISE || dy < -MELEE_DROP) return -1;
   if ((dx * fx + dz * fz) / d < CONE_COS) return -1;
-  return surface;
+  // CLAMP AT CONTACT. `surface` goes NEGATIVE once you are inside the body's
+  // sphere, and the caller reads any negative as the out-of-arc sentinel — so
+  // adding the radius term to fix the FAR edge silently killed the NEAR one.
+  // The player really can stand inside all three: player capsule 0.34 + NPC
+  // capsule 0.40 + controller skin 0.02 puts contact at 0.76 m, and a carrier
+  // pressed against you sat 0.24 m inside the dead zone. You had to back away
+  // from the thing you were touching to club it, while bullets still hit it.
+  // Bodies in a door throat and downed bodies carry no collider at all and
+  // overlap you outright.
+  return surface < 0 ? 0 : surface;
 }
 
 // The attacker record combatMeleeImpulse reads: `charging` when you are moving

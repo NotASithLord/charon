@@ -93,3 +93,15 @@ assert.ok(off(41) < 0 && off(90) < 0 && off(180) < 0, 'outside it, including beh
 assert.ok(hit(0, 1.4, MID_STAND, R_CARRIER) < hit(0, 1.0, MID_LOW, R_INFECTION));
 
 console.log('melee arc ✓');
+
+// --- the NEAR edge: you can club what you are TOUCHING -----------------------
+// Adding the radius term above fixed the far edge and silently killed this one:
+// `surface` goes negative inside the body sphere and the caller reads negatives
+// as "out of arc". Contact distance is 0.76 m (player capsule 0.34 + NPC 0.40 +
+// skin 0.02), so a carrier shoved up against you sat inside the dead zone and
+// could not be hit at all — while bullets still could. Bodies overlapping you in
+// a door throat, and downed bodies (no collider), go closer still.
+assert.ok(hit(0, 0.76, MID_STAND, R_CARRIER) >= 0, 'a carrier pressed against you is clubbable');
+assert.ok(hit(0, 0.25, MID_LOW, R_INFECTION) >= 0, 'a form overlapping you is clubbable');
+assert.ok(hit(0, 0.10, MID_STAND) >= 0, 'point blank is not a dead zone');
+console.log('melee arc ✓ (near edge held)');
