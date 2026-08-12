@@ -11,6 +11,7 @@ import { Agents3D } from './agents3d.js';
 import { Player } from './player.js';
 import { HeldWeapon, FlameThrower } from './weapon.js';
 import { MA5, FRAG, ODST } from './fps-data.js';
+import { meleeArcDistance, strikeAttacker } from './melee.js';
 import { GameAudio } from './audio.js';
 import { FireFX, SparkFX, BloodFX, FlameJetFX } from '../engine/fx.js';
 import { MarineMap } from './map.js';
@@ -1005,7 +1006,7 @@ player.onFlamerTaken = () => {
       // the first time. The user played a whole run without discovering Q.
       // Both channels: the radio log keeps it (it scrolls, but it is there to
       // scroll back to), the hint line puts it under the reticle right now.
-      sim.log('combat', 'flamethrower up — Q or the mouse wheel swaps back to the MA5');
+      sim.log('combat', 'flamethrower up — Q, or the mouse wheel UP, brings the MA5 back');
       swapHintAt = performance.now();
     }
   }
@@ -1910,20 +1911,31 @@ let frags = FRAG.count;
 // and the ar if you have both" while Q was already doing exactly that). One
 // function so the key and the wheel cannot drift apart.
 let _swapAt = 0;
-function swapWeapon() {
-  if (!hasFlamer || player.dead) return;
-  heldIsFlamer = !heldIsFlamer;
+// Both inputs land here, and it SELECTS a slot rather than toggling one — the
+// wheel needs that (see below) and the key loses nothing by it.
+function selectWeapon(wantFlamer) {
+  if (!hasFlamer || player.dead || wantFlamer === heldIsFlamer) return;
+  heldIsFlamer = wantFlamer;
   _swapAt = performance.now();
 }
-// wheel is the FPS convention and the first thing a player tries. Gated on
-// pointer lock so it cannot swap your weapon while you are scrolling the
-// launcher page behind ESC, and debounced because one trackpad flick emits a
-// dozen events — undebounced it would flip the weapon back and forth per notch.
+function swapWeapon() { selectWeapon(!heldIsFlamer); } // Q: one press, one swap
+// wheel is the FPS convention and the first thing a player tries. DIRECTION
+// PICKS THE GUN — down for the torch, up for the rifle — because a toggle
+// cannot survive a precision trackpad: one flick emits momentum wheel events
+// for a second or more, so a toggle lands on whatever parity the burst happens
+// to end on (effectively random with two weapons) with the viewmodel popping
+// between MA5 and flamer the whole way down. A debounce only hides the first
+// 220 ms of that. Selecting is idempotent: the twentieth event of a burst asks
+// for the same weapon the first one did, so no debounce is needed at all.
 window.addEventListener('wheel', (e) => {
-  if (!introGone || !player.locked || player.dead) return;
-  if (Math.abs(e.deltaY) < 1 && Math.abs(e.deltaX) < 1) return;
-  if (performance.now() - _swapAt < 220) return;
-  swapWeapon();
+  // pointer lock keeps it from swapping your gun while you scroll the launcher
+  // page behind ESC; mapOpen because the tac map does NOT release the lock and
+  // reading it is a scroll — the weapon would change under you while you read.
+  if (!introGone || !player.locked || player.dead || mapOpen) return;
+  // deltaY ONLY: a two-finger horizontal swipe or a tilt-wheel nudge passed the
+  // old `|deltaY| < 1 && |deltaX| < 1` test and swapped the gun mid-fight.
+  if (Math.abs(e.deltaY) < 1) return;
+  selectWeapon(e.deltaY > 0);
 }, { passive: true });
 window.addEventListener('keydown', (e) => {
   if (!introGone) return; // still on the briefing — keys only skip the typing
@@ -2051,6 +2063,11 @@ function solidsForShot() {
   return _shotSolids ??= world.wallMeshes.concat(world.doorPanelMeshes ?? []);
 }
 
+// The body spheres the bullet swings at, shared with the butt-stroke so the
+// two agree on how big a thing is: an infection form is a half-metre ball, a
+// carrier a metre-wide bag, everything else a torso.
+const bodyRadius = (a) => a.faction === 3 ? 0.5 : a.faction === 5 ? 1.0 : 0.7;
+
 function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   camera.getWorldDirection(_dir);
   _rt.crossVectors(_dir, camera.up).normalize();
@@ -2073,7 +2090,7 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
     const t = _hit.dot(_dir);
     if (t < 0.05 || t > bestT) continue;
     const px = origin.x + _dir.x * t - wx, py = origin.y + _dir.y * t - cy, pz = origin.z + _dir.z * t - wz;
-    const r = a.faction === 3 ? 0.5 : a.faction === 5 ? 1.0 : 0.7;
+    const r = bodyRadius(a);
     if (px * px + py * py + pz * pz < r * r) { best = a; bestT = t; }
   }
   sim.gunfireAt(player.agent.node);
@@ -2117,24 +2134,22 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
 // lastHurtBy through hurtFloodForm, so it turns on YOU — one angry body, not
 // the whole compartment.
 //
-// THE ARC IS HORIZONTAL, which is what makes it a swing and not a ray. The
-// cone is measured on the floor plane against where you are facing, with a
-// vertical band instead of a pitch term: a stock crossing your front sweeps
-// everything from the deck plate to a head above you, and it does not care
-// where the reticle is pointing. Measured as a true 3D cone this misses the
-// things you most want to club — an infection form at 1.2m sits 46 deg BELOW
-// eye level, outside any sane cone, and you would have to stare at your boots
-// to connect with it.
-const MELEE_CONE_DEG = 40;   // half-angle on the horizontal, either side of your facing
-const MELEE_REACH_UP = 1.0;  // m above the eye — something on a crate is still in the arc
-const MELEE_REACH_DOWN = 1.7; // m below the eye — reaches the deck plate you are standing on
+// THE ARC (game/melee.js, checked headlessly) is a horizontal cone plus a
+// vertical band measured from your FEET — see that file for why the band
+// cannot hang off the camera, and for the reach numbers.
 const _mdir = new THREE.Vector3(), _mto = new THREE.Vector3(), _mray = new THREE.Vector3();
 function meleeStrike() {
+  // dead men do not swing. weapon.step emits melee_hit a fifth of a second
+  // into the swing, so dying mid-stroke has to be caught HERE and not only at
+  // the key: a KIA player's 45 damage would otherwise land after the fact.
+  if (player.dead) return false;
   camera.getWorldDirection(_mdir);
   const origin = camera.position;
+  // the feet under the eye that the camera IS — during a climb transition
+  // poseY() leaves the deck floor behind, and this follows it either way
+  const feetY = origin.y - ODST.eyeHeight;
   const fl = Math.hypot(_mdir.x, _mdir.z) || 1; // facing, flattened (pitch removed)
   const fx = _mdir.x / fl, fz = _mdir.z / fl;
-  const cosLimit = Math.cos(MELEE_CONE_DEG * Math.PI / 180);
   // ONE target — a butt-stroke lands on the nearest thing in the arc. Unlike
   // the bullet path there is no ray-vs-sphere test: the arc is wide enough
   // that a form you are clearly swinging at connects even off the reticle.
@@ -2142,14 +2157,13 @@ function meleeStrike() {
   for (const a of shotCandidates()) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
     const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
-    _mto.set(wx, cy, wz).sub(origin);
-    const d = Math.hypot(_mto.x, _mto.z);   // reach is measured along the deck
-    if (d < 0.05 || d > MA5.meleeRange || d >= bestD) continue;
-    if (_mto.y > MELEE_REACH_UP || _mto.y < -MELEE_REACH_DOWN) continue;
-    if ((_mto.x * fx + _mto.z * fz) / d < cosLimit) continue;
+    const d = meleeArcDistance(origin.x, origin.z, feetY, fx, fz,
+      wx, cy, wz, bodyRadius(a), MA5.meleeRange);
+    if (d < 0 || d >= bestD) continue;
     // same rule the bullet obeys (user note): no striking through a bulkhead
     // or a closed door. Tested per candidate, not once down the view axis, so
     // a form behind a wall cannot shadow the one actually within reach.
+    _mto.set(wx, cy, wz).sub(origin);
     const d3 = _mto.length();
     _mray.copy(_mto).divideScalar(d3);
     wallRay.set(origin, _mray);
@@ -2165,12 +2179,8 @@ function meleeStrike() {
   // the ragdoll payload is the whole point of a melee kill — a charging or
   // airborne strike throws a body differently (sim/melee-check.mjs pins the
   // ordering), and hurtFloodForm carries it into the corpse
-  const impact = combatMeleeImpulse({
-    ...player.agent,
-    charging: Math.hypot(player.vx, player.vz) > ODST.walkSpeed,
-    leaping: !player.onGround,
-    hoverY: player.onGround ? 0 : Math.max(0.1, player.h),
-  }, best, sim.P.combat.combatForm.swing);
+  const impact = combatMeleeImpulse(strikeAttacker(player.agent, player, ODST.walkSpeed),
+    best, sim.P.combat.combatForm.swing);
   hurtFloodForm(sim, best, MA5.meleeDamage, false, player.agent.id, impact);
   // the DAMAGE replicates (peers must see the same body die) but no shot event
   // goes out — gameSync.shot would draw a tracer from your muzzle on three
@@ -2725,10 +2735,17 @@ function frame(now) {
   // torch is in your hands and butt-stroke something that gets inside the
   // stream's minimum useful range.
   const triggerLive = fireHeld && player.locked && !player.dead;
+  // MELEE IS A WEAPON, so it obeys the same liveness the trigger does. It was
+  // the only attack that didn't: a KIA player on the death screen — or one
+  // converted and spectating as a GHOST, whose camera.position is the ghost's
+  // — could press F and put 45 damage and a ragdoll launch into whatever stood
+  // near that camera. Now that the swing emits no tracer, no muzzle flash and
+  // no gunfireAt, that would be a kill with nothing on screen to explain it.
+  const meleeLive = meleePressed && player.locked && !player.dead;
   const wevents = [];
   weapon.step(dtReal, {
     fireHeld: triggerLive && !heldIsFlamer,
-    reloadPressed, meleePressed,
+    reloadPressed, meleePressed: meleeLive,
   }, wevents);
   reloadPressed = false; meleePressed = false;
   for (const ev of wevents) {
@@ -2743,12 +2760,16 @@ function frame(now) {
   _flameJet = null;
   if (hasFlamer) {
     const fevents = [];
-    // melee runs through `weapon` whichever gun is up, so the swing gates the
-    // stream too — otherwise the nozzle keeps burning while it sweeps left and
-    // paints the room at 60 degrees off your aim
-    flamer.step(dtReal, { fireHeld: triggerLive && heldIsFlamer && weapon.meleeT <= 0 }, fevents);
+    // THE SWING DOES NOT RELEASE THE TRIGGER. Pushing fireHeld:false into the
+    // flamer for the 0.52 s of a butt-stroke killed the stream outright —
+    // live=false, a flame_off, ignite zeroed — so holding the trigger through
+    // a swing replayed the ignition thud and cost a second ignhitS catch, i.e.
+    // a full re-light per melee. The trigger stays down; what the swing
+    // suppresses is the JET, below.
+    flamer.step(dtReal, { fireHeld: triggerLive && heldIsFlamer }, fevents);
     for (const ev of fevents) {
-      if (ev.t === 'flame') flameTick(ev.dt);
+      // no fire out of a nozzle that is sweeping left across your front
+      if (ev.t === 'flame') { if (weapon.meleeT <= 0) flameTick(ev.dt); }
       else if (ev.t === 'flame_on') { _flameSeed = (_flameSeed + 1) & 0xffff; audio.play('thud', null, 0.35); }
       else if (ev.t === 'dry') audio.play('clack', null, 0.35);
     }
@@ -3024,11 +3045,14 @@ function frame(now) {
   setText('ammo', ghost ? ''
     : heldIsFlamer ? (flamer.empty ? 'TANK DRY' : `FUEL ${Math.ceil(flamer.frac * 100)}%`)
       : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`));
-  // ...and the readout above it NAMES the weapon, with the swap key as soon as
-  // there is something to swap to. The numbers alone never told the user which
-  // gun was in their hands, let alone that a second one was on the sling.
+  // ...and the readout above it NAMES the weapon, with BOTH swap inputs as
+  // soon as there is something to swap to. The numbers alone never told the
+  // user which gun was in their hands, let alone that a second one was on the
+  // sling — and naming only Q here while the hint and the briefing say "Q or
+  // MOUSE WHEEL" leaves the input they are most likely to try off the one
+  // readout that is always on screen.
   setText('weaponName', ghost ? ''
-    : `${heldIsFlamer ? 'FLAMETHROWER' : MA5.name}${hasFlamer ? ' · Q SWAP' : ''}`);
+    : `${heldIsFlamer ? 'FLAMETHROWER' : MA5.name}${hasFlamer ? ' · Q / WHEEL SWAP' : ''}`);
   { // flamer up is the HUD's orange, the same tell #roomState uses for a state change
     const wn = el('weaponName');
     const wc = heldIsFlamer && !ghost ? 'wn-flamer' : '';
@@ -3064,7 +3088,7 @@ function frame(now) {
   // moment you actually swap — the lesson is over once it lands.
   if (swapHintAt && (now - swapHintAt > SWAP_HINT_MS || _swapAt > swapHintAt)) swapHintAt = 0;
   if (!player.dead && swapHintAt) {
-    setText('hint', 'Q or MOUSE WHEEL — swap MA5 / flamethrower');
+    setText('hint', 'Q swaps · MOUSE WHEEL: up = MA5, down = flamethrower');
     setStyle('hint', 'display', 'block');
   } else if (fsrc) {
     setText('hint', fsrc === 'armory' ? 'E — take the flamethrower off the rack'

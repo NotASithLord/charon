@@ -11,9 +11,10 @@
     "physics": "node engine/physics/physics-check.mjs",
     "ragdoll": "node engine/physics/ragdoll-check.mjs",
     "melee": "node sim/melee-check.mjs",
+    "melee-arc": "node game/melee-check.mjs",
     "commands": "node sim/command-check.js",
     "multiplayer": "node multiplayer/protocol-check.mjs",
-    "check": "npm run multiplayer && npm run determinism && npm run physics && npm run ragdoll && npm run melee && npm run commands",
+    "check": "npm run multiplayer && npm run determinism && npm run physics && npm run ragdoll && npm run melee && npm run melee-arc && npm run commands",
     "vendor:peerd": "node scripts/vendor-peerd-browser.mjs",
     "build:dwapp": "node scripts/build-dwapp.mjs",
     "deploy": "wrangler deploy"
