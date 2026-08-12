@@ -980,6 +980,11 @@ const weapon = new HeldWeapon(MA5);
 const FLAME = sim.P.flamethrower.player;
 const flamer = new FlameThrower(FLAME);
 let hasFlamer = false, heldIsFlamer = false;
+// the "you can swap now" prompt: raised when the first flamethrower reaches
+// your hands, cleared on a deadline or the first swap. The hint element is
+// rebuilt from scratch every frame, so it needs a timestamp to live on.
+const SWAP_HINT_MS = 8000;
+let swapHintAt = 0;
 player.onAmmoTaken = (src) => {
   if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; frags = Math.min(FRAG.max, frags + 4); sim.log('combat', `you strip mags and a bandolier of frags from the rack (${sim.armoryStock} rifles left)`); }
   else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
@@ -994,7 +999,15 @@ player.onFlamerTaken = () => {
     sim.log('combat', 'you swap a fuel can into the flamethrower (you)');
   } else {
     flamer.fuel = sim.playerTakeFlamer(player.agent, src === 'armory' ? null : src);
-    if (!hasFlamer) { hasFlamer = true; heldIsFlamer = true; } // the first one comes straight up
+    if (!hasFlamer) {
+      hasFlamer = true; heldIsFlamer = true; // the first one comes straight up
+      // TELL THEM THE SWAP EXISTS, at the one moment they have two weapons for
+      // the first time. The user played a whole run without discovering Q.
+      // Both channels: the radio log keeps it (it scrolls, but it is there to
+      // scroll back to), the hint line puts it under the reticle right now.
+      sim.log('combat', 'flamethrower up — Q or the mouse wheel swaps back to the MA5');
+      swapHintAt = performance.now();
+    }
   }
   return true;
 };
@@ -1020,6 +1033,64 @@ flamerModel.scale.setScalar(FLAMER_TUNE.s);
 flamerModel.visible = false;
 camera.add(flamerModel);
 scene.add(camera);
+
+// --- THE BUTT-STROKE ------------------------------------------------------
+// User: melee should be "the barrel of the gun coming to the left as you
+// strike forward with the butt of the gun in a fast manner". What was here
+// lifted the weapon 0.3m and pitched it 0.95 rad nose-up off one symmetric
+// sin() hump — the "weird upward gun motion" in the report — and the hump also
+// made the recover exactly as fast as the strike, which reads as a wobble
+// rather than a hit.
+//
+// TIMING. `p` is 0 at the start of the swing and 1 at the end. weapon.js fires
+// melee_hit at 0.2s of the 0.52s swing (p = 0.385), so the strike peaks at
+// p = 0.42 — a frame past the damage, which is where a hit lands. Before that
+// there is a short cock BACKWARD (a negative value, which pulls every axis
+// back for free), and after it a recover spread over the remaining 0.58 of the
+// swing: out in ~0.12s, back in ~0.30s. Sharp out, slow recover.
+function buttStroke01(meleeT, duration) {
+  if (meleeT <= 0) return 0;
+  const p = 1 - meleeT / duration;
+  const COCK = 0.18, PEAK = 0.42, BACK = 0.22;
+  if (p < COCK) return -BACK * Math.sin((p / COCK) * Math.PI * 0.5);
+  if (p < PEAK) return -BACK + (1 + BACK) * Math.sin(((p - COCK) / (PEAK - COCK)) * Math.PI * 0.5);
+  return Math.cos(((p - PEAK) / (1 - PEAK)) * Math.PI * 0.5);
+}
+
+// SIGN CONVENTIONS. Camera space is -Z forward, +X right, +Y up, and both
+// viewmodels are authored +Z-forward then yawed by PI (rifle-model.js), so a
+// weapon's barrel points down the group's local -Z. THREE's Euler 'XYZ' maps
+// local -Z to world x = -sin(ry), so a POSITIVE rotation.y sweeps the muzzle
+// toward -X — the player's LEFT. (Cross-check: FLAMER_TUNE.ry is -0.35 and its
+// comment says that turn brings the weapon's flank into frame, which for a
+// weapon held out at x = +0.23 is the muzzle rotating outward to the RIGHT.
+// Same axis, opposite sign.) Confirmed on screen, not on paper — see the
+// swing capture in the melee screenshots.
+//
+// So: +yaw whips the barrel left, -Z drives the stock forward at the target,
+// and the whole weapon slides left with it so the butt arrives near the middle
+// of the view instead of pivoting out of frame to the right.
+const BUTT = {
+  yaw: 1.00,    // rad the muzzle sweeps left (~57 deg)
+  fwd: 0.30,    // m the weapon drives forward (-Z) — the stock going in
+  side: 0.34,   // m it travels left (-X). Sliding the weapon left as it turns
+                // is what a stock-anchored pivot looks like: without it the
+                // model spins about its own middle and the butt leaves frame
+                // to the right, so the strike you SEE is only the barrel.
+  drop: 0.02,   // m it settles (-Y): level or below the eye, NEVER lifted
+  pitch: 0.16,  // rad nose-DOWN — drops the muzzle and brings the STOCK up
+                // into the frame, the exact opposite of the old nose-up lift
+  roll: 0.30,   // rad the receiver rolls over as the stock comes round
+};
+function applyButtStroke(model, s) {
+  if (!s) return;
+  model.position.x -= BUTT.side * s;
+  model.position.y -= BUTT.drop * s;
+  model.position.z -= BUTT.fwd * s;
+  model.rotation.x -= BUTT.pitch * s;
+  model.rotation.y += BUTT.yaw * s;
+  model.rotation.z += BUTT.roll * s;
+}
 // transient combat lights are VIRTUAL now — they ride the global pool
 // (near the player they always win a slot, so the look is unchanged)
 const muzzleFlash = { position: new THREE.Vector3(), intensity: 0 };
@@ -1834,6 +1905,26 @@ canvas.addEventListener('mousedown', (e) => { if (e.button === 0) fireHeld = tru
 window.addEventListener('mouseup', (e) => { if (e.button === 0) fireHeld = false; });
 let fragPressed = false;
 let frags = FRAG.count;
+// WEAPON SWAP. The mechanic already worked on Q; what it lacked was anyone
+// knowing it (user asked for "a way to weapon switch between the flamethrower
+// and the ar if you have both" while Q was already doing exactly that). One
+// function so the key and the wheel cannot drift apart.
+let _swapAt = 0;
+function swapWeapon() {
+  if (!hasFlamer || player.dead) return;
+  heldIsFlamer = !heldIsFlamer;
+  _swapAt = performance.now();
+}
+// wheel is the FPS convention and the first thing a player tries. Gated on
+// pointer lock so it cannot swap your weapon while you are scrolling the
+// launcher page behind ESC, and debounced because one trackpad flick emits a
+// dozen events — undebounced it would flip the weapon back and forth per notch.
+window.addEventListener('wheel', (e) => {
+  if (!introGone || !player.locked || player.dead) return;
+  if (Math.abs(e.deltaY) < 1 && Math.abs(e.deltaX) < 1) return;
+  if (performance.now() - _swapAt < 220) return;
+  swapWeapon();
+}, { passive: true });
 window.addEventListener('keydown', (e) => {
   if (!introGone) return; // still on the briefing — keys only skip the typing
   if (e.code === 'KeyR') reloadPressed = true;
@@ -1846,7 +1937,7 @@ window.addEventListener('keydown', (e) => {
   // WEAPON SWAP: Q. NOT 1/2 — those are the fireteam order keys (follow /
   // hold / advance) and binding a weapon to them would fire both actions off
   // one press. Silently ignored until you have actually found a flamethrower.
-  if (e.code === 'KeyQ' && hasFlamer) heldIsFlamer = !heldIsFlamer;
+  if (e.code === 'KeyQ') swapWeapon();
   // AMMO ECONOMY (user): T hands a mag from your reserve to the neediest
   // fireteam marine in reach — they burn real magazines now (combat.js)
   if (e.code === 'KeyT' && !player.dead && weapon.reserve >= 32) {
@@ -1960,7 +2051,7 @@ function solidsForShot() {
   return _shotSolids ??= world.wallMeshes.concat(world.doorPanelMeshes ?? []);
 }
 
-function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage, melee = false) {
+function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   camera.getWorldDirection(_dir);
   _rt.crossVectors(_dir, camera.up).normalize();
   _up.crossVectors(_rt, _dir).normalize();
@@ -2001,18 +2092,94 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage, mele
     // parity (user rule): a combat form soaks the same fire from the player
     // as from any marine — its durability lives in the sim's hp, not in a
     // player-only multiplier
-    const impact = melee ? combatMeleeImpulse({
-      ...player.agent,
-      charging: Math.hypot(player.vx, player.vz) > ODST.walkSpeed,
-      leaping: !player.onGround,
-      hoverY: player.onGround ? 0 : Math.max(0.1, player.h),
-    }, best, sim.P.combat.combatForm.swing) : null;
-    hurtFloodForm(sim, best, dmg, false, player.agent.id, impact);
+    hurtFloodForm(sim, best, dmg, false, player.agent.id);
     gameSync?.hitFlood(best.id, dmg);
     hitFlash = 1;
     audio.play('tick', null, 0.5, 'tick', 40);
   } else if (hitWallInstead) { wallSpark.position.copy(end); wallSpark.intensity = 6; }
   return !!best;
+}
+
+// --- melee: a butt-stroke, not a shot -------------------------------------
+// This used to run through traceShot(), so every swing fired a tracer out of
+// the muzzle, flashed the muzzle light, stamped sim.gunfireAt, and broadcast a
+// gunshot to the other players in the mesh — the user's report was that melee
+// "does a weird upward gun motion and fires a shot" instead of the barrel
+// coming left as you strike with the butt of the gun. None of a rifle's shot
+// path belongs here, and the fix is a separate strike rather than another flag
+// threaded through the bullet code.
+//
+// NOISE: nothing at all. The sim has exactly two noise channels — gunfireTick
+// (P.sensor.gunfireHops = 3, what marines and civilians move toward) and
+// screamTick (hearingHops = 2, the literal scream channel that panics crew).
+// A rifle butt is neither, and stamping either one would make the silent way
+// to kill something as loud as the loud one. The form you hit still records
+// lastHurtBy through hurtFloodForm, so it turns on YOU — one angry body, not
+// the whole compartment.
+//
+// THE ARC IS HORIZONTAL, which is what makes it a swing and not a ray. The
+// cone is measured on the floor plane against where you are facing, with a
+// vertical band instead of a pitch term: a stock crossing your front sweeps
+// everything from the deck plate to a head above you, and it does not care
+// where the reticle is pointing. Measured as a true 3D cone this misses the
+// things you most want to club — an infection form at 1.2m sits 46 deg BELOW
+// eye level, outside any sane cone, and you would have to stare at your boots
+// to connect with it.
+const MELEE_CONE_DEG = 40;   // half-angle on the horizontal, either side of your facing
+const MELEE_REACH_UP = 1.0;  // m above the eye — something on a crate is still in the arc
+const MELEE_REACH_DOWN = 1.7; // m below the eye — reaches the deck plate you are standing on
+const _mdir = new THREE.Vector3(), _mto = new THREE.Vector3(), _mray = new THREE.Vector3();
+function meleeStrike() {
+  camera.getWorldDirection(_mdir);
+  const origin = camera.position;
+  const fl = Math.hypot(_mdir.x, _mdir.z) || 1; // facing, flattened (pitch removed)
+  const fx = _mdir.x / fl, fz = _mdir.z / fl;
+  const cosLimit = Math.cos(MELEE_CONE_DEG * Math.PI / 180);
+  // ONE target — a butt-stroke lands on the nearest thing in the arc. Unlike
+  // the bullet path there is no ray-vs-sphere test: the arc is wide enough
+  // that a form you are clearly swinging at connects even off the reticle.
+  let best = null, bestD = Infinity;
+  for (const a of shotCandidates()) {
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
+    _mto.set(wx, cy, wz).sub(origin);
+    const d = Math.hypot(_mto.x, _mto.z);   // reach is measured along the deck
+    if (d < 0.05 || d > MA5.meleeRange || d >= bestD) continue;
+    if (_mto.y > MELEE_REACH_UP || _mto.y < -MELEE_REACH_DOWN) continue;
+    if ((_mto.x * fx + _mto.z * fz) / d < cosLimit) continue;
+    // same rule the bullet obeys (user note): no striking through a bulkhead
+    // or a closed door. Tested per candidate, not once down the view axis, so
+    // a form behind a wall cannot shadow the one actually within reach.
+    const d3 = _mto.length();
+    _mray.copy(_mto).divideScalar(d3);
+    wallRay.set(origin, _mray);
+    wallRay.near = 0.05;
+    wallRay.far = d3;
+    if (wallRay.intersectObjects(solidsForShot(), false).length) continue;
+    best = a; bestD = d;
+  }
+  if (!best) {
+    audio.play('thud', null, 0.3); // whiff: you still hear the stock move, quietly
+    return false;
+  }
+  // the ragdoll payload is the whole point of a melee kill — a charging or
+  // airborne strike throws a body differently (sim/melee-check.mjs pins the
+  // ordering), and hurtFloodForm carries it into the corpse
+  const impact = combatMeleeImpulse({
+    ...player.agent,
+    charging: Math.hypot(player.vx, player.vz) > ODST.walkSpeed,
+    leaping: !player.onGround,
+    hoverY: player.onGround ? 0 : Math.max(0.1, player.h),
+  }, best, sim.P.combat.combatForm.swing);
+  hurtFloodForm(sim, best, MA5.meleeDamage, false, player.agent.id, impact);
+  // the DAMAGE replicates (peers must see the same body die) but no shot event
+  // goes out — gameSync.shot would draw a tracer from your muzzle on three
+  // other screens for a swing that never fired a round
+  gameSync?.hitFlood(best.id, MA5.meleeDamage);
+  hitFlash = 1;
+  audio.play('thud', null, 0.9);
+  audio.play('tick', null, 0.5, 'tick', 40);
+  return true;
 }
 
 // --- the flamethrower in your hands ---------------------------------------
@@ -2566,7 +2733,7 @@ function frame(now) {
   reloadPressed = false; meleePressed = false;
   for (const ev of wevents) {
     if (ev.t === 'fire') { traceShot(ev.offAng, ev.offRad); audio.play('shot', null, 0.9); }
-    else if (ev.t === 'melee_hit') { traceShot(0, 0, MA5.meleeRange, MA5.meleeDamage, true); audio.play('thud', null, 0.8); }
+    else if (ev.t === 'melee_hit') meleeStrike(); // the strike owns its own audio: a landed thud reads louder than a whiff
     else if (ev.t === 'reload_start') audio.play('clack', null, 0.7);
     else if (ev.t === 'dry') audio.play('clack', null, 0.4);
   }
@@ -2576,7 +2743,10 @@ function frame(now) {
   _flameJet = null;
   if (hasFlamer) {
     const fevents = [];
-    flamer.step(dtReal, { fireHeld: triggerLive && heldIsFlamer }, fevents);
+    // melee runs through `weapon` whichever gun is up, so the swing gates the
+    // stream too — otherwise the nozzle keeps burning while it sweeps left and
+    // paints the room at 60 degrees off your aim
+    flamer.step(dtReal, { fireHeld: triggerLive && heldIsFlamer && weapon.meleeT <= 0 }, fevents);
     for (const ev of fevents) {
       if (ev.t === 'flame') flameTick(ev.dt);
       else if (ev.t === 'flame_on') { _flameSeed = (_flameSeed + 1) & 0xffff; audio.play('thud', null, 0.35); }
@@ -2613,13 +2783,14 @@ function frame(now) {
       tilt = -0.85 * Math.sin(Math.min(ph * Math.PI, Math.PI));
       reloadFlashJank = Math.sin(Math.min(ph * Math.PI, Math.PI));
     }
-    const meleeSwing = weapon.meleeT > 0 ? Math.sin((1 - weapon.meleeT / weapon.meleeDuration) * Math.PI) : 0;
-    viewmodel.position.x = GUN_TUNE.x + swayX - meleeSwing * 0.07;
-    viewmodel.position.y = GUN_TUNE.y + swayY + gunBobY + meleeSwing * 0.3;
+    const stroke = buttStroke01(weapon.meleeT, weapon.meleeDuration);
+    viewmodel.position.x = GUN_TUNE.x + swayX;
+    viewmodel.position.y = GUN_TUNE.y + swayY + gunBobY;
     viewmodel.position.z = -GUN_TUNE.z + weapon.recoil * 1.6;
-    viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 + meleeSwing * 0.95 - tilt;
-    viewmodel.rotation.y = GUN_TUNE.ry + meleeSwing * 0.08;
-    viewmodel.rotation.z = GUN_TUNE.rz - meleeSwing * 0.08;
+    viewmodel.rotation.x = GUN_TUNE.rx + weapon.recoil * 2 - tilt;
+    viewmodel.rotation.y = GUN_TUNE.ry;
+    viewmodel.rotation.z = GUN_TUNE.rz;
+    applyButtStroke(viewmodel, stroke);
     // the flamer shares the sway and the bob, and gets a low-frequency shudder
     // of its own while burning — a pressure feed kicks, it does not recoil in
     // discrete jolts the way the rifle does
@@ -2630,6 +2801,9 @@ function frame(now) {
     flamerModel.rotation.x = FLAMER_TUNE.rx + shudder * 1.6;
     flamerModel.rotation.y = FLAMER_TUNE.ry;
     flamerModel.rotation.z = FLAMER_TUNE.rz;
+    // THE FLAMER MELEES TOO (it had no melee motion at all): F swings whatever
+    // is in your hands, and the swing belongs to the strike, not to the model
+    applyButtStroke(flamerModel, stroke);
   }
   // reticle bloom (first-strike CE reticle): arc radius tracks true spread
   {
@@ -2850,6 +3024,16 @@ function frame(now) {
   setText('ammo', ghost ? ''
     : heldIsFlamer ? (flamer.empty ? 'TANK DRY' : `FUEL ${Math.ceil(flamer.frac * 100)}%`)
       : (weapon.reloading ? 'RELOADING' : `${weapon.mag} / ${weapon.reserve}`));
+  // ...and the readout above it NAMES the weapon, with the swap key as soon as
+  // there is something to swap to. The numbers alone never told the user which
+  // gun was in their hands, let alone that a second one was on the sling.
+  setText('weaponName', ghost ? ''
+    : `${heldIsFlamer ? 'FLAMETHROWER' : MA5.name}${hasFlamer ? ' · Q SWAP' : ''}`);
+  { // flamer up is the HUD's orange, the same tell #roomState uses for a state change
+    const wn = el('weaponName');
+    const wc = heldIsFlamer && !ghost ? 'wn-flamer' : '';
+    if (wn.className !== wc) wn.className = wc;
+  }
   // ROOM LIGHT STATE (user: note-taking between playthroughs) — the sim's
   // authoritative fixture + flood states for the compartment you're in
   {
@@ -2874,7 +3058,15 @@ function frame(now) {
   // E key resolves them in (player.js) — the rarer pickup wins the line
   const fsrc = player.dead ? null : player.flamerSource(hasFlamer, flamer.frac);
   const src = fsrc ? null : (player.dead ? null : player.ammoSource());
-  if (fsrc) {
+  // OUTRANKS EVERY PICKUP PROMPT for its few seconds: you are standing on the
+  // rack you just took the flamer off, so the 'E — swap a fuel can' line would
+  // otherwise bury the one message that teaches the swap. It also retires the
+  // moment you actually swap — the lesson is over once it lands.
+  if (swapHintAt && (now - swapHintAt > SWAP_HINT_MS || _swapAt > swapHintAt)) swapHintAt = 0;
+  if (!player.dead && swapHintAt) {
+    setText('hint', 'Q or MOUSE WHEEL — swap MA5 / flamethrower');
+    setStyle('hint', 'display', 'block');
+  } else if (fsrc) {
     setText('hint', fsrc === 'armory' ? 'E — take the flamethrower off the rack'
       : fsrc === 'refuel' ? `E — swap a fuel can (${sim.armoryFuelCans} left)`
         : 'E — take the flamethrower off the operator');
@@ -2973,6 +3165,9 @@ window.__game = {
   giveFlamer: () => { hasFlamer = true; heldIsFlamer = true; flamer.fuel = FLAME.tankUnits; },
   setTrigger: (v) => { fireHeld = !!v; },
   putRifleUp: () => { heldIsFlamer = false; },
+  // one butt-stroke, resolved now, returning whether it connected — the swing
+  // is 0.52s of animation and a harness cannot hold a key across frames
+  melee: () => meleeStrike(),
   flamerState: () => ({ hasFlamer, heldIsFlamer, fuel: flamer.fuel, live: flamer.live, jet: _flameJet }),
 };
 window.__audio = audio; // sound-board / audit harness
