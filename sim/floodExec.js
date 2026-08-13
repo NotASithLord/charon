@@ -62,16 +62,26 @@ export function updateFloodTick(sim, dt) {
             || (h.faction === FACTION.ARMED && h.state === STATE.FIGHT))) hereDanger += 2;
         }
         let best = null, bestDanger = Infinity;
-        for (const { to, link } of sim.graph.neighbors(a.node, ['std', 'vent'],
-          (l) => (l.kind === 'std' ? !l.locked : !l.blocked))) {
+        for (const { to, link } of sim.graph.neighbors(a.node, ['std'],
+          (l) => !l.locked)) {
           if (sim.graph.burningUntil[to] > sim.t) continue;
-          // a vent breaks pursuit outright — marines can't follow into it —
-          // so it's the preferred bolt-hole unless the far grating is manned
-          let danger = link.kind === 'vent' ? -0.5 : 0;
+          let danger = 0;
           for (const h of sim.occupants(to)) {
             if (h.hp > 0 && (h.faction === FACTION.MARINE || h.faction === FACTION.ARMED)) danger += 2;
           }
           if (danger < bestDanger) { bestDanger = danger; best = { to, link }; }
+        }
+        // THE GRATE BREAKS PURSUIT OUTRIGHT (user model): no marine follows a
+        // pod into the walls. The room's own vent beats any door unless a
+        // truly empty room is right there — the pod dives in and surfaces in
+        // the quietest room the hive believes empty anywhere on the ship.
+        if (bestDanger > -0.5) {
+          const safe = hive.ventBoltTarget(a.node);
+          if (safe !== -1) {
+            const link = sim.graph.ventLink(a.node, safe);
+            best = { to: safe, link };
+            bestDanger = -0.5;
+          }
         }
         if (best && bestDanger < hereDanger) {
           // fleeing for its life = the errand is OFF. Keeping the old task
@@ -172,16 +182,20 @@ export function updateFloodTick(sim, dt) {
     // it was already walking to. Damage was always instant (per-node, task-
     // independent, §7); this is what makes the form's BEHAVIOR match that.
     if (a.faction === FACTION.COMBAT && a.state !== STATE.GRABBING) {
-      const held = a.task && (a.task.kind === TASK.TRANSFORM || a.task.kind === TASK.AMBUSH
-        || a.task.kind === TASK.BAIT || a.task.kind === TASK.DECOY
+      const pn = a.pnode ?? a.node;
+      const preyHere = sim.occupants(pn).some((h) => h.hp > 0 && !h.dead &&
+        (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE));
+      // THE TRAP SPRINGS (user tactic): a form staged for a muster holds dead
+      // still — until a human steps into ITS room. Every staged form runs
+      // this same check, so the whole pack turns on the intruder in the same
+      // tick the door opens. (The dart runner keeps running its script; the
+      // pack it baited for does the killing.)
+      const springs = a.task?.kind === TASK.GUARD && a.task.muster !== undefined && preyHere;
+      const held = !springs && a.task && (a.task.kind === TASK.TRANSFORM || a.task.kind === TASK.AMBUSH
+        || a.task.kind === TASK.BAIT || a.task.kind === TASK.DECOY || a.task.kind === TASK.DART
         || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)
         || (a.task.kind === TASK.ATTACK && a.task.node === a.node));
-      if (!held) {
-        const pn = a.pnode ?? a.node;
-        const prey = sim.occupants(pn).some((h) => h.hp > 0 && !h.dead &&
-          (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE));
-        if (prey) hive.assign(a, { kind: TASK.ATTACK, node: pn });
-      }
+      if (!held && preyHere) hive.assign(a, { kind: TASK.ATTACK, node: pn });
     }
 
     const t = a.task;
@@ -418,6 +432,25 @@ export function updateFloodTick(sim, dt) {
         break;
       }
 
+      case TASK.DART: {
+        // DOOR BAIT, the runner's half (user tactic): step through the door
+        // into the defended room — one committed, visible, tracker-painting
+        // move — then double straight back and rejoin the motionless pack.
+        if (t.stage === 0) {
+          if (a.node !== t.into) moveToward(sim, a, t.into,
+            (from, to) => sim.graph.path(from, to, ['std'], (l) => !l.locked));
+          else if (!a.move) t.stage = 1; // seen enough — turn around
+        } else {
+          if (a.node !== t.back) moveToward(sim, a, t.back,
+            (from, to) => sim.graph.path(from, to, ['std'], (l) => !l.locked));
+          else if (!a.move) {
+            // back with the pack: re-stage and hold dead still again
+            hive.assign(a, { kind: TASK.GUARD, node: t.back, muster: t.muster, until: sim.t + 90 });
+          }
+        }
+        break;
+      }
+
       case TASK.BAIT: {
         const squad = sim.squads[t.squadId];
         const shaft = sim.graph.shafts[t.shaftIdx];
@@ -450,11 +483,11 @@ function moveToward(sim, a, node, pathFn = null) {
   else if (a.faction === FACTION.INFECTION) path = hive.safeInfectionPath(a.node, node);
   // combat forms route AROUND remembered gun lines — the plain shortest path
   // marched every form transiting near the last stand straight through it,
-  // one at a time. The fallback route may crawl the VENT network (user rule):
-  // when the corridors are all watched or locked, a combat form squeezes
-  // through the ducting — the hive almost always has an escape hatch.
+  // one at a time. NO VENTS for the big forms (user rule: the in-wall
+  // ducting is infection-only now) — corridors and the cross-deck
+  // maintenance shafts are all they get.
   else path = hive.safeAssaultPath(a.node, node)
-    ?? sim.graph.path(a.node, node, ['std', 'shaft', 'vent'], hive.combatPass);
+    ?? sim.graph.path(a.node, node, ['std', 'shaft'], hive.combatPass);
   if (path && path.length) sim.setPath(a, path);
   else if (!path) a.task = null; // believed-unreachable; hive will reassign
 }
@@ -516,7 +549,9 @@ export function explodeCarrier(sim, a) {
     if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
     if ((h.pnode ?? h.node) !== (a.pnode ?? a.node)) continue; // walls contain the burst
     if (Math.hypot(h.x - a.x, h.y - a.y) <= P.carrier.explodeRadiusM) {
-      sim.hurtHuman(h, P.carrier.explodeDamage);
+      // attributed to the carrier so a marine killed by the burst ticks the
+      // hive's marine counter down (a rupture is very much the hive's kill)
+      sim.hurtHuman(h, P.carrier.explodeDamage, a.id);
     }
   }
   // everything it was carrying spills out at once, in a ring around the
@@ -543,6 +578,8 @@ function convertHuman(sim, form, target) {
     if (sim.rng.chance(0.5)) sim.emitCall(target);
   }
   target.dead = true;
+  // a TAKEN marine is the surest kill the hive knows about (user redesign)
+  if (target.faction === FACTION.MARINE) sim.hive.noteMarineKill();
   const cf = spawnCombatForm(sim, target.node, target);
   cf.hostArmed = target.faction === FACTION.ARMED || target.faction === FACTION.MARINE;
   if (target.isPlayer) {

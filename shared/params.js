@@ -95,7 +95,6 @@ export const PARAMS = {
   // a working door jams or a jammed one grinds free, connectivity-guarded
   // (user: rotate jams, but never cut anyone off from the rest of the ship)
   door: { lockedFraction: 0.25, shiftEverySec: 110 },
-  vent: { blockedFraction: 0.30 },  // PLACEHOLDER, per-run
   ambush: { firstStrikeMult: 3.0 }, // PLACEHOLDER, applies to both sides
   motionTracker: { rangeHops: 1 },  // reveals a moving infection form in a vent
   power: { unstableFraction: 0.20 },// PLACEHOLDER
@@ -120,7 +119,11 @@ export const PARAMS = {
   },
   swarm: {
     overwhelmRatio: 2.0,   // weighted flood:shooter ratio at which grabs work THROUGH gunfire
-    killRatio: 2.0,        // muster:squad ratio to spring on an isolated marine squad
+    // 3:1 DOCTRINE (user redesign): the hive avoids marines unless it holds a
+    // ~3:1 combat-form advantage — or has no choice (the muster patience
+    // valve, cornered forms, and the all-in endgame are the "no choice"
+    // paths, and they all stand).
+    killRatio: 3.0,        // muster:defense ratio before an assault launches
     musterHops: 3,         // how far the hive gathers forms for a squad-wipe
     maxMusterForms: 45,    // a wave this size flattens any line — stop waiting
     isolationHops: 3,      // no friendly squad within this = isolated
@@ -373,8 +376,17 @@ export const PARAMS = {
     // flood's fast private network; a form rips through them far quicker than
     // it crosses open floor, which is what makes them worth using.
     shaftMps: 2.1,            // crawl pace in cross-deck ducts (was 0.7)
-    ventMps: 1.65,           // infection-form pace in same-deck ducting (was 0.55)
+    // the duct network is the pod's HIGHWAY: straight grate-to-grate runs at
+    // a hard scuttle. Effective ~1.9 m/s after winding — about walking pace
+    // per meter, but with zero corridor detours and zero guns, so any real
+    // distance is decisively faster (and safer) through the walls.
+    ventMps: 2.55,
     crawlWindingFactor: 1.35, // shafts/vents are never straight lines
+    // grate transfer: prying in at one end and dropping out at the other.
+    // Paid twice per transit — it is what keeps a next-door hop cheaper
+    // through the DOOR while a cross-ship run stays far faster in the walls
+    // (travel time ∝ real grate-to-grate distance — the map's own dimensions)
+    ventTransferSec: 1.2,
   },
   // command path (companion spec §0/§3.4). In single-player the producer
   // stamps orders this many ticks ahead; the same knob is net.inputDelayTicks

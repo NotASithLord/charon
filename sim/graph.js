@@ -38,64 +38,23 @@ export class ShipGraph {
       kind: LAYER.SHAFT, label: 'S-' + String(i + 1).padStart(2, '0'),
       // occupants lying in wait per end: corner key `${shaftIdx}:${endNode}`
     }));
-    this.vents = data.vents.map((e, i) => ({
-      i, a: idx(e.a), b: idx(e.b), breakable: e.breakable,
-      blocked: false, kind: LAYER.VENT, label: 'V-' + String(i + 1).padStart(2, '0'),
-    }));
-    // VENT NETWORK (user rule): ducting parallels nearly every doorway — the
-    // flood's private topology. Infection AND combat forms crawl it (a
-    // combat form squeezes through; a bloated carrier cannot), humans never,
-    // and door locks don't apply — so a hive in avoid-and-breed posture
-    // almost always has an escape hatch. Auto-generated alongside the
-    // authored runs: one duct behind every same-deck doorway.
-    {
-      const seen = new Set(this.vents.map((v) => `${Math.min(v.a, v.b)}:${Math.max(v.a, v.b)}`));
-      const addVent = (a, b) => {
-        const key = `${Math.min(a, b)}:${Math.max(a, b)}`;
-        if (seen.has(key) || a === b) return;
-        seen.add(key);
-        this.vents.push({
-          i: this.vents.length, a, b, breakable: true,
-          blocked: false, kind: LAYER.VENT, label: 'V-' + String(this.vents.length + 1).padStart(2, '0'),
-        });
-      };
-      for (const e of this.edges) {
-        if (this.nodes[e.a].deck !== this.nodes[e.b].deck) continue;
-        addVent(e.a, e.b);
-      }
-      // EVERY ROOM ON A DECK IS DUCTED TO ITS NEIGHBOURS (user: every room
-      // should have vents attaching it to the rooms on the same deck). Beyond
-      // the door-parallel ducts, tie each room to its two nearest same-deck
-      // rooms — so the flood's duct net reaches everywhere, not just where the
-      // doors already go. Deterministic (distance + index tie-break).
-      const byDeck = {};
-      for (const n of this.nodes) (byDeck[n.deck] ??= []).push(n);
-      for (const deck of Object.keys(byDeck)) {
-        const rooms = byDeck[deck];
-        for (const n of rooms) {
-          const near = rooms.filter((m) => m.idx !== n.idx)
-            .map((m) => ({ m, d: (m.x - n.x) ** 2 + (m.y - n.y) ** 2 }))
-            .sort((p, q) => p.d - q.d || p.m.idx - q.m.idx)
-            .slice(0, 1); // nearest same-deck room (door-parallel ducts cover the rest)
-          for (const { m } of near) addVent(n.idx, m.idx);
-        }
-      }
-    }
+    // ONE VENT NETWORK (user redesign): the ducting is a single ship-wide
+    // system, not a bag of pairwise runs. Every room has exactly ONE grate
+    // (placed by _placeGrates as far from the room's doors as physics
+    // allows), and an infection form entering ANY grate can emerge from ANY
+    // other — combat forms and carriers are too big, humans never fit, and
+    // door locks are irrelevant inside the walls. There are no persistent
+    // vent edges: a transit is a virtual link synthesized on demand by
+    // ventLink(a, b), with travel time proportional to the real distance
+    // between the two grates (see sim.travelSec) — crossing the whole ship
+    // through the ducts costs what the ship's size says it should.
+    this.vents = [];
+    this._ventLinks = new Map(); // (lo * 4096 + hi) -> synthesized link
 
-    // adjacency: adj[node] = [{to, link}] where link is an edge/shaft/vent record
+    // adjacency: adj[node] = [{to, link}] where link is an edge/shaft record
+    // (the vent layer is intentionally EMPTY — vent transits never appear in
+    // hop/flow-field queries; they are routed explicitly via ventLink)
     this.adj = { std: this._buildAdj(this.edges), shaft: this._buildAdj(this.shafts), vent: this._buildAdj(this.vents) };
-
-    // DOORS ARE DOORS (user: "vents are vents, doors are continuous 3D spaces").
-    // Tag every duct that merely PARALLELS a real doorway with that door edge.
-    // The duct stays in the graph — it's still the flee / pursuit-break route,
-    // and the way PAST a locked door — but linkCost() stops discounting it
-    // below the door, so ordinary room-to-room routing walks THROUGH the door
-    // (a continuous move) instead of crawling the duct behind it (the hidden
-    // vent delay the user was seeing at every doorway). Ducts with no door
-    // behind them keep the highway discount.
-    for (const v of this.vents) {
-      v.doorEdge = (this.adj.std[v.a] ?? []).find((e) => e.to === v.b)?.link ?? null;
-    }
 
     // GRAND STAIRWELLS: cross-deck edges that open into one two-storey volume.
     // The upper (catwalk) and lower rooms see and shoot across the opening —
@@ -271,26 +230,6 @@ export class ShipGraph {
           l.flipT = lenA / (lenA + lenB);
           l.horizM = Math.max(2, lenA + lenB);
           l.vertM = 0;
-          // VENTS ARE DISTINCT GRATES (user: a duct must read as its OWN vent,
-          // not "the flood using the doorway"). A shared-wall vent otherwise put
-          // its openings right on the door. Slide them along the wall, well
-          // clear of the door and still inside both rooms' footprint, so the
-          // crawler walks to a separate louvered grate. Deterministic by index.
-          if (l.kind === 'vent') {
-            const horizWall = xOv >= minOv && Math.abs(yGap) < eps;
-            const dir = (l.i % 2) ? 1 : -1;
-            if (horizWall) {
-              const lo = Math.max(a.x - a.w / 2, b.x - b.w / 2) + 0.7;
-              const hi = Math.min(a.x + a.w / 2, b.x + b.w / 2) - 0.7;
-              const gx = Math.max(lo, Math.min(hi, door.x + Math.max(1.9, (hi - lo) * 0.3) * dir));
-              l.doorA = { x: gx, y: door.y }; l.doorB = { x: gx, y: door.y };
-            } else {
-              const lo = Math.max(a.y - a.d / 2, b.y - b.d / 2) + 0.7;
-              const hi = Math.min(a.y + a.d / 2, b.y + b.d / 2) - 0.7;
-              const gy = Math.max(lo, Math.min(hi, door.y + Math.max(1.9, (hi - lo) * 0.3) * dir));
-              l.doorA = { x: door.x, y: gy }; l.doorB = { x: door.x, y: gy };
-            }
-          }
         } else {
           // no shared wall: a short throat spans the gap (as before)
           const dx = b.x - a.x, dy = b.y - a.y;
@@ -319,9 +258,108 @@ export class ShipGraph {
     };
     for (const l of this.edges) measure(l);
     for (const l of this.shafts) measure(l);
-    for (const l of this.vents) measure(l);
     // mean std-edge length: the hive's ETA guesses are hop-based
     this.avgStdLenM = this.edges.reduce((s, l) => s + l.horizM + l.vertM, 0) / this.edges.length;
+    this._placeGrates();
+  }
+
+  // ONE GRATE PER ROOM, AS FAR FROM THE DOORS AS THE WALLS ALLOW (user rule:
+  // "there should never be a vent at a door entrance — vents should be as far
+  // from the door(s) in a room as possible"). Candidate points march along
+  // all four walls at a fixed pitch; the winner maximizes its distance to the
+  // NEAREST door opening of that room. Fully deterministic: fixed candidate
+  // order, ties keep the first. Stored per node as n.grate:
+  //   x/y   — where a crawler stands to use it (0.55 m off the wall)
+  //   wx/wy — the point ON the wall (the visible grille)
+  //   nx/ny — the wall's inward normal (grille facing, for the renderer)
+  _placeGrates() {
+    for (const n of this.nodes) {
+      // every real opening into this room: same-deck door points, plus the
+      // pads cross-deck trunks land on (a lift/ladder mouth is a doorway too)
+      const doors = [];
+      for (const { link } of this.adj.std[n.idx] ?? []) {
+        const pt = (link.a === n.idx ? link.doorA : link.doorB) ?? link.door;
+        if (pt) doors.push(pt);
+        else {
+          // cross-deck link: bodies approach a wall pad near the far room's x
+          const other = this.nodes[link.a === n.idx ? link.b : link.a];
+          if (other.deck !== n.deck) doors.push({
+            x: Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x)), y: n.y,
+          });
+        }
+      }
+      const inset = 0.55;
+      const hw = n.w / 2 - inset, hd = n.d / 2 - inset;
+      let best = null, bestD = -1;
+      const consider = (wallX, wallY, nx, ny) => {
+        let dMin = Infinity;
+        for (const d of doors) {
+          const dd = Math.hypot(wallX - d.x, wallY - d.y);
+          if (dd < dMin) dMin = dd;
+        }
+        if (doors.length === 0) dMin = 0; // no doors: any wall point works
+        if (dMin > bestD + 1e-9) {
+          bestD = dMin;
+          best = { x: wallX + nx * inset, y: wallY + ny * inset, wx: wallX, wy: wallY, nx, ny };
+        }
+      };
+      // walk each wall at ~1.2 m pitch (min 3 samples), corners inset 0.8 m
+      const pitch = 1.2;
+      const spanX = Math.max(0.1, n.w - 1.6), spanY = Math.max(0.1, n.d - 1.6);
+      const kx = Math.max(2, Math.ceil(spanX / pitch));
+      const ky = Math.max(2, Math.ceil(spanY / pitch));
+      for (let i = 0; i <= kx; i++) {
+        const x = n.x - spanX / 2 + (spanX * i) / kx;
+        consider(x, n.y - n.d / 2, 0, 1);  // north wall, faces +y
+        consider(x, n.y + n.d / 2, 0, -1); // south wall, faces -y
+      }
+      for (let i = 0; i <= ky; i++) {
+        const y = n.y - spanY / 2 + (spanY * i) / ky;
+        consider(n.x - n.w / 2, y, 1, 0);  // west wall, faces +x
+        consider(n.x + n.w / 2, y, -1, 0); // east wall, faces -x
+      }
+      // degenerate rooms (tiny closets) still get a grate at the far corner
+      if (!best) best = { x: n.x, y: n.y, wx: n.x, wy: n.y - n.d / 2, nx: 0, ny: 1 };
+      // keep the stand point inside the footprint whatever the math above did
+      best.x = Math.max(n.x - hw, Math.min(n.x + hw, best.x));
+      best.y = Math.max(n.y - hd, Math.min(n.y + hd, best.y));
+      n.grate = best;
+    }
+  }
+
+  // The synthesized transit link between two rooms' grates. Interchangeable
+  // with a real link everywhere the movement machinery looks: kind/doorA/
+  // doorB/horizM/vertM/flipT. Cached per pair; deterministic (pure geometry).
+  // i is unique per pair and disjoint from real link indices, so combat.js's
+  // per-duct grouping keys and the duct-noise throttle both keep working.
+  ventLink(a, b) {
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    const key = lo * 4096 + hi;
+    let l = this._ventLinks.get(key);
+    if (!l) {
+      const A = this.nodes[lo], B = this.nodes[hi];
+      const ga = A.grate, gb = B.grate;
+      // real geometry, not the stacked drawing: same-deck runs measure in the
+      // deck plane; cross-deck runs measure fore-aft plus the climb (the
+      // deck-band y offset is a schematic artifact — see measure())
+      const horizM = A.deck === B.deck
+        ? Math.max(2, Math.hypot(ga.wx - gb.wx, ga.wy - gb.wy))
+        : Math.max(2, Math.abs(ga.wx - gb.wx));
+      const vertM = Math.abs(A.deck - B.deck) * this.deckHeightM;
+      l = {
+        i: 100000 + key, a: lo, b: hi, kind: LAYER.VENT, virtual: true,
+        breakable: false, blocked: false, lockable: false, locked: false,
+        doorA: { x: ga.x, y: ga.y }, doorB: { x: gb.x, y: gb.y },
+        horizM, vertM, flipT: 0.5, label: 'V-NET',
+      };
+      this._ventLinks.set(key, l);
+    }
+    return l;
+  }
+
+  // One-step path through the duct network (for sim.setPath consumers).
+  ventRoute(from, to) {
+    return [{ to, link: this.ventLink(from, to), layer: LAYER.VENT }];
   }
 
   node(i) { return this.nodes[i]; }
@@ -367,18 +405,13 @@ export class ShipGraph {
   // packs into shafts and read as "the flood spawns and never moves".
   linkCost(l) {
     const run = l.horizM + l.vertM;
-    // ducts are a FAST FLOOD HIGHWAY now (3x speed) and the flood PREFERS
-    // them (user) — the extra <1 factor biases flood routes into the vents
-    // and cross-deck shafts wherever they exist. Only flood pathing reads
-    // vent/shaft costs (humans are std-only), so this never affects the crew.
+    // shafts stay a fast flood highway (only flood pathing reads shaft costs;
+    // humans are std-only, so this never affects the crew)
     if (l.kind === 'shaft') return run * 1.35 / 2.1 * 0.92;
-    if (l.kind === 'vent') {
-      // a duct behind an OPEN door is no shortcut — price it just above the
-      // door so plain routing takes the door (continuous space); only a duct
-      // with no open door behind it stays a fast, hidden highway
-      if (l.doorEdge && !l.doorEdge.locked) return this.linkCost(l.doorEdge) + 1.0;
-      return run * 1.35 / 1.65 * 0.82;
-    }
+    // vent transits never appear in Dijkstra (the vent adjacency is empty) —
+    // this branch prices a synthesized network link when a caller compares a
+    // duct run against a walk: crawl time plus the two grate transfers
+    if (l.kind === 'vent') return run * 1.35 / 1.65 + 2.4;
     if (l.type === 'lift') return l.horizM / 1.4 + 10;
     if (l.type === 'ladder') return 1.0 + l.vertM / 1.2; // mount + climb (matches travelSec)
     return run / 1.4 + (l.type === 'blastdoor' ? 2.5 : 0.8);
@@ -543,14 +576,16 @@ export function humanPass(link) {
   return link.kind === LAYER.STD ? !link.locked : false;
 }
 export const marinePass = humanPass; // marines use the standard methods too
-// Flood, ground truth (user model): infection forms crawl same-deck VENTS and
-// the cross-deck SHAFTS ("cross-deck vents"); combat forms are too big for the
-// tight same-deck ducts but squeeze the cross-deck shafts. Neither is blocked
-// by door locks — the ducts route around them.
+// Flood, ground truth (user redesign): the VENT NETWORK IS INFECTION-ONLY —
+// combat forms are far too big for the in-wall ducting; they walk and squeeze
+// the cross-deck maintenance shafts like the carriers do. Infection walking
+// layers are std+shaft; the vent network is routed explicitly (ventLink), so
+// the vent case here only arises when a pop-time re-check probes a
+// synthesized link — which is never blocked.
 export function infectionPass(link) {
   if (link.kind === LAYER.STD) return !link.locked;
-  if (link.kind === LAYER.VENT) return !link.blocked;
-  return link.kind === LAYER.SHAFT; // cross-deck ducts too
+  if (link.kind === LAYER.VENT) return true; // the network is always open
+  return link.kind === LAYER.SHAFT;
 }
 export function bigFormPass(link) {
   if (link.kind === LAYER.STD) return !link.locked;
@@ -560,7 +595,7 @@ export function layersFor(kind) {
   switch (kind) {
     case 'human': return ['std'];
     case 'marine': return ['std'];               // humans never use the ducts
-    case 'infection': return ['std', 'vent', 'shaft']; // same-deck + cross-deck ducts
+    case 'infection': return ['std', 'shaft'];   // walking; the vent net is routed explicitly
     case 'big': return ['std', 'shaft'];
     default: return ['std'];
   }

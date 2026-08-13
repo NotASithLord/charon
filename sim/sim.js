@@ -165,9 +165,9 @@ export class Sim {
         if (!link.locked) vis.push(to); // an open/unlocked doorway you can see through
         if (!sense.includes(to)) sense.push(to); // life-sense ignores the lock
       }
-      for (const { to } of g.neighbors(i, ['vent'], () => true)) {
-        if (!sense.includes(to)) sense.push(to); // and feels through the ducting
-      }
+      // (the per-pair vent layer is gone — std adjacency already covers every
+      // touching compartment, which is exactly the tentacle-sense the flood
+      // gets: its own room plus every adjacent room, lock or no lock)
       this.visCache.push(vis);
       this.senseCache.push(sense);
       this.hear2.push(g.nodesWithin(i, this.P.sensor.hearingHops, ['std'], () => true));
@@ -507,6 +507,18 @@ export class Sim {
         const squad = this.squads[a.squad];
         this.log('combat', `a marine falls in ${this.graph.node(a.node).name}`, a.node, a.x, a.y);
         if (squad) squad.calledContact = false; // survivors will call again
+        // THE HIVE COUNTS ITS KILLS (user redesign): a marine who dies to a
+        // flood form's claws/latch/rupture ticks the internal marine counter
+        // down. A death the hive didn't cause (friendly fire, fire, the
+        // player's own rifle out of the flood's sight) isn't its knowledge —
+        // unless a form senses the room and watches it happen.
+        const killer = by >= 0 ? this.byId.get(by) : null;
+        const floodKill = killer && (killer.faction === FACTION.INFECTION
+          || killer.faction === FACTION.COMBAT || killer.faction === FACTION.CARRIER);
+        const witnessed = !floodKill && this.agents.some((f) => !f.dead && f.hp > 0
+          && (f.faction === FACTION.INFECTION || f.faction === FACTION.COMBAT)
+          && this.floodSenses(f.pnode ?? f.node).includes(a.pnode ?? a.node));
+        if (floodKill || witnessed) this.hive?.noteMarineKill();
       }
       this.screamTick[a.node] = this.tickCount;
       humanDeathToCorpse(this, a);
@@ -899,13 +911,15 @@ export class Sim {
         if (a.faction === FACTION.MARINE) hardness[n] += 1;
       }
     }
-    // diffuse across every real connection (§6.2)
-    const pass = (l) => (l.kind === 'std' ? !l.locked : l.kind === 'vent' ? !l.blocked : true);
+    // diffuse across every real connection (§6.2) — the vent layer is empty
+    // now (the duct network is routed, not walked), so influence spreads
+    // through doors and shafts: the spaces bodies actually fight across
+    const pass = (l) => (l.kind === 'std' ? !l.locked : true);
     for (let pass_i = 0; pass_i < 2; pass_i++) {
       for (const arr of [floodStr, humanStr, hardness]) {
         const next = Float32Array.from(arr);
         for (let i = 0; i < g.n; i++) {
-          for (const { to } of g.neighbors(i, ['std', 'shaft', 'vent'], pass)) {
+          for (const { to } of g.neighbors(i, ['std', 'shaft'], pass)) {
             next[to] += arr[i] * 0.18;
           }
         }
@@ -921,7 +935,9 @@ export class Sim {
     const M = this.P.movement;
     const run = (link.horizM + link.vertM);
     if (link.kind === 'shaft') return run * M.crawlWindingFactor / M.shaftMps;
-    if (link.kind === 'vent') return run * M.crawlWindingFactor / M.ventMps;
+    // a network transit pays the crawl (∝ real grate-to-grate distance — the
+    // map's own dimensions set the clock) plus prying in and dropping out
+    if (link.kind === 'vent') return run * M.crawlWindingFactor / M.ventMps + (M.ventTransferSec ?? 0) * 2;
     const mps = M.baseMps * Math.max(0.2, mult);
     if (link.type === 'lift') return link.horizM / mps + M.liftSec;
     // a ladder transit is MOUNT + CLIMB — the walk to the pad already
@@ -981,6 +997,7 @@ export class Sim {
           const mps = this.P.movement.baseMps * 1.15;
           a.x += Math.cos(a.heading) * mps * dt;
           a.y += Math.sin(a.heading) * mps * dt;
+          a.steeredTick = this.tickCount; // a pinned host running circles IS motion
           const room = this.graph.node(a.pnode ?? a.node);
           const hw = Math.max(0.4, room.w / 2 - 0.4), hd = Math.max(0.4, room.d / 2 - 0.4);
           a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x));
@@ -1412,7 +1429,9 @@ export class Sim {
     if (a.faction === FACTION.COMBAT) {
       if (a.downed || a.hp <= 0 || a.dragging !== -1) return false;
       const k = a.task?.kind;
-      if (k === TASK.TRANSFORM || k === TASK.DECOY || k === TASK.BAIT) return false; // rooted / playing a role
+      // rooted / playing a role (DART is the door-bait runner: it must
+      // double back on script, not get steered into the guns it just teased)
+      if (k === TASK.TRANSFORM || k === TASK.DECOY || k === TASK.BAIT || k === TASK.DART) return false;
       let best = null, bestD = Infinity, bestScore = Infinity;
       for (const h of this._occ[pn]) {
         if (h.dead || h.hp <= 0) continue;
@@ -1447,10 +1466,11 @@ export class Sim {
               if (d < pd) { pd = d; pn2 = n; }
             }
           }
-          // reach it through an unlocked doorway, else squeeze through the
-          // ducting — a sensed body behind a locked hatch is still huntable
-          if (pn2 >= 0 && (this.setPathTo(a, pn2, ['std'], (l) => !l.locked)
-            || this.setPathTo(a, pn2, ['std', 'vent'], (l) => (l.kind === 'std' ? !l.locked : !l.blocked)))) {
+          // reach it through an unlocked doorway. NOT through the vents any
+          // more (user rule: the in-wall ducting is infection-only) — a
+          // sensed body behind a locked hatch stays out of a combat form's
+          // reach until a door opens or the hive routes it the long way
+          if (pn2 >= 0 && this.setPathTo(a, pn2, ['std'], (l) => !l.locked)) {
             a.charging = true; a.state = STATE.MOVE;
             return false; // _advanceMovement walks the path through the doorway
           }
@@ -1556,6 +1576,9 @@ export class Sim {
       a.x += (dx / dist) * step;
       a.y += (dy / dist) * step;
       this._clampToRoom(a, room); // stay inside the room's real footprint
+      // real displacement with a.move null — the tracker's MOVING flag reads
+      // this (review finding: a 6 m/s charge painted nothing on the tracker)
+      a.steeredTick = this.tickCount;
     }
 
     // arc height from progress along the committed leap (0 at launch and land)
@@ -1688,7 +1711,9 @@ export class Sim {
         if (a.dead || a.faction === FACTION.CORPSE || a.downed || a.move || this._rootingBody(a)) continue;
         E[k] = a;
         R[k] = this._bodyRadius(a);
-        M[k] = !a.isPlayer && a.held !== this.tickCount && !a.leaping;
+        // staged/ambushing forms are immovable stone: the crowd flows around
+        // them (they still PUSH, so bodies don't overlap them)
+        M[k] = !a.isPlayer && a.held !== this.tickCount && !a.leaping && !this._holdsDeadStill(a);
         k++;
       }
       for (let i = 0; i < k; i++) {
@@ -1854,7 +1879,17 @@ export class Sim {
   // Parked agents each claim their OWN patch of floor (user note: no stacked
   // dots): a golden-angle spiral slot ranked by id among the room's living
   // occupants gives ~0.7 m spacing, clamped to the room's real footprint.
+  // A form lying in wait is STONE (user tactic: the pack by the door must be
+  // invisible to a motion tracker, and a body that shuffles isn't still).
+  // Sprung/retasked forms move again the moment their task changes.
+  _holdsDeadStill(a) {
+    if (a.state === STATE.AMBUSHING) return true;
+    return a.task?.kind === TASK.GUARD && a.task.muster !== undefined
+      && a.node === a.task.node && !a.move;
+  }
+
   _parkDrift(a, dt) {
+    if (this._holdsDeadStill(a)) { a.followSpeed = 0; return; }
     const nd = this.graph.node(a.node);
     const [tx, ty] = this._parkSlot(a, nd);
     const dx = tx - a.x, dy = ty - a.y;
@@ -2125,6 +2160,12 @@ export class Sim {
       // visible walking to the grate and climbing out the far one (user: no
       // snap-to-center-then-teleport; go to a marked opening and vanish there)
       if (a.move && a.move.layer === 'vent' && a.move.hidden) flags |= FLAG.EXPOSED;
+      // PURPOSEFUL MOTION (user: the tracker must read motion, not standing
+      // bodies): a committed move leg, an airborne arc, or riding a running
+      // host. Separation shuffles and park-drift do NOT set it — a pack lying
+      // in ambush is tracker-dark however the crowd math nudges it.
+      if (a.move || a.leaping || a.steeredTick === this.tickCount
+        || (a.state === STATE.GRABBING && a.grabTimer > 0)) flags |= FLAG.MOVING;
       if (a.inShaftAmbush !== undefined) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;

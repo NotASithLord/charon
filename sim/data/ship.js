@@ -231,20 +231,8 @@ export const SHIP = {
     { a: 'corrM', b: 'corrA', ambushCorners: 2 },
     { a: 'lifesup', b: 'eng', ambushCorners: 2 },
   ],
-  // Authored ducts supplement the auto-generated net (graph.js ducts every
-  // same-deck doorway + each room to its nearest same-deck neighbour). These
-  // add a few cross-room runs the doors don't already cover.
-  vents: [
-    { a: 'medbay', b: 'cryo', breakable: true },
-    { a: 'brig', b: 'cryo', breakable: true },
-    { a: 'armory', b: 'fireCtl', breakable: true },
-    { a: 'batteryPort', b: 'archerPort', breakable: true },
-    { a: 'batteryStbd', b: 'archerStbd', breakable: true },
-    { a: 'cargo1', b: 'cargo2', breakable: true },
-    { a: 'ordnance', b: 'cargo1', breakable: true },
-    { a: 'eng', b: 'reactor', breakable: true },
-    { a: 'capPort', b: 'lifesup', breakable: true },
-    { a: 'berthPort', b: 'lounge', breakable: true },
-    { a: 'hangar', b: 'hangarA', breakable: true },
-  ],
+  // No authored vent runs any more (user redesign): the ducting is ONE
+  // ship-wide network — every room gets a single grate placed by the graph
+  // (far from that room's doors), and any grate reaches any other. See
+  // graph.js _placeGrates/ventLink.
 };

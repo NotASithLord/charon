@@ -1672,89 +1672,57 @@ export class World {
     }
   }
 
-  // MARKED VENT OPENINGS (user report: crawlers snapped to the room centre
-  // then teleported to nowhere). Every duct opening the flood uses gets a
-  // small louvered grate on the floor by the wall — the crawlers now walk to
-  // it, vanish into it, and climb out the far one. Deduped by position and
-  // kept clear of the real doorways (a shared-wall vent reads as the door).
+  // THE VENT GRATES (user redesign): ONE louvered wall grille per room,
+  // placed by the sim graph as far from the room's doors as the walls allow
+  // (graph._placeGrates — the sim's grate IS where crawlers vanish/emerge,
+  // so the mesh and the behavior can never disagree). Built to READ as
+  // grating: a raised frame, a near-black duct void behind, and a stack of
+  // angled slats with real gaps — not a flat plate. Two shared materials
+  // across every grille so the static-merge pass collapses them.
   _buildVentGrates() {
     const g = this.graph;
     const frameMat = new THREE.MeshStandardMaterial({
-      color: 0x2a3340, emissive: 0x1a2b3a, emissiveIntensity: 0.3, roughness: 0.7, metalness: 0.5,
+      color: 0x39434f, roughness: 0.6, metalness: 0.75,
     });
-    const slatMat = new THREE.MeshStandardMaterial({ color: 0x161c24, roughness: 0.85, metalness: 0.4 });
-    const seen = new Set();
-    // NO GRATE IN A DOORWAY (user: there are still vents in doorways). A vent
-    // that parallels a real doorway shares the SAME two rooms as a std door —
-    // the doorway itself is the crawler's opening, so it gets no grate. This
-    // topological test is robust where the old distance check leaked. Door
-    // positions are also kept as a backstop for the odd off-wall throat vent.
-    const dooredPairs = new Set();
-    const doorPts = [];
-    for (const e of g.edges) {
-      if (!e.door) continue;
-      const a = g.node(e.a), b = g.node(e.b);
-      if (a.deck !== b.deck) continue;
-      dooredPairs.add(`${Math.min(e.a, e.b)}:${Math.max(e.a, e.b)}`);
-      const [dx, dz] = this.simToWorld(e.door.x, e.door.y, a.deck);
-      doorPts.push({ deck: a.deck, x: dx, z: dz });
-    }
-    // every vent opening is an emerge point — including ones that parallel a
-    // doorway (the door IS the opening there; no grate mesh, but a crawler
-    // still surfaces at that spot)
-    // CLEAR OF THE THROAT (user: "the vent is right at the door entrance,
-    // which should not be the case"). A vent that parallels a doorway has no
-    // grate — the door IS its opening — but surfacing a crawler exactly on the
-    // door point parks bodies in the one gap the player has to walk through.
-    // Step the emerge point off the door, into the room, so they climb out
-    // BESIDE the doorway instead of standing in it.
-    const CLEAR = 2.1;
-    for (const v of g.vents) {
-      const a0 = g.node(v.a), b0 = g.node(v.b);
-      for (const [n, pt] of [[a0, v.doorA], [b0, v.doorB]]) {
-        const d = pt ?? v.door;
-        if (!d) continue;
-        // Walk the emerge point toward the room's centre until it is clear of
-        // EVERY doorway on the deck. Stepping toward the centre (rather than
-        // away from the door) can't push a body through a bulkhead, and it
-        // handles the common case the topological test misses: a vent whose
-        // mouth happens to land on some OTHER pair's door.
-        let mx = d.x, my = d.y;
-        const cx = n.x - mx, cy2 = n.y - my;
-        const clen = Math.hypot(cx, cy2);
-        if (clen > 1e-3) {
-          const ux = cx / clen, uy = cy2 / clen;
-          for (let step = 0; step < 8; step++) {
-            const [gx, gz] = this.simToWorld(mx, my, n.deck);
-            if (!doorPts.some((p) => p.deck === n.deck && Math.hypot(p.x - gx, p.z - gz) < CLEAR)) break;
-            if (Math.hypot(mx + ux * 0.7 - n.x, my + uy * 0.7 - n.y) > clen) break; // don't overshoot the centre
-            mx += ux * 0.7; my += uy * 0.7;
-          }
-        }
-        this._addMouth(n.idx, mx, my);
-      }
-    }
-    for (const v of g.vents) {
-      if (dooredPairs.has(`${Math.min(v.a, v.b)}:${Math.max(v.a, v.b)}`)) continue; // the door IS the opening
-      const a = g.node(v.a), b = g.node(v.b);
-      for (const [n, pt] of [[a, v.doorA], [b, v.doorB]]) {
-        const d = pt ?? v.door;
-        if (!d) continue;
-        const [wx, wz] = this.simToWorld(d.x, d.y, n.deck);
-        const key = `${n.deck}:${Math.round(wx)}:${Math.round(wz)}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        // backstop: still skip any grate that lands on a real doorway
-        if (doorPts.some((p) => p.deck === n.deck && Math.hypot(p.x - wx, p.z - wz) < 2.0)) continue;
-        const elev = elevOf(n.deck);
-        const frame = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.05, 0.92), frameMat);
-        frame.position.set(wx, elev + 0.03, wz);
-        this.scene.add(frame);
-        for (let k = -1; k <= 1; k++) {
-          const slat = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.04, 0.16), slatMat);
-          slat.position.set(wx, elev + 0.06, wz + k * 0.26);
-          this.scene.add(slat);
-        }
+    const slatMat = new THREE.MeshStandardMaterial({
+      color: 0x232b34, roughness: 0.55, metalness: 0.8,
+    });
+    const voidMat = new THREE.MeshStandardMaterial({ color: 0x04070b, roughness: 1.0, metalness: 0 });
+    const W = 1.35, H = 0.78; // grille face, floor-level (a crawl opening)
+    const railT = 0.09, railD = 0.07;
+    // shared geometries (slat tilt baked into the geometry so every mesh
+    // carries only a yaw — the static-merge pass reads flat scene children
+    // with world transforms, so NO groups here)
+    const voidGeo = new THREE.BoxGeometry(W - 0.16, H - 0.14, 0.06);
+    const railHGeo = new THREE.BoxGeometry(W, railT, railD);
+    const railVGeo = new THREE.BoxGeometry(railT, H, railD);
+    const slatGeo = new THREE.BoxGeometry(W - 0.24, 0.075, 0.05);
+    slatGeo.rotateX(0.62); // louver tilt — slat faces + black gaps between
+    const SLATS = 5, span = H - 0.14 - railT;
+    for (const n of g.nodes) {
+      const gr = n.grate;
+      if (!gr) continue;
+      // the crawlers' walk-to/emerge point is the STAND spot just off the wall
+      this._addMouth(n.idx, gr.x, gr.y);
+      const [wx, wz] = this.simToWorld(gr.wx, gr.wy, n.deck);
+      const elev = elevOf(n.deck);
+      // face the room: local +z rotates onto the wall's inward normal
+      // (sim x → world x, sim y → world z, so the normal carries over)
+      const yaw = Math.atan2(gr.nx, gr.ny);
+      const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+      const put = (geo, mat, lx, ly, lz) => {
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(wx + lx * cosY + lz * sinY, elev + ly, wz - lx * sinY + lz * cosY);
+        m.rotation.y = yaw;
+        this.scene.add(m);
+      };
+      put(voidGeo, voidMat, 0, H / 2 + 0.06, -0.02);                    // duct void
+      put(railHGeo, frameMat, 0, H + 0.06 - railT / 2, 0.03);           // top rail
+      put(railHGeo, frameMat, 0, 0.06 + railT / 2, 0.03);               // bottom rail
+      put(railVGeo, frameMat, -W / 2 + railT / 2, H / 2 + 0.06, 0.03);  // left rail
+      put(railVGeo, frameMat, W / 2 - railT / 2, H / 2 + 0.06, 0.03);   // right rail
+      for (let k = 0; k < SLATS; k++) {
+        put(slatGeo, slatMat, 0, 0.06 + railT + span * (k + 0.5) / SLATS, 0.035);
       }
     }
   }

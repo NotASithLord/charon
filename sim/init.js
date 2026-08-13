@@ -1,6 +1,7 @@
 // Run initialization (§4) — seeded, in order:
-// 1 load graph, 2 lock doors, 3 block vents, 5 power, 6 populate NPCs,
+// 1 load graph, 2 lock doors, 5 power, 6 populate NPCs,
 // 7 scatter corpses, 8 seed the outbreak.
+// (step 3, vent blocking, was removed with the one-network vent redesign)
 
 import { ShipGraph, humanPass } from './graph.js';
 import { SHIP } from './data/ship.js';
@@ -90,6 +91,7 @@ export function makeAgent(kind, node, graph) {
     postKey: undefined, postX: undefined, postY: undefined, postFace: undefined,
     // flee / panic bookkeeping
     lastFledFrom: undefined, panicUntil: undefined, desperateSince: undefined,
+    steeredTick: undefined, // last tick _spatialSteer/held-spin displaced the body (MOVING flag)
     _fleeLogAt: undefined, doorBalks: undefined, doorHold: undefined,
     _workNodes: undefined, inShaftAmbush: undefined,
   };
@@ -108,19 +110,10 @@ export function initRun(seed, rng, P) {
   repairHumanConnectivity(graph);
   assertDeckConnectivity(graph);
 
-  // --- 3. block vents; never isolate a corpse_cache from every flood route ---
-  for (const v of graph.vents) {
-    if (rng.chance(P.vent.blockedFraction)) v.blocked = true;
-  }
-  for (const cacheIdx of graph.nodesWithRole('corpse_cache')) {
-    const reachable = [...graph.neighbors(cacheIdx, ['std', 'vent'],
-      (l) => (l.kind === 'std' ? !l.locked : !l.blocked))];
-    if (reachable.length === 0) {
-      const vents = graph.adj.vent[cacheIdx];
-      if (vents.length) vents[0].link.blocked = false;
-      else { const es = graph.adj.std[cacheIdx]; if (es.length) es[0].link.locked = false; }
-    }
-  }
+  // --- 3. (gone) vents never collapse any more: the duct network is ONE
+  // ship-wide system with a grate in every room, and it is always open — the
+  // flood's guaranteed topology (user redesign). The corpse-cache
+  // reachability guarantee went with it: every room is duct-reachable.
 
   // --- 5. power ---
   for (const n of graph.nodes) {

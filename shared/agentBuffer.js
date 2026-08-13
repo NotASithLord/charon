@@ -29,6 +29,12 @@ export const FLAG = {
   // only moment there is a jet to draw. Paired with graph.burnX/burnY, which
   // say where that fuel is landing.
   FLAMING: 1 << 15,
+  // PURPOSEFUL MOTION this tick: a committed move leg or an airborne arc.
+  // The motion tracker keys off this, NOT raw position deltas — separation
+  // shuffles and park-drift used to paint dead-still ambushers as moving
+  // blips (user: "motion detector should only detect motion, not standing
+  // flood bodies"), which is exactly the layered bait tactic this enables.
+  MOVING: 1 << 16,
 };
 
 // Anim clip table (§9). Index = animClip in the buffer.
@@ -60,7 +66,9 @@ export class AgentBuffer {
     this.integrity = new Float32Array(capacity);
     this.damage = new Float32Array(capacity);
     this.tint = new Uint32Array(capacity);
-    this.flags = new Uint16Array(capacity);
+    // Uint32, not Uint16: MOVING is bit 16 (a 16-bit store silently truncates
+    // it to zero). Render-side only — the buffer never crosses the wire.
+    this.flags = new Uint32Array(capacity);
   }
 
   beginTick() {

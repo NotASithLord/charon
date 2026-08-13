@@ -5,6 +5,7 @@
 
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
+import { FLAG } from '../shared/agentBuffer.js';
 import { combatMeleeImpulse, hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf, DOOR_W } from './world.js';
 import { Agents3D } from './agents3d.js';
@@ -502,6 +503,7 @@ function toggleFloodHud() {
       + row('bodies free', s.bodies)
       + row('scarcity', s.S.toFixed(2), s.S > 1.05)
       + row('believed alive', s.believedAlive)
+      + row('marines left (its count)', s.marinesLeft ?? '—')
       + row('posture', s.posture, s.posture === 'AGGRESSIVE')
       + row('phase', s.opening ? 'opening' : 'steady')
       + (s.allIn ? '<div style="margin-top:4px;color:#ff8a6a">ALL-IN — every form converging</div>' : '');
@@ -2454,12 +2456,17 @@ function drawTracker(now) {
     if (buf.id[i] === player.agent.id) continue;
     const fbuf = buf.faction[i];
     if (fbuf === 6) continue;
-    // MOVING CONTACTS ONLY (user rule): hold still and you vanish, exactly like
-    // the real motion tracker. Keyed off actual position delta this sim tick,
-    // NOT the anim clip — an agent can be mid-attack or ambushing and dead
-    // still, and those should not paint.
+    // MOVING CONTACTS ONLY (user rule): hold still and you vanish, exactly
+    // like the real motion tracker. TWO gates now: the sim's own
+    // purposeful-motion flag (a committed move leg / an airborne arc — set in
+    // writeBuffer) AND a real position delta. The flag is what finally makes
+    // standing flood bodies tracker-dark: separation shuffles and park-drift
+    // nudge idle bodies a few centimetres a tick, which used to paint an
+    // ambush pack as a wall of blips. A pack lying dead still by the door now
+    // reads as an empty room — until one form darts out to be seen. That
+    // asymmetry IS the layered bait tactic.
     const moved = Math.hypot(buf.posX[i] - buf.prevX[i], buf.posY[i] - buf.prevY[i]);
-    if (buf.animClip[i] === 4 || moved < 0.03) continue; // dead or not moving = invisible
+    if (buf.animClip[i] === 4 || moved < 0.03 || !(buf.flags[i] & FLAG.MOVING)) continue;
     const deck = buf.posZ[i];
     if (Math.abs(deck - player.deck) > 1) continue;
     const [wx, wz] = world.simToWorld(buf.posX[i], buf.posY[i], deck);

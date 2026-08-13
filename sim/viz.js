@@ -220,11 +220,8 @@ export class Viz {
       const a = g.node(s.a), b = g.node(s.b);
       if (this.overlays.conns) this._connLabel((a.x + b.x) / 2, (a.y + b.y) / 2, s.label, '#b39a4a');
     }
-    for (const v of g.vents) {
-      if (!this._visible(v.a) && !this._visible(v.b)) continue;
-      const a = g.node(v.a), b = g.node(v.b);
-      if (this.overlays.conns) this._connLabel((a.x + b.x) / 2, (a.y + b.y) / 2, v.label, v.blocked ? '#39424c' : '#3f8a5e');
-    }
+    // (per-pair vent labels are gone with the pairwise vents — the grate
+    // squares in _vents mark the network's openings)
   }
 
   // strict connection designation drawn at the edge midpoint (user note)
@@ -264,16 +261,25 @@ export class Viz {
     }
   }
 
+  // ONE GRATE PER ROOM (redesign): the duct network has no per-pair runs to
+  // draw — the overlay marks each room's grate: a small slatted square on
+  // the wall the sim placed it on, as far from the doors as possible.
   _vents(g) {
     const { ctx } = this;
-    for (const v of g.vents) {
-      if (!this._visible(v.a) && !this._visible(v.b)) continue;
-      const a = g.node(v.a), b = g.node(v.b);
-      ctx.strokeStyle = v.blocked ? '#2a2f36' : '#2f6b46';
+    for (const n of g.nodes) {
+      if (!this._visible(n.idx) || !n.grate) continue;
+      const gr = n.grate;
+      const r = this._lw(3);
+      ctx.strokeStyle = '#3f8a5e';
       ctx.lineWidth = this._lw(1);
-      ctx.setLineDash([this._lw(2), this._lw(4)]);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.strokeRect(gr.wx - r, gr.wy - r, r * 2, r * 2);
+      // three slat lines inside
+      ctx.beginPath();
+      for (const k of [-1, 0, 1]) {
+        ctx.moveTo(gr.wx - r * 0.6, gr.wy + k * r * 0.55);
+        ctx.lineTo(gr.wx + r * 0.6, gr.wy + k * r * 0.55);
+      }
+      ctx.stroke();
     }
   }
 
