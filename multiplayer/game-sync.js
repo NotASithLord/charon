@@ -299,6 +299,8 @@ export function createGameSync({
       if (packet.world.outcome === null || packet.world.outcome === 'contained' || packet.world.outcome === 'lost') {
         sim.outcome = packet.world.outcome;
       }
+      if (packet.world.convertedTo === null) sim.playerConvertedTo = undefined;
+      else if (Number.isSafeInteger(packet.world.convertedTo)) sim.playerConvertedTo = packet.world.convertedTo;
       if (packet.world.outcomeAt === null) sim.outcomeAt = null;
       else if (Number.isSafeInteger(packet.world.outcomeAt)) sim.outcomeAt = unpack(packet.world.outcomeAt);
       sim.lastStand = !!packet.world.lastStand;
@@ -471,6 +473,10 @@ export function createGameSync({
               // sim.t, which is a checkpoint behind. One number, and both ends
               // read the same run time.
               outcomeAt: sim.outcomeAt === null ? null : pack(sim.outcomeAt),
+              // which form is wearing a player, if any — without this a peer
+              // taken by the flood got the flat KIA card instead of the
+              // "you are riding it now" spectate flow the host shows
+              convertedTo: Number.isSafeInteger(sim.playerConvertedTo) ? sim.playerConvertedTo : null,
               lastStand: sim.lastStand,
               armoryStock: sim.armoryStock,
               armoryLocked: sim.armoryLocked,

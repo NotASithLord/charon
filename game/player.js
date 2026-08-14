@@ -172,7 +172,11 @@ export class Player extends FpsController {
       this._outSince = 0;
       // remember the last spot we KNOW was legal, at ~5 Hz so it is always a
       // little behind us rather than the frame we clipped on
-      if (!this._safeAt || performance.now() - this._safeAt > 200) {
+      // refresh IMMEDIATELY on a deck change, not on the 200 ms timer: for
+      // that window `_safe` still names the deck you left, which is the only
+      // path left to the long-range nearestHullPoint snap (reviewer finding)
+      if (!this._safeAt || this._safe?.[2] !== this.deck
+        || performance.now() - this._safeAt > 200) {
         this._safeAt = performance.now();
         this._safe = [this.x, this.z, this.deck, this.h];
       }

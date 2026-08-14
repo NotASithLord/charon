@@ -5,6 +5,7 @@
 
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { Sim, fmtTime } from '../sim/sim.js';
+import { PARAMS } from '../shared/params.js';
 import { FLAG } from '../shared/agentBuffer.js';
 import { combatMeleeImpulse, hurtFloodForm } from '../sim/combat.js';
 import { World, elevOf, DOOR_W } from './world.js';
@@ -37,6 +38,7 @@ const canvas = document.getElementById('c');
 // `?q=low` / `?q=full` pin the quality ladder (see RUNGS below).
 const QP = new URLSearchParams(location.search);
 const LAUNCH = globalThis.__charonLaunch ?? { mode: 'solo', session: null };
+const BASE_POD_COUNT = PARAMS.flood.initialInfectionForms;
 const HD = QP.has('hd');
 const QTIER = QP.get('q');
 // WEBGPU (user: a discrete GPU behind WebGL can be hostage to the OS's
@@ -248,7 +250,16 @@ const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
 installDeviceLostReload(renderer, {
   label: 'charon', storageKey: 'charon-gl-lost', params: { seed },
 });
-const sim = new Sim(seed);
+// MORE GUNS, MORE FLOOD (user): every player added to a fireteam starts the
+// hive with 5 more infection forms. Solo is untouched at the tuned baseline;
+// a full four-player squad opens against 35. Derived from the SAME validated
+// member list on every client, so both ends build the identical ship — the
+// count feeds initRun's spawn loop, which consumes RNG, so a disagreement
+// here would fork the whole run.
+const coopPlayers = LAUNCH.session ? Math.max(1, new Set(LAUNCH.members || []).size) : 1;
+const sim = new Sim(seed, coopPlayers > 1
+  ? { flood: { initialInfectionForms: BASE_POD_COUNT + 5 * (coopPlayers - 1) } }
+  : null);
 const world = new World(scene, sim.graph, seed);
 const agents = new Agents3D(scene, sim, world);
 // ?nosc=1: disable the shadow-caster curation (A/B lever for the live
