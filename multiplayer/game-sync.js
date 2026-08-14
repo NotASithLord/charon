@@ -305,6 +305,13 @@ export function createGameSync({
     }
     sim._refreshOccupancy?.();
     sim._computeInfluence?.();
+    // ROLL THE MOTION BASELINE. beginTick (pos -> prev) lives at the top of
+    // Sim.tick, and a peer never ticks — so prevX/prevY stayed frozen at
+    // spawn and every contact read as "moved a hundred metres this frame".
+    // The motion tracker ANDs that delta with FLAG.MOVING, so on a peer it
+    // painted every standing body, which is exactly what the flag was added
+    // to stop. One checkpoint to the next is the right baseline here.
+    sim.buffer?.beginTick?.();
     sim.writeBuffer();
   };
 

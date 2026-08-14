@@ -2758,13 +2758,24 @@ function drawTracker(now) {
 // other decks collapse into ONE soft distant rumble, and the flood/human
 // horror layer (chitter, carrier gurgle) does the storytelling.
 let chitterAt = 0, gurgleAt = 0;
+let _gunVoiced = null; // per-room gunfire stamp already voiced (edge trigger)
 function soundSweep(now) {
   const g = sim.graph;
   // same-deck gunfire: nearest 3 firing rooms only, quieter with distance
   const firing = [];
   const offDeck = [];
+  // ONE BANG PER SHOT, EDGE-TRIGGERED (co-op report: "continually makes
+  // clicking noise in the room I shot in after shooting"). This used to ask
+  // "did this room fire within the last tick?" — fine on the host, where the
+  // clock moves 15x a second, but a PEER never advances the sim: its
+  // tickCount only jumps when a host snapshot lands, 5x a second. For the
+  // ~200 ms in between, the same stamp kept satisfying the window and every
+  // frame re-voiced it, so one burst became a stutter of clicks. Voicing the
+  // CHANGE in the stamp instead is cadence-independent and simpler.
+  const voiced = _gunVoiced ??= new Int32Array(g.n).fill(-9999);
   for (let n = 0; n < g.n; n++) {
-    if (sim.tickCount - sim.gunfireTick[n] > 1 || sim.gunfireTick[n] < 5) continue;
+    if (sim.gunfireTick[n] === voiced[n] || sim.gunfireTick[n] < 5) continue;
+    voiced[n] = sim.gunfireTick[n];
     const nd = g.node(n);
     if (nd.deck === player.deck) {
       const [wx, wz] = world.simToWorld(nd.x, nd.y, nd.deck);
@@ -3073,6 +3084,15 @@ function frame(now) {
   }
 
   if (isSimAuthority()) ticker.add(dtReal); // multiplayer peers render host checkpoints; only the elected host advances the world
+  else {
+    // A PEER'S BUFFER ONLY REFRESHES ON A CHECKPOINT (5 Hz), so every
+    // animation clock arrived in 200 ms steps and the crew walked like a
+    // flipbook. Positions were already eased in agents3d; the gait phase was
+    // not. animTime is pure presentation — advance it locally between
+    // checkpoints and let the next one snap it back to the host's truth.
+    const b = sim.buffer;
+    for (let i = 0; i < b.count; i++) b.animTime[i] += dtReal;
+  }
 
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
   agents.update(dtReal);
