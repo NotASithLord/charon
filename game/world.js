@@ -1851,6 +1851,34 @@ export class World {
     return best;
   }
 
+  // INSIDE THE HULL? (co-op report: a player ended up outside the ship and
+  // could see it on the tacnet.) True when this sim point is within some room
+  // on the deck; `pad` is the same 0.6 m forgiveness roomAt() uses at the
+  // seams, so a body standing in a doorway throat never reads as outside.
+  insideHull(deck, sx, sy, pad = 0.6) {
+    for (const n of this.graph.nodes) {
+      if (n.deck !== deck) continue;
+      if (sx > n.x - n.w / 2 - pad && sx < n.x + n.w / 2 + pad
+        && sy > n.y - n.d / 2 - pad && sy < n.y + n.d / 2 + pad) return true;
+    }
+    return false;
+  }
+
+  // Nearest point INSIDE a room on this deck — the recovery target when
+  // something has put a body out in the void. Returns sim coords.
+  nearestHullPoint(deck, sx, sy, inset = 0.8) {
+    let bx = sx, by = sy, bestD = Infinity;
+    for (const n of this.graph.nodes) {
+      if (n.deck !== deck) continue;
+      const hw = Math.max(0.2, n.w / 2 - inset), hd = Math.max(0.2, n.d / 2 - inset);
+      const cx = Math.max(n.x - hw, Math.min(n.x + hw, sx));
+      const cy = Math.max(n.y - hd, Math.min(n.y + hd, sy));
+      const d = (cx - sx) ** 2 + (cy - sy) ** 2;
+      if (d < bestD) { bestD = d; bx = cx; by = cy; }
+    }
+    return [bx, by];
+  }
+
   // the trunk (if any) whose column contains this world position on `deck`
   trunkAt(deck, wx, wz) {
     for (const t of this.trunks) {

@@ -127,6 +127,7 @@ export class Player extends FpsController {
     }
 
     this._stairPortal();
+    this._containToHull();
     this._syncAgent();
     this._cur = this._worldPose();
   }
@@ -158,6 +159,36 @@ export class Player extends FpsController {
       worldY: elevOf(fromDeck) + this.h,
     };
     this.vx = this.vz = this.vy = 0;
+  }
+
+  // HULL BACKSTOP (co-op report: "he went outside of the hull... just turned
+  // around randomly"). Rapier owns wall collision and normally that is the
+  // end of it, but a swept capsule CAN squeeze past a seam — a door collider
+  // toggling as it slides, two wall boxes meeting at a corner, a teleport
+  // that lands a hair outside — and once you are in the void nothing pushes
+  // you back, because out there is no geometry to collide with. Rather than
+  // hunt every seam, refuse the state itself: if the body is outside every
+  // room on its deck, put it back at the nearest point inside. Cheap (one
+  // rect scan per frame, only while walking) and it cannot fire in normal
+  // play — a doorway throat is inside the 0.6 m seam forgiveness.
+  _containToHull() {
+    if (this.climb || this.dead) return;              // a climb owns the body
+    const [sx, sy] = this.world.worldToSim(this.x, this.z, this.deck);
+    if (this.world.insideHull(this.deck, sx, sy)) { this._outSince = 0; return; }
+    // one frame outside can be a legitimate straddle mid-transition; two in a
+    // row is the void
+    if (!this._outSince) { this._outSince = 1; return; }
+    const [rx, ry] = this.world.nearestHullPoint(this.deck, sx, sy);
+    const [wx, wz] = this.world.simToWorld(rx, ry, this.deck);
+    this.x = wx; this.z = wz;
+    this.vx = this.vz = 0;
+    this.h = Math.max(this.h, 0);
+    this.physics?.teleportPlayer(this.x, elevOf(this.deck) + this.h, this.z);
+    this._outSince = 0;
+    if (!this._outLogged) {
+      this._outLogged = true;
+      console.warn('[charon] player was outside the hull — pulled back inside');
+    }
   }
 
   _cancelQueue() {
