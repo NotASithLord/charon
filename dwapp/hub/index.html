@@ -106,12 +106,19 @@
   .mate.talking .mate-pip { animation: matetalk 0.7s ease-in-out infinite; }
   @keyframes matetalk { 50% { box-shadow: 0 0 14px currentColor, inset 0 0 7px currentColor; } }
   /* COMMS ROSTER (user: a peer list bottom right, with a speaking indicator) */
+  /* the roster is the radio panel's FOOTER — floating it bottom-right put it
+     straight on top of the activity log (both own that corner) */
   #comms {
-    position: absolute; right: 14px; bottom: 14px; z-index: 6; pointer-events: none;
-    font: 11px/1.5 ui-monospace, Menlo, monospace; letter-spacing: 0.08em;
-    background: rgba(7,10,14,0.72); border: 1px solid #1c2430; border-radius: 3px;
-    padding: 7px 10px; min-width: 158px; display: none;
+    flex: none; margin-top: 8px; padding-top: 7px; border-top: 1px solid #1c2430;
+    font: 11px/1.5 ui-monospace, Menlo, monospace; letter-spacing: 0.08em; display: none;
   }
+  #commsWarn {
+    display: none; margin-top: 5px; padding: 4px 6px; cursor: pointer;
+    pointer-events: auto; /* the log panel is click-through; this button is not */
+    background: #3a2410; border: 1px solid #8a5a1a; color: #ffcf5a;
+    font-size: 10px; letter-spacing: 0.1em; text-align: center;
+  }
+  #commsWarn.on { display: block; animation: introblink 1.2s steps(1) infinite; }
   #comms h3 { font-size: 9px; color: #6a7686; letter-spacing: 0.2em; margin: 0 0 5px; font-weight: 400; }
   .cm { display: flex; align-items: center; gap: 7px; }
   .cm + .cm { margin-top: 3px; }
@@ -368,7 +375,6 @@ npm run build:dwapp</pre></article>
   <div class="hud" id="crosshair"><span class="ring"></span><span class="dot"></span></div>
   <div id="nameplate"></div>
   <div id="mates"></div>
-  <div id="comms"><h3>FIRETEAM</h3><div id="commsRows"></div></div>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>
@@ -388,6 +394,7 @@ npm run build:dwapp</pre></article>
   <div class="hud" id="logwrap">
     <h2>SHIP ACTIVITY</h2>
     <div id="log"></div>
+    <div id="comms"><h3>FIRETEAM</h3><div id="commsRows"></div><div id="commsWarn"></div></div>
   </div>
   <!-- static markup paints on the FIRST frame, before any module loads —
        the boot (three.js + world build) hides behind it; main.js replaces

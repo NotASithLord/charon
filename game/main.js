@@ -299,7 +299,7 @@ const gameSync = createGameSync({
 });
 const isSimAuthority = () => !LAUNCH.session || gameSync?.isAuthority();
 // mic state, mirrored from the voice stack for the comms roster
-let voiceMuted = false, voiceActive = false;
+let voiceMuted = false, voiceActive = false, voiceBlocked = false;
 if (LAUNCH.session) {
   const networkHud = document.getElementById('networkHud');
   const networkState = document.getElementById('networkState');
@@ -315,6 +315,16 @@ if (LAUNCH.session) {
       : status.playbackBlocked ? 'ENABLE AUDIO' : status.muted ? 'MIC MUTED' : 'MIC LIVE';
     voiceActive = !!status?.active;
     voiceMuted = !!status?.muted;
+    // "HE CAN'T HEAR ME BUT I CAN HEAR HIM" is almost always this: Chrome
+    // blocked the remote audio element from playing until the tab gets a
+    // gesture, so one end goes deaf while its own mic keeps transmitting
+    // fine. It was only ever surfaced as small text on the mic button.
+    voiceBlocked = !!status?.playbackBlocked;
+    const warn = el('commsWarn');
+    if (warn) {
+      warn.className = voiceBlocked ? 'on' : '';
+      warn.textContent = voiceBlocked ? '🔇 AUDIO BLOCKED — CLICK TO HEAR YOUR TEAM' : '';
+    }
     // only meter our own mic once the player has actually turned voice on
     if (voiceActive) startVoiceMeter();
     if (!voiceActive) player.talking = false;
@@ -323,6 +333,15 @@ if (LAUNCH.session) {
   LAUNCH.session.on('voice', updateVoice);
   updateNetwork();
   LAUNCH.session.voiceStatus().then(updateVoice).catch(() => updateVoice(null));
+  // ...and heal it without the player having to understand any of that: the
+  // next click or keypress anywhere resumes playback.
+  const tryResumeVoice = () => {
+    if (!voiceBlocked) return;
+    LAUNCH.session.resumeVoicePlayback().then(updateVoice).catch(() => {});
+  };
+  window.addEventListener('pointerdown', tryResumeVoice, true);
+  window.addEventListener('keydown', tryResumeVoice, true);
+  el('commsWarn')?.addEventListener('click', tryResumeVoice);
   gameVoice.addEventListener('click', async () => {
     gameVoice.disabled = true;
     try {

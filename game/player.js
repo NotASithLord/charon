@@ -97,7 +97,15 @@ export class Player extends FpsController {
       const trunk = this.world.trunkAt(this.deck, this.x, this.z);
       // QUEUED: a busy ladder puts you in line; go the moment the rungs clear.
       if (this.queuedTrunk) {
-        if (trunk !== this.queuedTrunk || this.pinned || this.dead) this._cancelQueue();
+        // A QUEUED CLIMB EXPIRES (user: "just randomly teleported out"). You
+        // press L on a ladder an NPC is already on, nothing happens, you go
+        // back to fighting — and seconds later, still standing on the hatch,
+        // the rungs clear and it rides you to another deck unprompted. The
+        // queue now only holds for a couple of seconds: past that, press L
+        // again and mean it.
+        this._queueAt ??= performance.now();
+        if (trunk !== this.queuedTrunk || this.pinned || this.dead
+          || performance.now() - this._queueAt > 2200) this._cancelQueue();
         else if (!this.sim.vertBusy(this.queuedTrunk.edge, this.agent.id)) {
           const q = this.queuedTrunk;
           this._cancelQueue();
@@ -132,6 +140,7 @@ export class Player extends FpsController {
     if (link && this.sim.vertBusy(link, this.agent.id)) {
       link.reservedBy = this.agent.id;
       this.queuedTrunk = trunk;
+      this._queueAt = performance.now();
       return;
     }
     if (link && link.reservedBy === this.agent.id) link.reservedBy = undefined;
@@ -155,6 +164,7 @@ export class Player extends FpsController {
     const e = this.queuedTrunk?.edge;
     if (e && e.reservedBy === this.agent.id) e.reservedBy = undefined;
     this.queuedTrunk = null;
+    this._queueAt = null;
   }
 
   // GRAND STAIRWELL: entering from the corridor is a normal same-deck doorway.
