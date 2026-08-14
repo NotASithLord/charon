@@ -2340,6 +2340,26 @@ const fragRay = new THREE.Raycaster();
 const _fragMove = new THREE.Vector3();
 const _fragNormal = new THREE.Vector3();
 const _fragVelocity = new THREE.Vector3();
+// NPC GRENADES (marines carry two). The sim owns the throw, the fuse and the
+// damage; all the renderer does is give the detonation the same light, shake,
+// bang and ragdoll re-fling the player's own frag gets — otherwise a marine's
+// frag would kill a pack in total silence.
+function drainNpcBlasts() {
+  const q = sim.blastFx;
+  if (!q || !q.length) return;
+  for (const b of q) {
+    const [wx, wz] = world.simToWorld(b.x, b.y, b.deck);
+    agents.noteExplosion(b.deck, wx, wz, b.r);
+    if (Math.abs(b.deck - player.deck) <= 1) {
+      boomLight.position.set(wx, elevOf(b.deck) + 1.2, wz);
+      boomLight.intensity = 60;
+      shake = Math.min(1, shake + 1.0 / (1 + Math.hypot(wx - player.x, wz - player.z) / 6));
+      audio.play('boom', { x: wx, z: wz }, 1.1);
+    }
+  }
+  q.length = 0;
+}
+
 function stepFrags(dt) {
   for (let i = liveFrags.length - 1; i >= 0; i--) {
     const f = liveFrags[i];
@@ -2826,6 +2846,7 @@ function frame(now) {
   flamerMesh.userData.setPilot?.(flamer.live ? 1 : (hasFlamer ? 0.10 : 0));
   if (fragPressed) { throwFrag(); fragPressed = false; el('frags').textContent = `${frags} FRAG`; }
   stepFrags(dtReal);
+  drainNpcBlasts();
   boomLight.intensity *= Math.exp(-7 * dtReal);
   muzzleFlash.intensity *= Math.exp(-14 * dtReal);
   wallSpark.intensity *= Math.exp(-10 * dtReal);

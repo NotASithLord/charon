@@ -111,7 +111,12 @@ function updateCivilian(sim, a, dt) {
       // Flood (or a fresh panic bolts them, handled above). No idle wandering,
       // and NO re-bolting from a hiding spot on stale panic.
       if (threat > 0) {
-        a.state = STATE.ALERT; a.alertTimer = floodHere ? 0 : 0.3;
+        // ALWAYS RUN (user rule): an unarmed human that SEES the Flood turns
+        // and runs, full stop — no dwell, no weighing whether the next room
+        // is meaningfully safer. The old 0.3 s alert beat plus fleeStep's
+        // "only move if it improves things" gate had them standing in a
+        // doorway watching a combat form walk at them.
+        a.state = STATE.ALERT; a.alertTimer = 0;
         if (sim.rng.chance(floodHere ? 0.9 : 0.4)) { a.panicked = true; a.panicUntil = sim.t + 8; }
         // point-blank contact you SCREAM (local noise), you don't calmly get
         // a coherent call out; a doorway sighting still radios normally
@@ -212,12 +217,9 @@ function fleeStep(sim, a) {
     const score = sim.influence.floodStr[to] * 4 + sim.rng.range(0, 0.3);
     if (score < bestScore) { bestScore = score; best = to; }
   }
-  // the Flood isn't IN this room: only run if the move genuinely improves
-  // things, otherwise hide right here
-  if (!floodHere) {
-    const here = sim.influence.floodStr[a.node] * 4;
-    if (bestScore >= here - 0.4) return null;
-  }
+  // (the old "only run if it improves things" gate is gone — user rule: they
+  // always run the other way. lastFledFrom already stops two-room laps, and
+  // FLEE still ends in HIDE once nothing is visible.)
   return best;
 }
 
@@ -230,6 +232,28 @@ function nearestRoom(sim, from) {
   return cur;
 }
 
+// how many Flood BODIES share this room (user talks in counts — "one or
+// two" — not the weighted strength the hive reasons with), and how close the
+// nearest one physically is.
+function floodFormsIn(sim, node) {
+  let n = 0;
+  for (const o of sim.occupants(node)) {
+    if (o.dead || o.hp <= 0 || o.downed) continue;
+    if (o.faction === FACTION.INFECTION || o.faction === FACTION.COMBAT || o.faction === FACTION.CARRIER) n++;
+  }
+  return n;
+}
+function nearestFloodDist(sim, a) {
+  let best = Infinity;
+  for (const o of sim.occupants(a.pnode ?? a.node)) {
+    if (o.dead || o.hp <= 0 || o.downed) continue;
+    if (o.faction !== FACTION.INFECTION && o.faction !== FACTION.COMBAT && o.faction !== FACTION.CARRIER) continue;
+    const d = Math.hypot(o.x - a.x, o.y - a.y);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
 // --- armed humans (§5.2) ---
 function updateArmed(sim, a, dt) {
   const P = sim.P;
@@ -238,27 +262,79 @@ function updateArmed(sim, a, dt) {
   const cornered = fleeStep(sim, a) === -1 && threat > 0;
 
   if (a.state === STATE.FIGHT) {
-    if (threat === 0) a.state = a.stayPut ? STATE.IDLE : STATE.FLEE;
-    // stay-put officers hold their post and fight to the end; they never rout
-    else if (!a.stayPut && threatHere > P.combat.armedBraveryStrength && !cornered) a.state = STATE.FLEE;
+    if (threat === 0) { a.givingGround = false; a.state = a.stayPut ? STATE.IDLE : STATE.FLEE; return; }
+    // RETREATING FIRE (user rule: "armed ones run backwards while shooting").
+    // A crewman with a sidearm does not turn his back on the Flood and he does
+    // not stand still either — he walks backwards putting rounds into it.
+    // Officers on a post hold their ground and never give it.
+    a.givingGround = !a.stayPut;
+    if (a.givingGround && !cornered && nearestFloodDist(sim, a) < P.morale.breakContactM) {
+      // backed into claw range with room behind him: break contact through
+      // the nearest safe door rather than die swinging a pistol
+      const next = fleeStep(sim, a);
+      if (next !== null && next !== -1) {
+        sim.setPath(a, [next]); a.state = STATE.MOVE;
+        a.givingGround = false; a.lastFledFrom = a.node;
+      }
+    }
     return; // combat resolution handles the shooting
   }
   if (threat > 0) {
     maybeDistressCall(sim, a, P.radio.civilianCallReliability * 1.5);
-    // armed officers holding a post fight anything they see; mobile armed crew
-    // fight only when cornered or the visible Flood looks weak (§5.2)
-    if (a.stayPut || cornered || threatHere <= P.combat.armedBraveryStrength) {
-      // stop and shoot WHERE YOU STAND (user note: real space logic) — no
-      // finishing the stroll to the room's center first
-      a.state = STATE.FIGHT; a.path = []; a.move = null;
-      return;
-    }
+    // an armed crewman ALWAYS answers with his weapon — he just answers it
+    // walking backwards (above). Only the helpless-unarmed path below runs.
+    a.state = STATE.FIGHT; a.path = []; a.move = null;
+    a.givingGround = !a.stayPut;
+    return;
   }
-  updateCivilian(sim, a, dt); // otherwise flees like a civilian
+  a.givingGround = false;
+  updateCivilian(sim, a, dt); // nothing in sight: behave like anyone else
+}
+
+// MARINE FRAGS (user: two each, thrown occasionally). A marine lobs one at a
+// CLUSTER he can see — never at a single form, never at his own feet, never
+// where a friendly is standing. The throw is a sim event with a real fuse;
+// sim._grenadeTick detonates it through the same explodeAt the player's frag
+// uses, so the blast damages Flood, crew and corpses by the same rules.
+function maybeThrowFrag(sim, a, dt) {
+  const P = sim.P;
+  if (a.frags <= 0 || a.state === STATE.DEAD || a.hp <= 0) return;
+  if (sim.t < (a.nextFragAt ?? 0)) return;
+  const G = P.grenade;
+  let best = -1, bestN = G.minTargets - 1, bx = 0, by = 0;
+  for (const n of sim.visibleNodes(a.pnode ?? a.node)) {
+    let cnt = 0, sx = 0, sy = 0;
+    for (const o of sim.occupants(n)) {
+      if (o.dead || o.hp <= 0 || o.downed) continue;
+      if (o.faction !== FACTION.INFECTION && o.faction !== FACTION.COMBAT && o.faction !== FACTION.CARRIER) continue;
+      cnt++; sx += o.x; sy += o.y;
+    }
+    if (cnt <= bestN) continue;
+    const cx = sx / cnt, cy = sy / cnt;
+    if (Math.hypot(cx - a.x, cy - a.y) > G.rangeM) continue;
+    bestN = cnt; best = n; bx = cx; by = cy;
+  }
+  if (best === -1) return;
+  // never frag yourself or a squadmate: the blast point must clear every
+  // living human by minSafeM (the thrower included)
+  for (const o of sim.agents) {
+    if (o.dead || o.hp <= 0) continue;
+    if (o.faction !== FACTION.CIVILIAN && o.faction !== FACTION.ARMED && o.faction !== FACTION.MARINE) continue;
+    if (o.deck !== sim.graph.node(best).deck && o.id !== a.id) continue;
+    if (Math.hypot(o.x - bx, o.y - by) < G.minSafeM) return;
+  }
+  if (!sim.rng.chance(G.chancePerSec * dt)) return;
+  a.frags--;
+  a.nextFragAt = sim.t + G.cooldownSec;
+  (sim.grenades ??= []).push({
+    at: sim.t + G.fuseSec, deck: sim.graph.node(best).deck, x: bx, y: by, by: a.id,
+  });
+  sim.log('combat', `${a.callsign ?? 'a marine'} throws a frag into ${sim.graph.node(best).name}`, best, bx, by);
 }
 
 // --- marines (§5.3) ---
 function updateMarineTick(sim, a, dt) {
+  const P = sim.P;
   // command-deck garrison: a permanent detail that never leaves the bridge/
   // CIC (user note). It fights anything that reaches it but never sweeps,
   // answers calls, or takes orders — a fixed strongpoint.
@@ -282,12 +358,28 @@ function updateMarineTick(sim, a, dt) {
   if (!squad || squad.broken) { updateArmed(sim, a, dt); return; }
 
   const threat = floodThreatVisible(sim, a);
-  if (sim.floodStrengthAt(a.pnode ?? a.node) > 0) {
+  maybeThrowFrag(sim, a, dt);
+  const pn = a.pnode ?? a.node;
+  if (sim.floodStrengthAt(pn) > 0) {
     // stand and fight ON CONTACT, where you physically are — a marine does
     // not keep walking to the middle of the hangar with a form on the deck
     a.state = STATE.FIGHT; a.path = []; a.move = null;
+    // HOLD OR WITHDRAW (user rule): one or two forms is a firefight a marine
+    // wins standing. A real pack is not — he keeps shooting and gives ground,
+    // and once they are in his face with room behind him he breaks for the
+    // next compartment and re-forms the line there.
+    const forms = floodFormsIn(sim, pn);
+    a.givingGround = forms > P.morale.marineHoldForms;
+    if (a.givingGround && nearestFloodDist(sim, a) < P.morale.breakContactM) {
+      const next = fleeStep(sim, a);
+      if (next !== null && next !== -1) {
+        sim.setPath(a, [next]); a.state = STATE.MOVE;
+        a.givingGround = false; a.lastFledFrom = a.node;
+      }
+    }
     return;
   }
+  a.givingGround = false;
   if (a.state === STATE.FIGHT) a.state = STATE.MOVE;
   // a marine standing in a clear room has swept it — timestamp it so the
   // squad's sweep planner expands into unswept ground instead of doubling back

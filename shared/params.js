@@ -130,6 +130,29 @@ export const PARAMS = {
     reserveForms: 8,       // only trade forms for marines while this pool (or a carrier) remains
     escortPer: 3,          // 1 combat-form escort per ~3 infection forms in a pack
   },
+  // HOW HUMANS GIVE GROUND (user rules): unarmed crew always run the other
+  // way; armed crew back away firing; marines hold against one or two forms
+  // and fight a withdrawal against a real pack.
+  morale: {
+    marineHoldForms: 2,    // stand your ground at this many forms or fewer
+    backpedalMps: 1.0,     // retreating fire is a walk backwards, not a sprint
+    giveGroundM: 7.0,      // standoff a withdrawing shooter tries to keep
+    breakContactM: 2.9,    // backed into claw range with nowhere left: break for the door
+  },
+  // MARINE FRAGS (user: two each, thrown occasionally). Deliberately NOT the
+  // player's frag: an NPC lobs it at a CLUSTER it can see, never at its own
+  // feet, and never where a friendly is standing.
+  grenade: {
+    perMarine: 2,
+    minTargets: 3,         // not worth a frag for one form
+    rangeM: 20,
+    minSafeM: 6.0,         // never throw closer than this to yourself or a friendly
+    cooldownSec: 14,       // per marine
+    chancePerSec: 0.55,    // "occasionally", once the shot is actually there
+    fuseSec: 1.5,
+    damage: 120,
+    radiusM: 6.5,
+  },
   lastStand: {
     marineFraction: 0.3,   // when squad marines drop below this of start, fall back
     hearChance: 0.65,      // per-survivor roll to hear the fallback call

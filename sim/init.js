@@ -92,6 +92,8 @@ export function makeAgent(kind, node, graph) {
     // flee / panic bookkeeping
     lastFledFrom: undefined, panicUntil: undefined, desperateSince: undefined,
     steeredTick: undefined, // last tick _spatialSteer/held-spin displaced the body (MOVING flag)
+    givingGround: false,    // shooter backing away while it fires (morale)
+    frags: 0, nextFragAt: undefined, // marine grenades
     transformingUntil: undefined, // combat form born from a corpse: rooted + thrashing until this sim second
     _fleeLogAt: undefined, doorBalks: undefined, doorHold: undefined,
     _workNodes: undefined, inShaftAmbush: undefined,
@@ -185,6 +187,7 @@ export function initRun(seed, rng, P) {
         const a = makeAgent(FACTION.MARINE, node, graph);
         a.hp = a.maxHp = P.combat.marine.hp;
         a.hasRadio = rng.chance(P.crew.radio.marine);
+        a.frags = P.grenade.perMarine;
         a.squad = si;
         scatterInRoom(a, graph.node(node), rng); // spread within the post, not stacked on the center
         squad.members.push(a.id);
@@ -218,6 +221,7 @@ export function initRun(seed, rng, P) {
       const a = makeAgent(FACTION.MARINE, armoryIdx, graph);
       a.hp = a.maxHp = P.armory.odstHp;
       a.hasRadio = true;
+      a.frags = P.grenade.perMarine;
       a.squad = squad.id;
       a.odst = true;
       scatterInRoom(a, graph.node(armoryIdx), rng);
@@ -241,6 +245,7 @@ export function initRun(seed, rng, P) {
       const a = makeAgent(FACTION.MARINE, post, graph);
       a.hp = a.maxHp = P.combat.marine.hp;
       a.hasRadio = true;
+      a.frags = P.grenade.perMarine;
       a.squad = -1;
       a.garrison = true;
       agents.push(a);
@@ -274,6 +279,7 @@ export function initRun(seed, rng, P) {
         const a = makeAgent(FACTION.MARINE, node, graph);
         a.hp = a.maxHp = P.combat.marine.hp;
         a.hasRadio = true;
+        a.frags = P.grenade.perMarine;
         a.squad = squad.id;
         squad.members.push(a.id);
         agents.push(a);

@@ -604,6 +604,7 @@ export class Sim {
 
     updateHumansTick(this, dt);
     updateFloodTick(this, dt);
+    this._grenadeTick();
     this._advanceMovement(dt);
     this._separate(dt);
     this._fireAvoid(dt);
@@ -2064,7 +2065,12 @@ export class Sim {
     const dx = tx - hx, dy = ty - hy;
     const td = Math.hypot(dx, dy) || 1;
     const fx = dx / td, fy = dy / td;                        // post -> swarm (facing)
-    const MIN = this.P.combat.meleeRangeM + 1.5;             // ~3.7 m: give ground inside this
+    // a shooter GIVING GROUND keeps a much wider standoff, so the post walks
+    // backwards ahead of the swarm while it keeps firing (user: fire while
+    // falling back). A holding shooter only gives ground at knife range.
+    const MIN = a.givingGround
+      ? this.P.morale.giveGroundM
+      : this.P.combat.meleeRangeM + 1.5;                     // ~3.7 m
     if (td < MIN) { hx -= fx * (MIN - td); hy -= fy * (MIN - td); a.firePost[0] = hx; a.firePost[1] = hy; }
     const px = -fy, py = fx;                                 // firing line runs across this
     const hw = Math.max(0.7, room.w / 2 - 1.0), hd = Math.max(0.7, room.d / 2 - 1.0);
@@ -2086,7 +2092,10 @@ export class Sim {
     const dx = slot[0] - a.x, dy = slot[1] - a.y;
     const d = Math.hypot(dx, dy);
     if (d > 1e-6) {
-      const step = Math.min(d * Math.min(1, dt * 2.2), 4.2 * dt);
+      // backing away is a walk, not a sprint — you cannot run backwards and
+      // aim (a holding shooter still shuffles to its stance at combat speed)
+      const cap = (a.givingGround ? this.P.morale.backpedalMps : 4.2) * dt;
+      const step = Math.min(d * Math.min(1, dt * 2.2), cap);
       a.x += (dx / d) * step;
       a.y += (dy / d) * step;
       a.followSpeed = step / dt;
@@ -2152,6 +2161,23 @@ export class Sim {
         a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x + (dx / d) * push));
         a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y + (dy / d) * push));
       }
+    }
+  }
+
+  // NPC grenades in flight (humans.js maybeThrowFrag). Detonation is the same
+  // explodeAt the player's frag calls, so damage, corpse charring and blame
+  // all follow one set of rules; blastFx is drained by the renderer for the
+  // light, the shake and the ragdoll re-fling.
+  _grenadeTick() {
+    const q = this.grenades;
+    if (!q || !q.length) return;
+    const G = this.P.grenade;
+    for (let i = q.length - 1; i >= 0; i--) {
+      if (this.t < q[i].at) continue;
+      const g = q[i];
+      q.splice(i, 1);
+      this.explodeAt(g.deck, g.x, g.y, G.radiusM, G.damage, g.by);
+      (this.blastFx ??= []).push({ deck: g.deck, x: g.x, y: g.y, r: G.radiusM });
     }
   }
 
