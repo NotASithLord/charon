@@ -320,7 +320,7 @@ if (LAUNCH.session) {
     // gesture, so one end goes deaf while its own mic keeps transmitting
     // fine. It was only ever surfaced as small text on the mic button.
     voiceBlocked = !!status?.playbackBlocked;
-    const warn = el('commsWarn');
+    const warn = document.getElementById('commsWarn'); // direct: the el helper is declared later
     if (warn) {
       warn.className = voiceBlocked ? 'on' : '';
       warn.textContent = voiceBlocked ? '🔇 AUDIO BLOCKED — CLICK TO HEAR YOUR TEAM' : '';
@@ -341,7 +341,7 @@ if (LAUNCH.session) {
   };
   window.addEventListener('pointerdown', tryResumeVoice, true);
   window.addEventListener('keydown', tryResumeVoice, true);
-  el('commsWarn')?.addEventListener('click', tryResumeVoice);
+  document.getElementById('commsWarn')?.addEventListener('click', tryResumeVoice);
   gameVoice.addEventListener('click', async () => {
     gameVoice.disabled = true;
     try {
