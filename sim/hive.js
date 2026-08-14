@@ -429,6 +429,11 @@ export class Hive {
       if (a.task.targetId !== undefined) claimedNow.add(a.task.targetId);
     }
     for (const a of sim.agents) {
+      // a corpse mid-transformation stays claimed with NO task referencing it
+      // (the pod is spent at burrow completion) — the GC must not free it, or
+      // any future !claimed-only selector could pile onto a body that is
+      // already rising (review F6)
+      if (a.risingAt !== undefined) continue;
       if (a.claimed && !claimedNow.has(a.id)) a.claimed = false;
     }
 
@@ -437,7 +442,7 @@ export class Hive {
     const combat = forms.filter((a) => a.faction === FACTION.COMBAT);
     const carriers = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CARRIER && a.hp > 0);
 
-    const bodies = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CORPSE && a.damage < 100);
+    const bodies = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CORPSE && a.damage < 100 && a.risingAt === undefined);
     const I = infection.length;
     const C = combat.length;
     const K = carriers.length;
@@ -650,7 +655,7 @@ export class Hive {
   // sightline, quiet, defensible, ideally sitting on carrier food).
   denCandidates(maxHops = 3) {
     const sim = this.sim, g = sim.graph;
-    const bodies0 = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CORPSE && a.damage < 100);
+    const bodies0 = sim.agents.filter((a) => !a.dead && a.faction === FACTION.CORPSE && a.damage < 100 && a.risingAt === undefined);
     const bodyAt = new Set(bodies0.map((b) => b.node));
     const sweepLOS = new Set(sim.visibleNodes(g.breachNode));
     const out = [];
@@ -1399,7 +1404,7 @@ export class Hive {
     // means every minted form converts within seconds of being born
     const bodyAt = new Float32Array(g.n);
     for (const b of this.sim.agents) {
-      if (b.dead || b.faction !== FACTION.CORPSE || b.damage >= 100) continue;
+      if (b.dead || b.faction !== FACTION.CORPSE || b.damage >= 100 || b.risingAt !== undefined) continue;
       bodyAt[b.node] += 1;
       for (const { to } of g.neighbors(b.node, ['std'], () => true)) bodyAt[to] += 0.3;
     }
@@ -1555,7 +1560,7 @@ export class Hive {
     const sim = this.sim;
     let best = -1, bestD = Infinity;
     for (const b of sim.agents) {
-      if (b.dead || b.faction !== FACTION.CORPSE || b.damage >= 100) continue;
+      if (b.dead || b.faction !== FACTION.CORPSE || b.damage >= 100 || b.risingAt !== undefined) continue;
       if (this.believedHardness[b.node] > 0.15) continue; // pods never near marines
       const d = this.infectionHops(form.node, b.node);
       if (d < bestD) { bestD = d; best = b.node; }

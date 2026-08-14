@@ -35,6 +35,9 @@ export const FLAG = {
   // blips (user: "motion detector should only detect motion, not standing
   // flood bodies"), which is exactly the layered bait tactic this enables.
   MOVING: 1 << 16,
+  // HALO-3 CONVERSION (user): the renderer plays the turn off these two.
+  BURROWING: 1 << 17, // infection form seated on a corpse, digging in
+  THRASHING: 1 << 18, // corpse convulsing — the pod is inside; it rises soon
 };
 
 // Anim clip table (§9). Index = animClip in the buffer.

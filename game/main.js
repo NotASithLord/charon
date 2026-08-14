@@ -2259,6 +2259,23 @@ function flameTick(dt) {
     if (_fto.dot(_fdir) / d < cosLimit) continue;
     sim.hurtHuman(a, burn, player.agent.id); // blamed on you, like any friendly fire
   }
+  // BODIES BURN (user: burning the thrashing corpse kills the thing inside).
+  // Corpses are deliberately NOT shotCandidates — bullets must not stop on
+  // the dead — but the stream chars them: damage 100 is 'permanently out of
+  // the economy', and if a pod is mid-transformation inside one, pushing it
+  // past 100 cancels the rise (floodExec's corpse pass). Double rate, same
+  // as flame vs forms — fire is the anti-conversion tool.
+  for (const a of sim.agents) {
+    if (a.dead || a.faction !== 6 || a.damage >= 100) continue;
+    if (a.deck !== player.deck) continue;
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    _fto.set(wx, elevOf(a.deck) + 0.25, wz).sub(origin);
+    const d = _fto.length();
+    if (d < 0.2 || d > reach) continue;
+    if (_fto.dot(_fdir) / d < cosLimit) continue;
+    a.damage = Math.min(100, a.damage + burn * 2);
+    anyHit = true;
+  }
 
   // the room is burning, and it is burning WHERE THE FUEL LANDED — the far
   // end of the stream, not the room's centre
@@ -2455,7 +2472,11 @@ function drawTracker(now) {
   for (let i = 0; i < buf.count; i++) {
     if (buf.id[i] === player.agent.id) continue;
     const fbuf = buf.faction[i];
-    if (fbuf === 6) continue;
+    // a corpse mid-transformation convulses violently — that IS motion, and
+    // the tracker paints it hostile: a red blip where no one is standing is
+    // the only warning you get before the body finishes turning
+    const thrashing = (buf.flags[i] & FLAG.THRASHING) !== 0;
+    if (fbuf === 6 && !thrashing) continue;
     // MOVING CONTACTS ONLY (user rule): hold still and you vanish, exactly
     // like the real motion tracker. TWO gates now: the sim's own
     // purposeful-motion flag (a committed move leg / an airborne arc — set in
@@ -2466,7 +2487,9 @@ function drawTracker(now) {
     // reads as an empty room — until one form darts out to be seen. That
     // asymmetry IS the layered bait tactic.
     const moved = Math.hypot(buf.posX[i] - buf.prevX[i], buf.posY[i] - buf.prevY[i]);
-    if (buf.animClip[i] === 4 || moved < 0.03 || !(buf.flags[i] & FLAG.MOVING)) continue;
+    // (a thrashing corpse shakes in place — no position delta — so it skips
+    // the delta gate on its flag alone)
+    if (!thrashing && (buf.animClip[i] === 4 || moved < 0.03 || !(buf.flags[i] & FLAG.MOVING))) continue;
     const deck = buf.posZ[i];
     if (Math.abs(deck - player.deck) > 1) continue;
     const [wx, wz] = world.simToWorld(buf.posX[i], buf.posY[i], deck);
@@ -2476,7 +2499,7 @@ function drawTracker(now) {
     // project into tracker space: up = facing, right = your right hand
     const tx = R + ((dx * rightX + dz * rightZ) / RANGE) * 70;
     const ty = R - ((dx * fwdX + dz * fwdZ) / RANGE) * 70;
-    const hostile = fbuf === 3 || fbuf === 4 || fbuf === 5;
+    const hostile = fbuf === 3 || fbuf === 4 || fbuf === 5 || thrashing;
     trk.fillStyle = hostile ? 'rgba(255,72,56,0.95)' : 'rgba(255,214,64,0.95)';
     if (deck === player.deck) {
       trk.beginPath(); trk.arc(tx, ty, 3.4, 0, Math.PI * 2); trk.fill();

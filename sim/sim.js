@@ -2125,7 +2125,12 @@ export class Sim {
     // downed form here, its self-revive schedule is the only way back.
     const anyFlood = this.agents.some((a) => !a.dead &&
       (isActiveFloodForm(a) || a.faction === FACTION.CARRIER ||
-        (a.faction === FACTION.COMBAT && a.downed && a.damage < 100 && a.reviveAt >= 0)));
+        (a.faction === FACTION.COMBAT && a.downed && a.damage < 100 && a.reviveAt >= 0) ||
+        // a corpse mid-transformation IS live flood: the pod is already spent
+        // (removed at burrow completion) and the combat form rises in
+        // thrashSec — declaring "contained" inside that window handed out
+        // victories 3 seconds before a form stood up (review repro)
+        (a.faction === FACTION.CORPSE && a.risingAt !== undefined && a.damage < 100)));
     const anyHuman = this.agents.some((a) => !a.dead && isLivingHuman(a));
     if (!anyFlood) {
       this.outcome = 'contained';
@@ -2174,6 +2179,10 @@ export class Sim {
       // in ambush is tracker-dark however the crowd math nudges it.
       if (a.move || a.leaping || a.steeredTick === this.tickCount
         || (a.state === STATE.GRABBING && a.grabTimer > 0)) flags |= FLAG.MOVING;
+      // HALO-3 conversion phases for the renderer (and the tracker: a
+      // convulsing corpse IS motion — it paints)
+      if (a.faction === FACTION.INFECTION && a.task?.kind === TASK.CONVERT && a.taskProgress > 0) flags |= FLAG.BURROWING;
+      if (a.faction === FACTION.CORPSE && a.risingAt !== undefined) flags |= FLAG.THRASHING | FLAG.MOVING;
       if (a.inShaftAmbush !== undefined) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;

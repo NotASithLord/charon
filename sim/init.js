@@ -92,6 +92,7 @@ export function makeAgent(kind, node, graph) {
     // flee / panic bookkeeping
     lastFledFrom: undefined, panicUntil: undefined, desperateSince: undefined,
     steeredTick: undefined, // last tick _spatialSteer/held-spin displaced the body (MOVING flag)
+    risingAt: undefined,    // corpse only: sim second it stands as a combat form (thrash phase)
     _fleeLogAt: undefined, doorBalks: undefined, doorHold: undefined,
     _workNodes: undefined, inShaftAmbush: undefined,
   };

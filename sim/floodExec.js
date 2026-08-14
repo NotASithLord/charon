@@ -9,6 +9,28 @@ export function updateFloodTick(sim, dt) {
   const hive = sim.hive;
   for (const a of sim.agents) {
     if (a.dead) continue;
+    // HALO-3 TURN, PHASE 2 — THRASH AND RISE (user): a corpse with a pod
+    // inside convulses where it lies (renderer reads FLAG.THRASHING and
+    // beats the ragdoll), then stands as a combat form on that exact spot.
+    // Burning the body past damageMax mid-thrash kills the thing inside —
+    // the husk stays a husk.
+    if (a.faction === FACTION.CORPSE) {
+      if (a.risingAt !== undefined) {
+        if (a.damage >= 100) {
+          a.risingAt = undefined;
+          a.claimed = false;
+          sim.log('convert', `the convulsing corpse in ${sim.graph.node(a.node).name} burns — whatever was inside dies with it`, a.node, a.x, a.y);
+        } else if (sim.t >= a.risingAt) {
+          a.dead = true;
+          a.risingAt = undefined;
+          const cf = spawnCombatForm(sim, a.node, a); // rises where the body thrashed
+          cf.hostArmed = a.wasArmed === true; // the host's weapon comes up with it
+          sim.stats.conversions++; sim.stats.conversionsRound++;
+          sim.log('convert', `a corpse rises as a combat form in ${sim.graph.node(a.node).name}`, a.node, a.x, a.y);
+        }
+      }
+      continue;
+    }
     if (a.faction === FACTION.CARRIER) { updateCarrier(sim, a, dt); continue; }
     if (a.faction !== FACTION.INFECTION && a.faction !== FACTION.COMBAT) continue;
 
@@ -165,7 +187,7 @@ export function updateFloodTick(sim, dt) {
           // own corpse, the 3s conversions all run at once, and every form
           // that can't claim a body flees. One fast wave, then gone. No
           // serial grazing window (that read as "sitting on the crash site").
-          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed);
+          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed && c.risingAt === undefined);
           if (corpse) {
             corpse.claimed = true;
             hive.assign(a, { kind: TASK.CONVERT, corpseId: corpse.id });
@@ -311,28 +333,39 @@ export function updateFloodTick(sim, dt) {
 
       case TASK.CONVERT: {
         const body = sim.byId.get(t.corpseId);
-        if (!body || body.dead || body.damage >= 100) { a.task = null; break; }
+        // a body already mid-transformation is spoken for — this pod moves on
+        if (!body || body.dead || body.damage >= 100 || body.risingAt !== undefined) { a.task = null; break; }
         if (a.node === body.node && !a.move) {
-          // SIT ON THE BODY (user: the form, the corpse, and the combat form
-          // that rises must all be ONE spot). Close the last step ONTO the
-          // corpse; the burrow timer only runs once it's seated, and it stays
-          // clamped there so nothing (parkDrift/separate are excluded for it)
-          // pulls it off. The form rises as a combat form on that exact spot.
+          // RIGHT ON TOP (user: "they need to get right on top of the bodies
+          // to start the turning cycle"). The old approach eased proportionally
+          // — fast at range, glacial up close — then SNAPPED the last 0.35 m,
+          // so the pod visibly started converting from beside the body. Now it
+          // scuttles the whole way at its real speed and nothing starts until
+          // it is within seatRangeM (12 cm — physically astride the corpse).
           const dx = body.x - a.x, dy = body.y - a.y;
-          if (a.taskProgress === 0 && Math.hypot(dx, dy) > 0.35) {
-            a.x += dx * Math.min(1, dt * 5); a.y += dy * Math.min(1, dt * 5);
+          const d = Math.hypot(dx, dy);
+          if (a.taskProgress === 0 && d > sim.P.combat.seatRangeM) {
+            const mps = sim.P.movement.baseMps * sim.P.speed.infection;
+            const step = Math.min(d, mps * dt);
+            a.x += (dx / d) * step; a.y += (dy / d) * step;
             a.heading = Math.atan2(dy, dx); a.animTime += dt;
             break; // still crawling onto the body — not burrowing yet
           }
-          a.x = body.x; a.y = body.y; // seated on the corpse
+          // HALO-3 TURN, PHASE 1 — BURROW (user): seated dead-centre on the
+          // corpse, the pod digs in. It stays a live, shootable body the
+          // whole burrow: kill it here and the corpse is spared. The
+          // renderer reads FLAG.BURROWING and sinks the pod into the chest.
+          a.x = body.x; a.y = body.y;
           a.taskProgress += dt;
-          if (a.taskProgress >= sim.P.combat.corpseConvertSec) {
-            body.dead = true;
-            const cf = spawnCombatForm(sim, a.node, body); // rises where the body lay
-            cf.hostArmed = body.wasArmed === true; // the host's weapon comes up with it
-            sim.stats.conversions++; sim.stats.conversionsRound++;
-            sim.removeAgent(a); // the infection form is spent (§6.6)
-            sim.log('convert', `a corpse rises as a combat form in ${sim.graph.node(a.node).name}`, a.node, body.x, body.y);
+          a.animTime += dt;
+          if (a.taskProgress >= sim.P.combat.burrowSec) {
+            // PHASE 2 — the pod is INSIDE and spent. The corpse takes over:
+            // risingAt arms the thrash (floodExec's corpse pass below), the
+            // claim holds so no second pod piles onto a body already taken.
+            body.risingAt = sim.t + sim.P.combat.thrashSec;
+            body.claimed = true;
+            sim.removeAgent(a);
+            sim.log('convert', `an infection form burrows into a corpse in ${sim.graph.node(body.node).name} — it begins to convulse`, body.node, body.x, body.y);
           }
         } else moveToward(sim, a, body.node, hive.safeInfectionPath.bind(hive));
         break;
@@ -365,10 +398,14 @@ export function updateFloodTick(sim, dt) {
         const target = sim.byId.get(t.targetId);
         if (!target || target.dead || !target.downed || target.damage >= 100) { a.task = null; break; }
         if (a.node === target.node && !a.move) {
-          // sit ON the downed form (same rule as CONVERT) before raising it
+          // sit ON the downed form (same right-on-top rule as CONVERT):
+          // constant-speed scuttle to within seatRangeM, no ease-out snap
           const dx = target.x - a.x, dy = target.y - a.y;
-          if (a.taskProgress === 0 && Math.hypot(dx, dy) > 0.35) {
-            a.x += dx * Math.min(1, dt * 5); a.y += dy * Math.min(1, dt * 5);
+          const d = Math.hypot(dx, dy);
+          if (a.taskProgress === 0 && d > sim.P.combat.seatRangeM) {
+            const mps = sim.P.movement.baseMps * sim.P.speed.infection;
+            const step = Math.min(d, mps * dt);
+            a.x += (dx / d) * step; a.y += (dy / d) * step;
             a.heading = Math.atan2(dy, dx); a.animTime += dt;
             break;
           }

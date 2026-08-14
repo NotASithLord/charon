@@ -708,7 +708,7 @@ export class Viz {
         const body = sim.byId.get(a.task.corpseId);
         if (body && !body.dead) {
           const bp = this.rpos.get(body.id) ?? body;
-          this._progressArc(bp.x, bp.y, a.taskProgress / sim.P.combat.corpseConvertSec, '#51ff6a');
+          this._progressArc(bp.x, bp.y, a.taskProgress / sim.P.combat.burrowSec, '#51ff6a');
         }
       } else if (a.task?.kind === TASK.TRANSFORM && a.taskProgress > 0) {
         this._progressArc(ap.x, ap.y, a.taskProgress / sim.P.carrier.transformSec, '#b15fd9');

@@ -230,7 +230,17 @@ export const PARAMS = {
     infectionGrabSec: 6,       // armed crew/marines: a LIVE host turns slightly
                                // FASTER than a corpse (user rule) — the flesh cooperates
     civilianGrabSec: 7,        // burrowing in takes real seconds now (user note)
-    corpseConvertSec: 7,       // infection form + body -> combat form
+    // HALO-3 CONVERSION (user): the turn is three visible phases, not one
+    // timer. The pod must be RIGHT ON TOP of the body (seatRangeM) before
+    // anything starts; then it BURROWS in — pod visible, digging, still
+    // shootable (kill it and the corpse is spared); then the pod is spent
+    // and the CORPSE takes over — thrashing violently where it lies before
+    // rising as the combat form. Burning the thrashing body past damageMax
+    // kills the thing inside it. burrow+thrash ≈ the old 7 s total once the
+    // crawl-on time is counted.
+    seatRangeM: 0.12,          // "on top" means on top — the old gate was 0.35 m + a snap
+    burrowSec: 2.4,            // pod digging into the corpse (interruptible)
+    thrashSec: 3.2,            // corpse convulsing before it stands
     // POINT-BLANK RISK (user rule): letting an infection form get this close
     // is always a mistake, marine or not — it lunges for the latch
     lungeRiskM: 3.0,
