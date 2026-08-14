@@ -1216,11 +1216,17 @@ function endScreen(title, text, final = true) {
   overlay.classList.remove('hidden');
 }
 
-// VICTORY (user). Clearing the ship should say so, say how fast, and be worth
-// posting. Ranks are Halo's own difficulty names, on the clock:
-//   LEGENDARY under 5:00 · HEROIC under 7:00 · otherwise MISSION ACCOMPLISHED.
-// The time is sim.outcomeAt — frozen at the moment the last form went down,
-// not read afterwards off a clock that is still running.
+// ONE END CARD, WIN OR LOSE (user: "the end screen should always be the
+// same, just different messaging — if you survive you win with a time; if
+// you don't, you at least survived for X"). The same card renders both ways:
+// headline, the big clock, the stats line, the share row. Only the words and
+// the color change.
+//   WIN  — ranks on the clock, Halo's own difficulty names:
+//          LEGENDARY under 5:00 · HEROIC under 7:00 · MISSION ACCOMPLISHED.
+//          Time = sim.outcomeAt, frozen when the last form went down.
+//   LOSS — OVERRUN, and the clock is YOUR time: how long you lasted before
+//          the ship took you (playerFellAt — the moment you were grabbed or
+//          killed, not the later moment your walking corpse was put down).
 const VICTORY_RANKS = [
   { under: 300, name: 'LEGENDARY', color: '#ffcf5a',
     blurb: 'Under five minutes. The ship was never even close to lost.' },
@@ -1229,15 +1235,28 @@ const VICTORY_RANKS = [
   { under: Infinity, name: 'MISSION ACCOMPLISHED', color: '#7fd1a0',
     blurb: 'It took a while, but the Saturn Devouring survives.' },
 ];
+let playerFellAt = null; // sim seconds when the player was taken/killed
 function victoryScreen() {
-  // the frame loop calls this every frame for as long as the outcome stands;
-  // endScreen guards itself, the card below does not (it would rebuild 60x a
-  // second and wipe the "copied to clipboard" note as fast as you could read it)
   if (ended) return;
   const secs = sim.outcomeAt ?? sim.t;
-  const time = fmtTime(secs);
   const rank = VICTORY_RANKS.find((r) => secs < r.under);
   endScreen('OUTBREAK CONTAINED', rank.blurb);
+  resultCard({
+    headline: rank.name, color: rank.color, label: 'FINAL TIME', secs,
+    share: `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${fmtTime(secs)} — ${rank.name}. #HaloCharon`,
+  });
+}
+function defeatScreen(title, text) {
+  if (ended) return;
+  const secs = playerFellAt ?? sim.t;
+  endScreen(title, text);
+  resultCard({
+    headline: 'OVERRUN', color: '#ff6a4d', label: 'YOU SURVIVED', secs,
+    share: `The Flood took the UNSC Saturn Devouring — I survived ${fmtTime(secs)}. #HaloCharon`,
+  });
+}
+function resultCard({ headline, color, label, secs, share }) {
+  const time = fmtTime(secs);
   // the seed rides in from ?seed= / the lobby config, so it is untrusted text
   const escq = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -1246,11 +1265,10 @@ function victoryScreen() {
   card.id = 'victoryCard';
   card.style.cssText = 'margin:18px auto 0;max-width:520px;text-align:center;'
     + 'font:13px/1.7 ui-monospace,Menlo,monospace';
-  const share = `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${time} — ${rank.name}. #HaloCharon`;
   const url = location.origin + location.pathname;
   card.innerHTML =
-    `<div style="font:700 26px/1.2 ui-monospace,Menlo,monospace;letter-spacing:0.14em;color:${rank.color}">${rank.name}</div>`
-    + `<div style="margin-top:10px;color:#8fa8c4;letter-spacing:0.18em;font-size:11px">FINAL TIME</div>`
+    `<div style="font:700 26px/1.2 ui-monospace,Menlo,monospace;letter-spacing:0.14em;color:${color}">${headline}</div>`
+    + `<div style="margin-top:10px;color:#8fa8c4;letter-spacing:0.18em;font-size:11px">${label}</div>`
     + `<div style="font:700 40px/1.1 ui-monospace,Menlo,monospace;color:#e8eef7">${time}</div>`
     + `<div style="margin-top:14px;color:#6a7686">${sim.stats.combatFormsDowned} forms put down · seed ${escq(sim.seed)}</div>`
     + `<div id="shareRow" style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap"></div>`
@@ -3155,11 +3173,13 @@ function frame(now) {
   if (player.dead && ghost) {
     if (!spectateShown) {
       spectateShown = true;
+      playerFellAt ??= sim.t; // your clock stopped when it took you
       endScreen('YOU WERE TAKEN',
         'It is wearing you now. You can see — but it is not you moving. A player taken never seeds a carrier; it fights until it is put down.', false);
     }
   } else if (player.dead) {
-    endScreen(sim.playerConvertedTo ? 'PUT DOWN' : 'KIA',
+    playerFellAt ??= sim.t;
+    defeatScreen(sim.playerConvertedTo ? 'PUT DOWN' : 'KIA',
       sim.playerConvertedTo
         ? 'What was left of you is finally still.'
         : 'The ship fights on without you. The last thing you hear is the hive, singing.');
