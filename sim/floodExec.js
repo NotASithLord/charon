@@ -209,11 +209,26 @@ export function updateFloodTick(sim, dt) {
       // tick the door opens. (The dart runner keeps running its script; the
       // pack it baited for does the killing.)
       const springs = a.task?.kind === TASK.GUARD && a.task.muster !== undefined && preyHere;
+      // UNDER FIRE BREAKS THE HOLD (user: forms standing in a doorway taking
+      // hits). Nothing is worth holding a staged position for while rounds
+      // are landing — a rooting carrier is the one exception, it is committed.
+      const shotAt = sim.tickCount - (a.lastHurtTick ?? -999) < 45;
       const held = !springs && a.task && (a.task.kind === TASK.TRANSFORM
-        || a.task.kind === TASK.DECOY || a.task.kind === TASK.DART
-        || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)
+        || (!shotAt && (a.task.kind === TASK.DECOY || a.task.kind === TASK.DART
+          || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)))
         || (a.task.kind === TASK.ATTACK && a.task.node === a.node));
       if (!held && preyHere) hive.assign(a, { kind: TASK.ATTACK, node: pn });
+      else if (!held && shotAt) {
+        // shot from somewhere it can sense (through a doorway, down a ladder
+        // well, across the stairwell) — go and take the shooter. floodSenses
+        // is the precomputed adjacency, so this costs one lookup on a form
+        // that is actively being hit, not a scan.
+        const src = sim.byId.get(a.lastHurtBy);
+        const sn = src && !src.dead && src.hp > 0 ? (src.pnode ?? src.node) : -1;
+        if (sn >= 0 && sn !== pn && sim.floodSenses(pn).includes(sn)) {
+          hive.assign(a, { kind: TASK.ATTACK, node: sn });
+        }
+      }
     }
 
     const t = a.task;

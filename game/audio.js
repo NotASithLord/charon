@@ -16,8 +16,6 @@ const SAMPLES = {
   // NO SCREAMS (user: "its terrible, just rip it out wholesale"). Both the
   // real takes and the procedural voices are gone, along with every call site
   // — this is not a MUTED entry with the calls left standing.
-  growl: ['growl.wav', 'growl2.wav'],            // combat form moving
-  shriek: ['shriek.wav', 'shriek2.wav'],         // infection form
   // MARINE BARKS: real voice lines, one take each. Deliberately NOT variants —
   // each is spent once per run (see the bark director in main.js).
   bark1: ['bark1.wav'], bark2: ['bark2.wav'], bark3: ['bark3.wav'], bark4: ['bark4.wav'],
@@ -45,7 +43,7 @@ export class GameAudio extends PositionalSynth {
   _note(name, at, far) {
     const c = {
       name, far, t: performance.now(),
-      // how far away it went off, so a wall of `shriek` reads as near or distant
+      // how far away it went off, so a wall of one cue reads as near or distant
       d: at ? Math.hypot(at.x - this.listener.x, at.z - this.listener.z) : 0,
       positional: !!at,
     };
@@ -163,20 +161,6 @@ export class GameAudio extends PositionalSynth {
     this.buffers.radio = mk(0.16, (t) => Math.sin(t * 2 * Math.PI * (t < 0.08 ? 880 : 660)) * 0.35 * Math.exp(-t * 10));
 
     // --- horror layer (user: flood sounds and screams nearby) ---------------
-    // combat form growl: slow granular snarl — pitch wobbles, wet noise on top
-    this.buffers.growl = mk(1.1, (t) => {
-      const f = 46 + Math.sin(t * 2 * Math.PI * 2.1) * 9 + Math.sin(t * 17) * 4;
-      const body = Math.sin(t * 2 * Math.PI * f) * 0.55 + Math.sin(t * 2 * Math.PI * f * 2.02) * 0.25;
-      const wet = rnd() * 0.35 * (Math.sin(t * 2 * Math.PI * 9) > 0.2 ? 1 : 0.3);
-      const env = Math.min(1, t * 6) * Math.exp(-Math.max(0, t - 0.7) * 5);
-      return (body + wet) * env * 0.8;
-    });
-    // charge shriek: rising, tearing scream — the sound of it coming AT you
-    this.buffers.shriek = mk(0.8, (t) => {
-      const f = 320 + t * 1400 + Math.sin(t * 60) * 60;
-      const v = Math.sin(t * 2 * Math.PI * f) * 0.5 + rnd() * 0.45;
-      return v * Math.min(1, t * 18) * Math.exp(-Math.max(0, t - 0.45) * 9);
-    });
     // carrier gurgle: fat bubbling — slow pops through a wet body
     this.buffers.gurgle = mk(1.3, (t) => {
       const pop = Math.sin(t * 2 * Math.PI * (3.1 + Math.sin(t * 5) * 1.2)) > 0.55 ? 1 : 0.25;

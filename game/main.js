@@ -391,7 +391,7 @@ function toggleSoundBoard() {
 // does not take pointer lock, so you can watch it while you play.
 //   J opens it. Rows are newest-first. A cue repeating inside 1.2 s collapses
 // to a xN counter instead of scrolling the interesting things off the top,
-// which matters because a firefight is mostly `shot` and `shriek`.
+// which matters because a firefight is mostly `shot` and `thud`.
 // A debug panel you cannot find is indistinguishable from a key that did not
 // register, and the two have very different fixes. This says which happened.
 function debugToast(msg) {
@@ -1170,11 +1170,27 @@ function introRender() {
     introHint.classList.add('ready');
   }
 }
-const introTimer = setInterval(() => {
-  if (introGone || introDone) { clearInterval(introTimer); return; }
-  introChars += 2;
-  introRender();
-}, 22);
+// TYPED OFF THE FRAME CLOCK, NOT A TIMER (user: "the opening crawl stutters
+// like crazy"). Two separate causes, both gone with the interval:
+//   - a 22 ms setInterval beats against a ~16.7 ms frame, so some frames drew
+//     two characters and some drew one — visible judder even on an idle
+//     machine, before any load;
+//   - the shader prewarm runs behind this screen and blocks the main thread
+//     in bursts, which starved the timer and then fired it several times back
+//     to back — freeze, machine-gun, freeze.
+// Elapsed wall time decides how many characters SHOULD be showing, so a hitch
+// costs one catch-up step instead of a stall, and the reveal is frame-aligned.
+// Same pace as before (2 chars / 22 ms).
+const INTRO_CPS = 91;
+let _introT0 = 0, _introShown = -1;
+function introFrame(now) {
+  if (introGone || introDone) return;
+  if (!_introT0) _introT0 = now;
+  const want = Math.min(INTRO_TOTAL, Math.floor(((now - _introT0) / 1000) * INTRO_CPS));
+  if (want !== _introShown) { _introShown = want; introChars = want; introRender(); }
+  if (!introDone) requestAnimationFrame(introFrame);
+}
+requestAnimationFrame(introFrame);
 function dismissIntro() {
   introGone = true;
   intro.style.display = 'none';
@@ -2581,8 +2597,8 @@ function drawTracker(now) {
 // fight was a wall of overlapping bangs, and adjacent-deck fire was a raw
 // 'thud'. Now: same-deck gunfire is capped at the 3 NEAREST firing rooms,
 // other decks collapse into ONE soft distant rumble, and the flood/human
-// horror layer (growls, shrieks, gurgles) does the storytelling.
-let chitterAt = 0, growlAt = 0, shriekAt = 0, gurgleAt = 0;
+// horror layer (chitter, carrier gurgle) does the storytelling.
+let chitterAt = 0, gurgleAt = 0;
 function soundSweep(now) {
   const g = sim.graph;
   // same-deck gunfire: nearest 3 firing rooms only, quieter with distance
@@ -2613,9 +2629,9 @@ function soundSweep(now) {
   // NO SCREAM CUES (user: "its terrible, just rip it out wholesale"). The sim
   // still tracks screamTick — it is what carries panic between rooms and puts
   // "screams coming from X" on the radio net — but nothing plays a voice for
-  // it any more. The growls, shrieks and gunfire carry the horror instead.
+  // it any more. The chitter and the gunfire carry the horror instead.
   // --- flood proximity (user: flood sounds when they are nearby) ---
-  let nearCombat = null, nearCarrier = null, charging = null;
+  let nearCarrier = null;
   for (const a of sim.agents) {
     if (a.dead || a.deck !== player.deck) continue;
     if (a.faction !== 3 && a.faction !== 4 && a.faction !== 5) continue;
@@ -2623,20 +2639,11 @@ function soundSweep(now) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
     const d = Math.hypot(wx - player.x, wz - player.z);
     if (a.faction === 3 && d < 18 && now - chitterAt > 1600 + Math.random() * 1200) { audio.play('chitter', { x: wx, z: wz }, 0.55); chitterAt = now; }
-    if (a.faction === 4) {
-      if (!nearCombat || d < nearCombat.d) nearCombat = { wx, wz, d };
-      if (a.charging && d < 26 && (!charging || d < charging.d)) charging = { wx, wz, d };
-    }
     if (a.faction === 5 && (!nearCarrier || d < nearCarrier.d)) nearCarrier = { wx, wz, d };
   }
-  if (nearCombat && nearCombat.d < 22 && now - growlAt > 2600 + Math.random() * 2200) {
-    audio.play('growl', { x: nearCombat.wx, z: nearCombat.wz }, 0.9);
-    growlAt = now;
-  }
-  if (charging && now - shriekAt > 1800) { // it's coming — you HEAR it commit
-    audio.play('shriek', { x: charging.wx, z: charging.wz }, 1.0);
-    shriekAt = now;
-  }
+  // NO GROWLS, NO SHRIEKS (user: "remove shrieks and growls wholesale") —
+  // the combat-form tracking that fed them went with them. The chitter, the
+  // carrier gurgle and the gunfire carry the room now.
   if (nearCarrier && nearCarrier.d < 16 && now - gurgleAt > 3200 + Math.random() * 2500) {
     audio.play('gurgle', { x: nearCarrier.wx, z: nearCarrier.wz }, 0.9);
     gurgleAt = now;
@@ -3040,7 +3047,7 @@ function frame(now) {
       dmgAngle = bearing + player.yaw;
       dmgFlash = 1;
       // (the per-hit 'thud' is GONE — user: the constant banging in a brawl
-      // made you mute the game. The damage flash + growls carry the hit.)
+      // made you mute the game. The damage flash carries the hit.)
     } else dmgFlash = 1;
   }
   lastSinceHit = player.sinceHit;

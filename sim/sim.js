@@ -1511,7 +1511,16 @@ export class Sim {
         // through a door OR vent, lock or no lock + the grand stairwell); if
         // prey is there, PATH to it — the graph handles the doorway — and keep
         // after it, instead of dropping to IDLE and drifting back into the room.
-        const hunting = a.state === STATE.FIGHT || a.charging || a.task?.kind === TASK.ATTACK;
+        // BEING SHOT IS BEING HUNTED (user: "I can shoot them through a
+        // doorway and they just stand there taking hits"). The cross-room
+        // pursuit below already existed — it was only ever switched on for a
+        // form that was ALREADY fighting, so anything idle, guarding or
+        // staged soaked fire from the next room without ever looking up.
+        // Taking damage now counts as being in the fight, which is the same
+        // rule the in-room grudge below already used; a doorway or a ladder
+        // hole stops being a place where damage arrives from nowhere.
+        const shotAt = this.tickCount - (a.lastHurtTick ?? -999) < 45;
+        const hunting = a.state === STATE.FIGHT || a.charging || a.task?.kind === TASK.ATTACK || shotAt;
         if (hunting) {
           let pn2 = -1, pd = Infinity;
           for (const n of this.floodSenses(pn)) {
@@ -1519,7 +1528,10 @@ export class Sim {
             for (const h of this._occ[n]) {
               if (h.dead || h.hp <= 0) continue;
               if (h.faction !== FACTION.CIVILIAN && h.faction !== FACTION.ARMED && h.faction !== FACTION.MARINE) continue;
-              const d = Math.hypot(h.x - a.x, h.y - a.y) - (h.id === a.chargeTargetId ? 4 : 0);
+              // whoever is shooting you outranks whatever is merely closer
+              const d = Math.hypot(h.x - a.x, h.y - a.y)
+                - (h.id === a.chargeTargetId ? 4 : 0)
+                - (shotAt && h.id === a.lastHurtBy ? 8 : 0);
               if (d < pd) { pd = d; pn2 = n; }
             }
           }
