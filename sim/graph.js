@@ -261,6 +261,97 @@ export class ShipGraph {
     // mean std-edge length: the hive's ETA guesses are hop-based
     this.avgStdLenM = this.edges.reduce((s, l) => s + l.horizM + l.vertM, 0) / this.edges.length;
     this._placeGrates();
+    this._placeTrunks();
+  }
+
+  // LADDER/LIFT WELLS ARE SIM TRUTH (user: "NPCs traversing ladders should
+  // come right out of those ladder holes exactly"). The well position used to
+  // be picked twice — the renderer scored door clearance in world space while
+  // the sim pinned climbers to a clamped room-centre-line pad — so a body
+  // surfaced meters from the drawn hatch and the renderer had to fudge it.
+  // Now the GRAPH picks each trunk's position once (same clearance scoring,
+  // run in deck-local coordinates, which differ from world space only by the
+  // per-deck band shift) and stores it on the edge as padA/padB (sim coords
+  // per side). The sim climbs through those exact points; the renderer draws
+  // collars, rungs and kiosks AT them; the emergence mouths equal the pads.
+  _placeTrunks() {
+    const bandC = (deck) => {
+      const b = this.deckBands[deck - 1];
+      return (b.y0 + b.y1) / 2; // world.bandCenter — keep identical
+    };
+    // door openings of a room, deck-local
+    const doorPtsL = (roomIdx, deck) => {
+      const pts = [];
+      for (const l of this.edges) {
+        if (l.a !== roomIdx && l.b !== roomIdx) continue;
+        if (this.nodes[l.a].deck !== this.nodes[l.b].deck) continue;
+        const d = (l.a === roomIdx ? l.doorA : l.doorB) ?? l.door;
+        if (d) pts.push([d.x, d.y - bandC(deck)]);
+      }
+      return pts;
+    };
+    const grateL = (n) => n.grate ? [[n.grate.x, n.grate.y - bandC(n.deck)]] : [];
+    const placed = []; // {deck, x, z} deck-local — no two pads on top of each other
+    const avoidPts = (deck) => placed.filter((s) => s.deck === deck).map((s) => [s.x, s.z]);
+    // the renderer's pickSpot, verbatim: N=6 grid over the rect, clearance
+    // from every avoid point (capped at 6 m) minus a mild pull to the
+    // preferred spot; keep-first on ties so the choice is deterministic
+    const pickSpot = (x0, x1, z0, z1, pts, prefX, prefZ, prefW = 0.1) => {
+      let bx = (x0 + x1) / 2, bz = (z0 + z1) / 2, bestScore = -Infinity;
+      const N = 6;
+      for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+        const cx = x0 + (x1 - x0) * i / N, cz = z0 + (z1 - z0) * j / N;
+        let dMin = Infinity;
+        for (const [qx, qz] of pts) dMin = Math.min(dMin, Math.hypot(cx - qx, cz - qz));
+        const score = Math.min(dMin, 6) - Math.hypot(cx - prefX, cz - prefZ) * prefW;
+        if (score > bestScore + 1e-9) { bestScore = score; bx = cx; bz = cz; }
+      }
+      return [bx, bz];
+    };
+    for (const e of this.edges) {
+      const a = this.nodes[e.a], b = this.nodes[e.b];
+      if (a.deck === b.deck) continue;
+      // grand stairwells have their own walkable ramp + waypoints — no trunk
+      if (e.type === 'stairwell') continue;
+      const upper = a.deck < b.deck ? a : b; // smaller deck number = higher up
+      const lower = upper === a ? b : a;
+      const uz = upper.y - bandC(upper.deck), lz = lower.y - bandC(lower.deck);
+      const ox0 = Math.max(upper.x - upper.w / 2, lower.x - lower.w / 2) + 1.1;
+      const ox1 = Math.min(upper.x + upper.w / 2, lower.x + lower.w / 2) - 1.1;
+      const oz0 = Math.max(uz - upper.d / 2, lz - lower.d / 2) + 1.1;
+      const oz1 = Math.min(uz + upper.d / 2, lz + lower.d / 2) - 1.1;
+      if (ox1 - ox0 >= 0.2 && oz1 - oz0 >= 0.2) {
+        // rooms overlap in plan: ONE true vertical well through the deck
+        const [x, z] = pickSpot(ox0, ox1, oz0, oz1,
+          [...doorPtsL(lower.idx, lower.deck), ...doorPtsL(upper.idx, upper.deck),
+            ...avoidPts(lower.deck), ...avoidPts(upper.deck),
+            ...grateL(lower), ...grateL(upper)],
+          (ox0 + ox1) / 2, (oz0 + oz1) / 2);
+        placed.push({ deck: lower.deck, x, z }, { deck: upper.deck, x, z });
+        e.trunkVertical = true;
+        e.padA = { x, y: z + bandC(this.nodes[e.a].deck) };
+        e.padB = { x, y: z + bandC(this.nodes[e.b].deck) };
+      } else {
+        // offset rooms: an enclosed trunk kiosk at each end. Upper first,
+        // then lower — the renderer placed them in that order, and the
+        // avoid-list interplay must stay identical.
+        const mk = (n, other) => {
+          const nz = n.y - bandC(n.deck);
+          const natural = Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x));
+          const [sx, sz] = pickSpot(
+            n.x - n.w / 2 + 1.2, n.x + n.w / 2 - 1.2,
+            nz - n.d / 2 + 1.2, nz + n.d / 2 - 1.2,
+            [...doorPtsL(n.idx, n.deck), ...avoidPts(n.deck), ...grateL(n)],
+            natural, nz, 0.08);
+          placed.push({ deck: n.deck, x: sx, z: sz });
+          return { x: sx, y: sz + bandC(n.deck) };
+        };
+        const pu = mk(upper, lower), pl = mk(lower, upper);
+        e.trunkVertical = false;
+        e.padA = this.nodes[e.a] === upper ? pu : pl;
+        e.padB = this.nodes[e.b] === upper ? pu : pl;
+      }
+    }
   }
 
   // ONE GRATE PER ROOM, AS FAR FROM THE DOORS AS THE WALLS ALLOW (user rule:

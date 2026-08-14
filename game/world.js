@@ -808,34 +808,12 @@ export class World {
   // Offset rooms get an enclosed stairwell trunk at each end instead.
   _buildTrunks() {
     const g = this.graph;
-    // KEEP CLEAR OF THE DOORWAYS (user note): a ladder well parked right in
-    // front of a door makes no sense. Candidate spots are scored by clearance
-    // from every door opening of the rooms the trunk pierces, and the best
-    // clear spot wins (with a mild pull toward the natural position).
-    const doorPts = (roomIdx, deck) => {
-      const pts = [];
-      for (const l of g.edges) {
-        if (l.a !== roomIdx && l.b !== roomIdx) continue;
-        if (g.node(l.a).deck !== g.node(l.b).deck) continue;
-        const d = (l.a === roomIdx ? l.doorA : l.doorB) ?? l.door;
-        if (!d) continue;
-        const [dx, dz] = this.simToWorld(d.x, d.y, deck);
-        pts.push([dx, dz]);
-      }
-      return pts;
-    };
-    const pickSpot = (x0, x1, z0, z1, pts, prefX, prefZ, prefW = 0.1) => {
-      let bx = (x0 + x1) / 2, bz = (z0 + z1) / 2, bestScore = -Infinity;
-      const N = 6;
-      for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
-        const cx = x0 + (x1 - x0) * i / N, cz = z0 + (z1 - z0) * j / N;
-        let dMin = Infinity;
-        for (const [qx, qz] of pts) dMin = Math.min(dMin, Math.hypot(cx - qx, cz - qz));
-        const score = Math.min(dMin, 6) - Math.hypot(cx - prefX, cz - prefZ) * prefW;
-        if (score > bestScore + 1e-9) { bestScore = score; bx = cx; bz = cz; }
-      }
-      return [bx, bz];
-    };
+    // ONE SOURCE OF TRUTH (user: "NPCs traversing ladders should come right
+    // out of those ladder holes exactly"): the graph places every trunk once
+    // (sim/graph.js _placeTrunks — door clearance, pad spacing, grate
+    // avoidance) and the sim pins climbers to those pads. This builder now
+    // just DRAWS at link.padA/padB — it never picks its own spot, so the
+    // drawn hatch and the point a body surfaces at cannot disagree.
     const matLadder = new THREE.MeshStandardMaterial({ color: 0x8a97a8, roughness: 0.5, metalness: 0.7 });
     // SUBTLE MARKERS (user: the glowing color blocks were the last jarring
     // low-res read) — collars are worn steel with only a faint status tint;
@@ -851,38 +829,20 @@ export class World {
       : (this._matCollarLadder ??= new THREE.MeshStandardMaterial({
         color: 0x59626f, roughness: 0.55, metalness: 0.6, emissive: 0x4a3a16, emissiveIntensity: 0.18,
       })));
-    // NO TWO PADS ON TOP OF EACH OTHER (user report: a lift collar and a
-    // ladder collar landed practically overlapping in the same corridor,
-    // because each trunk picked "the clearest centre" independently). Track
-    // every placed pad per deck and feed the existing ones into pickSpot as
-    // points to stay clear of — so a second trunk piercing the same room
-    // slides off to its own spot.
-    const trunkSpots = []; // { deck, x, z }
-    const avoidPts = (deck) => trunkSpots.filter((s) => s.deck === deck).map((s) => [s.x, s.z]);
-    const claimSpot = (deck, x, z) => trunkSpots.push({ deck, x, z });
     for (const e of g.edges) {
       const a = g.node(e.a), b = g.node(e.b);
       if (a.deck === b.deck) continue;
       const upper = a.deck < b.deck ? a : b; // smaller deck number = higher elevation
       const lower = a.deck < b.deck ? b : a;
-      const [uax, uaz] = this.simToWorld(upper.x, upper.y, upper.deck);
-      const [lbx, lbz] = this.simToWorld(lower.x, lower.y, lower.deck);
-      const ox0 = Math.max(uax - upper.w / 2, lbx - lower.w / 2) + 1.1;
-      const ox1 = Math.min(uax + upper.w / 2, lbx + lower.w / 2) - 1.1;
-      const oz0 = Math.max(uaz - upper.d / 2, lbz - lower.d / 2) + 1.1;
-      const oz1 = Math.min(uaz + upper.d / 2, lbz + lower.d / 2) - 1.1;
-      const vertical = ox1 - ox0 >= 0.2 && oz1 - oz0 >= 0.2;
+      const vertical = e.trunkVertical === true;
       const lift = e.type === 'lift';
       // the grand stairwell is a walkable ramp between the room and the deck
       // above (handled by _buildStairRoom on the room itself) — no trunk, so
       // no ladder/queue and no NPC pile-up on a single pad.
-      if (e.type === 'stairwell') continue;
+      if (e.type === 'stairwell' || !e.padA) continue;
       if (vertical) {
-        const [x, z] = pickSpot(ox0, ox1, oz0, oz1,
-          [...doorPts(lower.idx, lower.deck), ...doorPts(upper.idx, upper.deck),
-            ...avoidPts(lower.deck), ...avoidPts(upper.deck)],
-          (ox0 + ox1) / 2, (oz0 + oz1) / 2);
-        claimSpot(lower.deck, x, z); claimSpot(upper.deck, x, z);
+        // both pads are the same world point (one well through the deck)
+        const [x, z] = this.simToWorld(e.padA.x, e.padA.y, a.deck);
         const lowElev = elevOf(lower.deck), highElev = elevOf(upper.deck);
         this.trunks.push({
           vertical: true, kind: e.type, edge: e, x, z,
@@ -944,19 +904,14 @@ export class World {
         }
       } else {
         // enclosed stairwell: a trunk at each end; climbing one delivers you
-        // to the other (a switchback landing you can't see through)
-        const mk = (n, other, deck) => {
-          const [nx, nz] = this.simToWorld(n.x, n.y, n.deck);
-          const [ox2] = this.simToWorld(other.x, other.y, other.deck);
-          const px = Math.max(nx - n.w / 2 + 1.2, Math.min(nx + n.w / 2 - 1.2, ox2));
-          const [sx, sz] = pickSpot(
-            nx - n.w / 2 + 1.2, nx + n.w / 2 - 1.2,
-            nz - n.d / 2 + 1.2, nz + n.d / 2 - 1.2,
-            [...doorPts(n.idx, n.deck), ...avoidPts(n.deck)], px, nz, 0.08);
-          claimSpot(n.deck, sx, sz);
+        // to the other (a switchback landing you can't see through).
+        // Positions come off the edge's graph-placed pads.
+        const mk = (n) => {
+          const pad = n === a ? e.padA : e.padB;
+          const [sx, sz] = this.simToWorld(pad.x, pad.y, n.deck);
           return { x: sx, z: sz, deck: n.deck, node: n.idx };
         };
-        const pu = mk(upper, lower), pl = mk(lower, upper);
+        const pu = mk(upper), pl = mk(lower);
         const rec = {
           vertical: false, kind: e.type, edge: e,
           lowerDeck: lower.deck, upperDeck: upper.deck,

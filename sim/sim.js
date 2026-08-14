@@ -1112,8 +1112,15 @@ export class Sim {
           // VERTICAL TRANSIT (user note: no walking off the map): a body in
           // a lift or on a ladder is AT the trunk, not floating in the void
           // between deck plans. Stand on the origin pad until the handover,
-          // then on the destination pad.
-          const padX = (n, other) => Math.max(n.x - n.w / 2 + 1.2, Math.min(n.x + n.w / 2 - 1.2, other.x));
+          // then on the destination pad. THE PADS ARE THE DRAWN WELLS (user:
+          // "NPCs should come right out of those ladder holes exactly"):
+          // link.padA/padB are the graph-placed trunk positions the renderer
+          // builds its hatches and kiosks at — not a recomputed clamp that
+          // could disagree with the visible hole.
+          const padFrom = (link.a === from.idx ? link.padA : link.padB)
+            ?? { x: Math.max(from.x - from.w / 2 + 1.2, Math.min(from.x + from.w / 2 - 1.2, to.x)), y: from.y };
+          const padTo = (link.a === to.idx ? link.padA : link.padB)
+            ?? { x: Math.max(to.x - to.w / 2 + 1.2, Math.min(to.x + to.w / 2 - 1.2, from.x)), y: to.y };
           const flipT = link.flipT ?? 0.5;
           // the leg = WALK to the pad at real speed (0..appT), ride/climb at
           // the origin pad (appT..handT), then stand on the far pad. appT is
@@ -1123,16 +1130,15 @@ export class Sim {
           const appT = a.move.appT ?? 0.15;
           const handT = appT + (1 - appT) * flipT;
           if (k < appT) {
-            const px = padX(from, to), py = from.y;
-            const sx = a.move.sx ?? px, sy = a.move.sy ?? py;
+            const sx = a.move.sx ?? padFrom.x, sy = a.move.sy ?? padFrom.y;
             const kk = k / appT;
-            a.x = sx + (px - sx) * kk;
-            a.y = sy + (py - sy) * kk;
-            a.heading = Math.atan2(py - sy, px - sx);
+            a.x = sx + (padFrom.x - sx) * kk;
+            a.y = sy + (padFrom.y - sy) * kk;
+            a.heading = Math.atan2(padFrom.y - sy, padFrom.x - sx);
           } else if (k < handT) {
-            a.x = padX(from, to); a.y = from.y;
+            a.x = padFrom.x; a.y = padFrom.y;
           } else {
-            a.x = padX(to, from); a.y = to.y;
+            a.x = padTo.x; a.y = padTo.y;
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
           }
           a.heading = Math.atan2(to.y - from.y, to.x - from.x);
@@ -1347,8 +1353,10 @@ export class Sim {
                 : Math.max(fromN.x - fromN.w / 2 + 1, Math.min(fromN.x + fromN.w / 2 - 1, mouth.x));
               py = fromN === upper ? mouth.y : fromN.y;
             } else {
-              px = Math.max(fromN.x - fromN.w / 2 + 1.2, Math.min(fromN.x + fromN.w / 2 - 1.2, toN.x));
-              py = fromN.y;
+              // walk to the REAL trunk pad (the drawn well), not a clamp guess
+              const pad = (link.a === a.node ? link.padA : link.padB);
+              px = pad ? pad.x : Math.max(fromN.x - fromN.w / 2 + 1.2, Math.min(fromN.x + fromN.w / 2 - 1.2, toN.x));
+              py = pad ? pad.y : fromN.y;
             }
             const appSec = Math.hypot(px - a.x, py - a.y)
               / Math.max(0.5, this.P.movement.baseMps * mult);
