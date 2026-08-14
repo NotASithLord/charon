@@ -298,6 +298,8 @@ const gameSync = createGameSync({
   playerAgents: networkPlayers,
 });
 const isSimAuthority = () => !LAUNCH.session || gameSync?.isAuthority();
+// mic state, mirrored from the voice stack for the comms roster
+let voiceMuted = false, voiceActive = false;
 if (LAUNCH.session) {
   const networkHud = document.getElementById('networkHud');
   const networkState = document.getElementById('networkState');
@@ -311,6 +313,11 @@ if (LAUNCH.session) {
   const updateVoice = (status) => {
     gameVoice.textContent = !status?.active ? 'ENABLE MIC'
       : status.playbackBlocked ? 'ENABLE AUDIO' : status.muted ? 'MIC MUTED' : 'MIC LIVE';
+    voiceActive = !!status?.active;
+    voiceMuted = !!status?.muted;
+    // only meter our own mic once the player has actually turned voice on
+    if (voiceActive) startVoiceMeter();
+    if (!voiceActive) player.talking = false;
   };
   LAUNCH.session.on('roster', updateNetwork);
   LAUNCH.session.on('voice', updateVoice);
@@ -1832,6 +1839,158 @@ let _npAt = 0; // target-selection throttle clock (swarm finding: the full
 // agent scan + no-BVH triangle raycast ran every frame; ~15Hz is invisible
 // with the sticky hysteresis, and the cached target reprojects every frame)
 let _npBest = null;
+// --- CO-OP TEAMMATE MARKERS (user: "it needs to be very obvious who the
+// other human players are, on the map and on the screen"). One marker per
+// remote player, drawn every frame with no occlusion test: through walls,
+// through decks, and clamped to the screen edge as an arrow when they are
+// off-camera or behind you. Colour is assigned by sorted DID, so every client
+// agrees on who is cyan and who is amber, and the tacnet map uses the same
+// table. At most three of these exist (MAX_PLAYERS 4), so the per-frame cost
+// is three projections and a few style writes.
+const MATE_COLORS = ['#4dd2ff', '#ffcf5a', '#b98cff', '#7fd1a0'];
+const mates = [];
+{
+  const layer = el('mates');
+  const dids = [...new Set(LAUNCH.members || [])].sort();
+  dids.forEach((did, i) => {
+    if (!LAUNCH.session || did === LAUNCH.session.did) return;
+    const agent = networkPlayers.get(did);
+    if (!agent || !layer) return;
+    const node = document.createElement('div');
+    node.className = 'mate';
+    node.innerHTML = '<div class="mate-pip"></div><div class="mate-name"></div>'
+      + '<div class="mate-sub"></div><div class="mate-bar"><i></i></div>';
+    node.style.color = MATE_COLORS[i % MATE_COLORS.length];
+    layer.appendChild(node);
+    mates.push({
+      did, agent, node,
+      nameEl: node.querySelector('.mate-name'),
+      subEl: node.querySelector('.mate-sub'),
+      barEl: node.querySelector('.mate-bar > i'),
+      color: MATE_COLORS[i % MATE_COLORS.length],
+      label: `P${i + 1}`,
+    });
+  });
+}
+// THE COMMS ROSTER, bottom right. Rebuilt once (rows are stable for the
+// session) and then only its text/classes are touched, at 8 Hz — a roster is
+// not worth a per-frame relayout.
+const commsRows = [];
+{
+  const box = el('comms'), rows = el('commsRows');
+  if (box && rows && LAUNCH.session && mates.length) {
+    box.style.display = 'block';
+    const self = document.createElement('div');
+    self.className = 'cm';
+    self.style.color = '#f2f6ff';
+    self.innerHTML = '<i class="cm-dot"></i><span class="cm-name">YOU</span><span class="cm-mic"></span>';
+    rows.appendChild(self);
+    commsRows.push({ self: true, node: self, micEl: self.querySelector('.cm-mic') });
+    for (const m of mates) {
+      const node = document.createElement('div');
+      node.className = 'cm';
+      node.style.color = m.color;
+      node.innerHTML = '<i class="cm-dot"></i><span class="cm-name"></span><span class="cm-mic"></span>';
+      rows.appendChild(node);
+      commsRows.push({
+        did: m.did, mate: m, node,
+        nameEl: node.querySelector('.cm-name'), micEl: node.querySelector('.cm-mic'),
+      });
+    }
+  }
+}
+// LOCAL VOICE ACTIVITY. The voice stack keeps its MediaStream on the trusted
+// side and exposes no levels, so the speaking bit is measured here off our own
+// capture and broadcast on the pose packet. Entirely best-effort: if the mic
+// is unavailable or blocked, `talking` simply never goes true and the roster
+// falls back to showing MIC / MUTED instead of SPEAKING.
+let _vadData = null, _vadAnalyser = null;
+function startVoiceMeter() {
+  if (_vadAnalyser || !navigator.mediaDevices?.getUserMedia) return;
+  navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    audio.ensure?.();
+    const ctx = audio.ctx ?? new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 512; an.smoothingTimeConstant = 0.5;
+    src.connect(an);
+    _vadAnalyser = an;
+    _vadData = new Uint8Array(an.frequencyBinCount);
+  }).catch(() => { _vadAnalyser = null; });
+}
+let _vadAt = 0;
+function updateVoiceMeter(now) {
+  if (!_vadAnalyser || now - _vadAt < 60) return;
+  _vadAt = now;
+  _vadAnalyser.getByteTimeDomainData(_vadData);
+  let peak = 0;
+  for (let i = 0; i < _vadData.length; i += 4) peak = Math.max(peak, Math.abs(_vadData[i] - 128));
+  player.talking = !voiceMuted && peak > 6; // ~5% of full scale: speech, not room tone
+}
+let _commsAt = 0;
+function updateComms(now) {
+  if (!commsRows.length || now - _commsAt < 125) return;
+  _commsAt = now;
+  for (const row of commsRows) {
+    if (row.self) {
+      row.node.className = player.talking ? 'cm talking' : 'cm';
+      row.micEl.textContent = !_vadAnalyser ? '' : voiceMuted ? 'MUTED' : player.talking ? 'SPEAKING' : 'MIC';
+      continue;
+    }
+    const talking = !!gameSync?.peerTalking(row.did);
+    const live = !!gameSync?.peerLive(row.did);
+    const dead = row.mate.agent?.dead;
+    row.node.className = `cm${talking ? ' talking' : ''}${dead || !live ? ' gone' : ''}`;
+    row.nameEl.textContent = (gameSync?.peerName(row.did) || row.mate.label).toUpperCase();
+    row.micEl.textContent = dead ? 'DOWN' : !live ? '···' : talking ? 'SPEAKING' : '';
+  }
+}
+const _mateVec = new THREE.Vector3();
+function updateMates() {
+  if (!mates.length) return;
+  const EDGE = 42;
+  for (const m of mates) {
+    const a = m.agent;
+    if (!a || a.dead) { m.node.style.display = 'none'; continue; }
+    const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
+    const base = world.groundHeightAt(a.deck, wx, wz);
+    _mateVec.set(wx, base + 2.1, wz).project(camera);
+    const behind = _mateVec.z > 1;
+    let sx = (_mateVec.x * 0.5 + 0.5) * canvasW;
+    let sy = (-_mateVec.y * 0.5 + 0.5) * canvasH;
+    // a point behind the camera projects MIRRORED — flip it before clamping
+    // or the edge arrow points at the opposite wall
+    if (behind) { sx = canvasW - sx; sy = canvasH - sy; }
+    const outside = behind || sx < EDGE || sx > canvasW - EDGE || sy < EDGE || sy > canvasH - EDGE;
+    let rot = 0;
+    if (outside) {
+      const cx = canvasW / 2, cy = canvasH / 2;
+      const dx = sx - cx, dy = sy - cy;
+      const scale = Math.min(
+        (canvasW / 2 - EDGE) / Math.max(1e-3, Math.abs(dx)),
+        (canvasH / 2 - EDGE) / Math.max(1e-3, Math.abs(dy)),
+      );
+      sx = cx + dx * scale; sy = cy + dy * scale;
+      rot = Math.atan2(dy, dx) - Math.PI / 2; // the pip is a triangle pointing up
+    }
+    const dist = Math.hypot(wx - player.x, wz - player.z);
+    const dd = a.deck - player.deck;
+    m.node.style.display = 'block';
+    m.node.className = outside ? 'mate off' : 'mate';
+    m.node.style.left = `${Math.round(sx)}px`;
+    m.node.style.top = `${Math.round(sy)}px`;
+    m.node.style.transform = `translate(-50%, -50%) rotate(${outside ? rot : 0}rad)`;
+    m.nameEl.textContent = (gameSync?.peerName(m.did) || m.label).toUpperCase();
+    m.subEl.textContent = dd === 0 ? `${Math.round(dist)}m`
+      : `${Math.round(dist)}m ${dd > 0 ? '▼' : '▲'}${Math.abs(dd)}`;
+    m.barEl.style.width = `${Math.max(0, Math.min(1, a.hp / (a.maxHp || 1))) * 100}%`;
+    // the text must stay upright even when the arrow is rotated
+    const upright = outside ? `rotate(${-rot}rad)` : '';
+    m.nameEl.style.transform = upright;
+    m.subEl.style.transform = upright;
+  }
+}
+
 function updateNameplate() {
   const np = el('nameplate');
   if (player.dead) { np.style.display = 'none'; return; }
@@ -2926,7 +3085,14 @@ function frame(now) {
   // needs to burn canvas/agent-scan time every frame
   if (now - _trackerAt > 50) { _trackerAt = now; drawTracker(now); }
   if (now - _observeAt > 160) { _observeAt = now; marineMap.observe(); }
-  if (mapOpen) marineMap.draw(player.agent, player.dead);
+  if (mapOpen) {
+    if (mates.length) {
+      marineMap.mates = mates.map((m) => ({
+        agent: m.agent, color: m.color, name: gameSync?.peerName(m.did) || m.label,
+      }));
+    }
+    marineMap.draw(player.agent, player.dead);
+  }
   audio.setListener(player.x, player.z, player.yaw);
   audio.alarm(sim.lastStand && !ended);
   if (sim.lastStand && !window._paLastStand) { window._paLastStand = true; audio.play('pa', null, 0.6); }
@@ -3197,6 +3363,9 @@ function frame(now) {
   setStyle('pinned', 'display', player.pinned && !player.dead ? 'block' : 'none');
   renderLog();
   updateNameplate();
+  updateMates();
+  updateVoiceMeter(now);
+  updateComms(now);
 
   if (player.dead && ghost) {
     if (!spectateShown) {

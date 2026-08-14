@@ -7,6 +7,11 @@ const STATE_HZ = 10;
 const SNAPSHOT_HZ = 5;
 const SNAPSHOT_LIMIT = 512;
 const SIM_BOUND = 1_000;
+// how far a peer's aim may lag the authority's truth before a hit is refused.
+// A form sprints ~6.3 m/s; at a 10 Hz snapshot plus transit its position here
+// can legitimately be a couple of metres off what the shooter saw.
+const LAG_SLACK_M = 2.2;
+const MELEE_SLACK_M = 3.5;
 const WIRE_SCALE = 1_000;
 const ACTION_LIMITS = Object.freeze({ hit: 18, shot: 20, explosion: 4 });
 
@@ -123,6 +128,8 @@ export function createGameSync({
   let authoritySeen = authorityDid === session.did;
   const latestSequence = new Map();
   const lastShots = new Map();
+  const peerNames = new Map();
+  const talkingUntil = new Map();
   const actionBuckets = new Map();
   const sendChains = new Map();
   const snapshotCache = new Map();
@@ -177,9 +184,20 @@ export function createGameSync({
     const x = unpack(packet.x);
     const z = unpack(packet.z);
     const yaw = unpack(packet.yaw);
-    if (Math.abs(x) > 250 || Math.abs(z) > 250
+    // SIM_BOUND, not a hand-typed 250 (user: "the flood don't seem to
+    // recognize and attack player 2"). World X runs 110 -> 389 on this hull —
+    // a quarter of the ship's rooms sit beyond 250 — so every pose packet
+    // from a peer who walked aft was silently dropped. Their body froze on
+    // the host at the last accepted spot and the flood kept hunting that
+    // ghost, which is exactly "the flood ignores player 2". Same bound the
+    // snapshot rows already validate against.
+    if (Math.abs(x) > SIM_BOUND || Math.abs(z) > SIM_BOUND
       || !Number.isInteger(packet.deck) || packet.deck < 1 || packet.deck > 5
       || Math.abs(yaw) > Math.PI * 8) return;
+    // the speaking bit rides the pose packet; hold it briefly so the
+    // indicator does not strobe between syllables
+    if (packet.talk === 1) talkingUntil.set(from, performance.now() + 900);
+    else if (packet.talk === 0) talkingUntil.delete(from);
     const agent = playerAgents.get(from);
     if (!agent || agent.dead) return;
     const [simX, simY] = world.worldToSim(x, z, packet.deck);
@@ -296,6 +314,10 @@ export function createGameSync({
       || (allowed.size && !allowed.has(packet.from))) return;
     if (packet.seq <= (latestSequence.get(packet.from) ?? 0)) return;
     latestSequence.set(packet.from, packet.seq);
+    // remember what this peer calls itself — the HUD puts it over their head
+    if (typeof packet.name === 'string' && packet.name) {
+      peerNames.set(packet.from, packet.name.slice(0, 18));
+    }
     if (!actionAllowed(actionBuckets, packet.from, packet.kind, performance.now())) return;
 
     if (packet.kind === 'state') {
@@ -323,17 +345,34 @@ export function createGameSync({
     }
     if (!isAuthority()) return;
     if (packet.kind === 'hit') {
-      const shot = lastShots.get(packet.from);
       const target = sim.byId.get(packet.targetId);
-      if (!shot || performance.now() - shot.at > 250 || !target || target.dead
-        || ![3, 4, 5].includes(target.faction)) return;
-      shotStart.fromArray(shot.from);
-      shotEnd.fromArray(shot.to);
+      if (!target || target.dead || ![3, 4, 5].includes(target.faction)) return;
+      if (!Number.isSafeInteger(packet.damage)) return;
+      const sender = playerAgents.get(packet.from);
       const [wx, wz] = world.simToWorld(target.x, target.y, target.deck);
       targetPoint.set(wx, target.faction === 3 ? 0.35 : target.downed ? 0.35 : 0.9, wz);
-      const radius = target.faction === 3 ? 0.8 : target.faction === 5 ? 1.3 : 1;
-      if (!pointNearSegment(targetPoint, shotStart, shotEnd, radius)) return;
-      if (!Number.isSafeInteger(packet.damage)) return;
+      // LAG IS NOT CHEATING (user: "their bullets don't seem to do damage").
+      // The peer aims at where ITS snapshot puts the form; by the time the
+      // hit lands here the authority has moved it. The old check tested the
+      // ray against a ~1 m body radius with no allowance for that delay, so
+      // ordinary hits on anything that was moving got thrown away — and
+      // MELEE, which sends no ray at all, was rejected every single time.
+      // Both are accepted now: a ray hit inside a lag-widened radius, or a
+      // melee kill the sender is physically standing next to. The checks that
+      // matter (real target, sane damage, plausible distance) all stand.
+      const shot = lastShots.get(packet.from);
+      let ok = false;
+      if (shot && performance.now() - shot.at <= 400) {
+        shotStart.fromArray(shot.from);
+        shotEnd.fromArray(shot.to);
+        const body = target.faction === 3 ? 0.8 : target.faction === 5 ? 1.3 : 1;
+        ok = pointNearSegment(targetPoint, shotStart, shotEnd, body + LAG_SLACK_M);
+      }
+      if (!ok && sender && sender.deck === target.deck) {
+        // point-blank: a rifle butt or a shotgunned form at arm's reach
+        ok = Math.hypot(sender.x - target.x, sender.y - target.y) <= MELEE_SLACK_M;
+      }
+      if (!ok) return;
       hurtFloodForm(sim, target, Math.max(0, Math.min(80, unpack(packet.damage))), false, peerNumber(packet.from));
     } else if (packet.kind === 'explosion') {
       const values = [packet.deck, packet.x, packet.y, packet.radius, packet.damage];
@@ -352,6 +391,9 @@ export function createGameSync({
   });
 
   return Object.freeze({
+    peerName(did) { return peerNames.get(did) ?? null; },
+    peerTalking(did) { return (talkingUntil.get(did) ?? 0) > performance.now(); },
+    peerLive(did) { return (latestSequence.get(did) ?? 0) > 0; },
     hitFlood(targetId, damage) {
       send('hit', { targetId, damage: pack(damage) });
     },
@@ -372,6 +414,10 @@ export function createGameSync({
         const state = {
           x: pack(player.x), z: pack(player.z), deck: player.deck,
           yaw: pack(player.yaw), hp: pack(player.agent.hp),
+          // VOICE ACTIVITY (user: an indicator on when they are speaking).
+          // One bit on a packet that is already flying at 10 Hz — no new
+          // channel, and it costs nothing when nobody has a mic open.
+          talk: player.talking ? 1 : 0,
         };
         const turn = Math.round(Math.PI * 2 * WIRE_SCALE);
         const halfTurn = Math.round(Math.PI * WIRE_SCALE);
@@ -379,6 +425,7 @@ export function createGameSync({
           ? Math.abs((((state.yaw - lastState.yaw + halfTurn) % turn + turn) % turn) - halfTurn)
           : Infinity;
         const changed = !lastState || state.deck !== lastState.deck || state.hp !== lastState.hp
+          || state.talk !== lastState.talk
           || Math.abs(state.x - lastState.x) > 15 || Math.abs(state.z - lastState.z) > 15 || yawDelta > 15;
         if (changed || now - lastStateAt >= 1_000) {
           send('state', state);

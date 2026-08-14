@@ -78,6 +78,50 @@
   #nameplate.np-crew { color: #a8c6ea; }
   #nameplate.np-flood { color: #e06a55; }
   #nameplate.np-corpse { color: #8a8f96; }
+  /* CO-OP TEAMMATES (user: it must be very obvious who the other players
+     are). One marker per remote player, always drawn — through walls, through
+     decks, and pinned to the screen edge with an arrow when they are behind
+     you. Their own colour, held everywhere: this marker, the tacnet map, and
+     the roster. pointer-events off — it must never eat a click. */
+  #mates { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+  .mate {
+    position: absolute; transform: translate(-50%, -50%);
+    font: 700 11px/1.25 ui-monospace, Menlo, monospace; letter-spacing: 0.12em;
+    text-align: center; white-space: nowrap; text-shadow: 0 0 5px #000, 0 1px 2px #000;
+    display: none;
+  }
+  .mate-pip {
+    width: 12px; height: 12px; margin: 0 auto 3px;
+    border: 2px solid currentColor; border-radius: 50%;
+    box-shadow: 0 0 6px currentColor, inset 0 0 4px currentColor;
+  }
+  .mate.off .mate-pip {
+    width: 0; height: 0; border: none; border-radius: 0;
+    border-left: 8px solid transparent; border-right: 8px solid transparent;
+    border-bottom: 13px solid currentColor; box-shadow: none;
+  }
+  .mate-sub { font-size: 9.5px; letter-spacing: 0.1em; opacity: 0.85; font-weight: 400; }
+  .mate-bar { width: 40px; height: 3px; margin: 3px auto 0; background: rgba(10,14,20,0.85); }
+  .mate-bar > i { display: block; height: 100%; background: currentColor; }
+  .mate.talking .mate-pip { animation: matetalk 0.7s ease-in-out infinite; }
+  @keyframes matetalk { 50% { box-shadow: 0 0 14px currentColor, inset 0 0 7px currentColor; } }
+  /* COMMS ROSTER (user: a peer list bottom right, with a speaking indicator) */
+  #comms {
+    position: absolute; right: 14px; bottom: 14px; z-index: 6; pointer-events: none;
+    font: 11px/1.5 ui-monospace, Menlo, monospace; letter-spacing: 0.08em;
+    background: rgba(7,10,14,0.72); border: 1px solid #1c2430; border-radius: 3px;
+    padding: 7px 10px; min-width: 158px; display: none;
+  }
+  #comms h3 { font-size: 9px; color: #6a7686; letter-spacing: 0.2em; margin: 0 0 5px; font-weight: 400; }
+  .cm { display: flex; align-items: center; gap: 7px; }
+  .cm + .cm { margin-top: 3px; }
+  .cm-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+  .cm-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .cm-mic { font-size: 9px; letter-spacing: 0.12em; color: #55606f; }
+  .cm.talking .cm-mic { color: #7fd1a0; }
+  .cm.talking .cm-dot { box-shadow: 0 0 8px currentColor; animation: matetalk 0.7s ease-in-out infinite; }
+  .cm.gone { opacity: 0.4; }
+  .cm.gone .cm-name { text-decoration: line-through; }
   #roomState { margin-top: 3px; font-size: 11.5px; letter-spacing: 0.08em; text-align: right; }
   /* live perf readout (debug/benchmark across hardware) */
   #fpsMeter { margin-top: 3px; font-size: 11px; letter-spacing: 0.06em; text-align: right; color: #5f6c7c; }
@@ -323,6 +367,8 @@ npm run build:dwapp</pre></article>
   </div>
   <div class="hud" id="crosshair"><span class="ring"></span><span class="dot"></span></div>
   <div id="nameplate"></div>
+  <div id="mates"></div>
+  <div id="comms"><h3>FIRETEAM</h3><div id="commsRows"></div></div>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>

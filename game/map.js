@@ -316,6 +316,7 @@ export class MarineMap {
         ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI * 2); ctx.fill();
       } else if (f === FACTION.CIVILIAN || f === FACTION.ARMED) {
         if (a.id === this.playerAgentId) continue; // drawn as the player marker
+        if (a.isPlayer) continue;                  // teammates get their own marker below
         ctx.fillStyle = f === FACTION.ARMED ? 'rgba(232,200,64,0.8)' : 'rgba(220,224,230,0.65)';
         ctx.beginPath(); ctx.arc(a.x, a.y, this._rr(0.4, 2), 0, Math.PI * 2); ctx.fill();
       }
@@ -352,6 +353,35 @@ export class MarineMap {
       ctx.fillStyle = frac > 0.66 ? '#5fd88a' : frac > 0.33 ? '#e8c840' : '#ff5a48';
       ctx.fillRect(rep.x - hw / 2, rep.y + r + this._lw(2), hw * frac, hh);
       ctx.globalAlpha = 1;
+    }
+    // CO-OP TEAMMATES (user: obvious on the map too). Drawn ALWAYS — no
+    // observation gate: your fireteam is on comms, so you always know roughly
+    // where each other are. Same colour the on-screen marker uses, a bigger
+    // chevron than any NPC, name above and health below.
+    if (this.mates?.length) {
+      ctx.font = this._font(8.5);
+      for (const m of this.mates) {
+        const a = m.agent;
+        if (!a || a.dead) continue;
+        const r = this._rr(1.0, 5.5);
+        ctx.save();
+        ctx.translate(a.x, a.y); ctx.rotate(a.heading + Math.PI / 2);
+        ctx.fillStyle = m.color;
+        ctx.beginPath();
+        ctx.moveTo(0, -r); ctx.lineTo(-r * 0.8, r * 0.85); ctx.lineTo(0, r * 0.35); ctx.lineTo(r * 0.8, r * 0.85);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = m.color;
+        ctx.textAlign = 'center';
+        ctx.fillText(m.name.toUpperCase(), a.x, a.y - r - this._lw(3));
+        ctx.textAlign = 'left';
+        const hw = this._rr(2.0, 10), hh = this._lw(2.2);
+        const frac = Math.max(0, Math.min(1, a.hp / (a.maxHp || 1)));
+        ctx.fillStyle = 'rgba(10,14,20,0.85)';
+        ctx.fillRect(a.x - hw / 2, a.y + r + this._lw(2), hw, hh);
+        ctx.fillStyle = m.color;
+        ctx.fillRect(a.x - hw / 2, a.y + r + this._lw(2), hw * frac, hh);
+      }
     }
     // you: a white chevron pointing your heading
     if (playerAgent && !playerDead) {
