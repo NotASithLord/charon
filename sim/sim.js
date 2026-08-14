@@ -2217,7 +2217,16 @@ export class Sim {
   _reap() {
     let changed = false;
     for (const a of this.agents) {
-      if (!a.dead) continue;
+      // A DEAD PLAYER STAYS ON THE ROSTER (co-op: "he died on my end but was
+      // still alive on his"). Reap runs at the END of the tick the death
+      // happens, before any snapshot is built — so deleting a player agent
+      // here meant the encoder's `!agent.dead || agent.isPlayer` clause could
+      // never see it, the id went out as a plain `removed`, and the peer's
+      // removed handler deliberately skips player agents. The peer was never
+      // told, so it kept playing. The retained agent is inert: writeBuffer
+      // skips the dead, so it renders nothing, and the harnesses never attach
+      // a player, so replay hashes are untouched.
+      if (!a.dead || a.isPlayer) continue;
       changed = true;
       // a dead claimant RELEASES its claims — leaked claims left whole rooms
       // of corpses "spoken for" forever, so later forms crossed to them and
@@ -2235,7 +2244,7 @@ export class Sim {
       }
       this.byId.delete(a.id);
     }
-    if (changed) this.agents = this.agents.filter((a) => !a.dead);
+    if (changed) this.agents = this.agents.filter((a) => !a.dead || a.isPlayer);
   }
 
   _checkOutcome() {

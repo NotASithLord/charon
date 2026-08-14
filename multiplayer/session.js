@@ -47,7 +47,15 @@ class SessionBase {
   }
 
   emit(event, value) {
-    for (const callback of this.listeners.get(event) ?? []) callback(value);
+    // A LISTENER THAT THROWS MUST NOT TAKE THE SESSION WITH IT. `report()` in
+    // the voice stack is the LAST statement of makePeer, so an exception
+    // raised by a UI listener propagated back through it: makePeer never
+    // returned its record, makeOffer never sent an offer, and voice silently
+    // failed to connect in BOTH directions. One bad HUD line should cost a
+    // HUD line, not the call.
+    for (const callback of this.listeners.get(event) ?? []) {
+      try { callback(value); } catch (error) { console.error('[charon] session listener failed', event, error); }
+    }
   }
 
   on(event, callback) {

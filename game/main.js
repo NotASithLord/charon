@@ -335,8 +335,12 @@ if (LAUNCH.session) {
   // ...and heal it without the player having to understand any of that: the
   // next click or keypress anywhere resumes playback.
   let _resumeAt = 0;
-  const tryResumeVoice = () => {
-    if (!voiceBlocked) return;
+  const tryResumeVoice = (event) => {
+    // NOT for clicks on the mic button itself: this is a CAPTURE-phase
+    // listener, so it would clear playbackBlocked before the button's own
+    // handler reads the status — which then falls through to the "already
+    // active" branch and MUTES you. Clicking ENABLE AUDIO would mute your mic.
+    if (!voiceBlocked || (event && event.target === gameVoice)) return;
     if (performance.now() - _resumeAt < 800) return; // one attempt per gesture burst
     _resumeAt = performance.now();
     LAUNCH.session.resumeVoicePlayback().then(updateVoice).catch(() => {});
