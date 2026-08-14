@@ -377,7 +377,7 @@ function updateMarineTick(sim, a, dt) {
       // cautious doctrine: corridors first, shafts only when there is no
       // other way (or when in hot pursuit — squad.pursuing)
       let ok = sim.setPathTo(a, target, ['std'], humanPass);
-      if (!ok) ok = sim.setPathTo(a, target, ['std', 'shaft'], marinePass);
+      if (!ok) ok = sim.setPathTo(a, target, ['std'], marinePass);
       if (!ok) squad.objective = null; // truly unreachable
       else a.state = STATE.MOVE;
     }
@@ -536,7 +536,7 @@ export function strategicSquads(sim) {
       if (responders >= 2) continue;
       const cur = squad.objective?.kind === 'distress'
         ? sim.graph.hops(leader.node, squad.objective.node, ['std'], humanPass) : Infinity;
-      const d = sim.graph.hops(leader.node, call.node, ['std', 'shaft'], marinePass);
+      const d = sim.graph.hops(leader.node, call.node, ['std'], marinePass);
       if (d !== -1 && d < cur) {
         squad.objective = { kind: 'distress', node: call.node, callId: call.id };
         squad.respondingTo = call.id;
@@ -558,7 +558,7 @@ export function strategicSquads(sim) {
 
     // objective reached & clear -> next objective
     const objNode = squad.objective?.node;
-    const arrived = objNode !== undefined && members.every((m) => m.node === objNode || sim.graph.hops(m.node, objNode, ['std', 'shaft'], marinePass) <= 1);
+    const arrived = objNode !== undefined && members.every((m) => m.node === objNode || sim.graph.hops(m.node, objNode, ['std'], marinePass) <= 1);
     const clear = objNode !== undefined && sim.visibleNodes(objNode).every((n) => sim.floodStrengthAt(n) === 0);
     if (!squad.objective || (arrived && clear)) {
       if (squad.objective?.kind === 'breach') {
@@ -622,7 +622,7 @@ function patrolPlan(sim, squad, leader) {
     if (responders >= 2) continue;
     const cur = squad.objective?.kind === 'distress'
       ? sim.graph.hops(leader.node, squad.objective.node, ['std'], humanPass) : Infinity;
-    const d = sim.graph.hops(leader.node, call.node, ['std', 'shaft'], marinePass);
+    const d = sim.graph.hops(leader.node, call.node, ['std'], marinePass);
     if (d !== -1 && d < cur) {
       squad.objective = { kind: 'distress', node: call.node, callId: call.id };
       squad.respondingTo = call.id;
@@ -683,9 +683,9 @@ function pickSweepTarget(sim, leader) {
     if (n.roles.includes('command')) continue; // the garrison holds the bridge
     const staleness = sim.t - sim.sweptAt[n.idx];
     if (staleness < 40) continue; // cleared very recently — leave it
-    const d = g.hops(leader.node, n.idx, ['std', 'shaft'], marinePass);
+    const d = g.hops(leader.node, n.idx, ['std'], marinePass);
     if (d === -1) continue;
-    const breachDist = g.hops(n.idx, g.breachNode, ['std', 'shaft'], marinePass);
+    const breachDist = g.hops(n.idx, g.breachNode, ['std'], marinePass);
     // the danger is DOWN where the ship was holed: breach-proximity and the
     // lower decks dominate the pick, distance-from-squad only breaks ties —
     // otherwise nearest-first keeps squads grazing the upper decks forever

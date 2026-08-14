@@ -913,13 +913,13 @@ export class Sim {
     }
     // diffuse across every real connection (§6.2) — the vent layer is empty
     // now (the duct network is routed, not walked), so influence spreads
-    // through doors and shafts: the spaces bodies actually fight across
+    // through doors: the spaces bodies actually fight across
     const pass = (l) => (l.kind === 'std' ? !l.locked : true);
     for (let pass_i = 0; pass_i < 2; pass_i++) {
       for (const arr of [floodStr, humanStr, hardness]) {
         const next = Float32Array.from(arr);
         for (let i = 0; i < g.n; i++) {
-          for (const { to } of g.neighbors(i, ['std', 'shaft'], pass)) {
+          for (const { to } of g.neighbors(i, ['std'], pass)) {
             next[to] += arr[i] * 0.18;
           }
         }
@@ -1079,20 +1079,37 @@ export class Sim {
           const upper = from.deck < to.deck ? from : to;
           const descending = from === upper;
           const wp = this._stairWaypoints(upper);
-          const A = descending ? wp.top : wp.foot;   // mouth this traversal enters
-          const B = descending ? wp.foot : wp.top;   // mouth it steps off at the far deck
-          const flipT = 0.82;                        // stay ON the stairs most of the ride; hand over near the far mouth
+          // THE FRAME CHANGE IS THE WHOLE BUG (user: NPCs teleport through the
+          // stairwell instead of walking the U). Every waypoint above is in the
+          // UPPER room's frame, but a room's sim y is offset by its DECK BAND —
+          // the same physical point has a different y on each deck. The old code
+          // mixed frames: an ascending body walked to its own room's centre line
+          // and then jumped onto the stairs, and BOTH directions snapped from the
+          // last tread straight to a parking slot anywhere in the destination
+          // room. Two teleports per traversal, one of them room-sized.
+          // Fix: convert the foot waypoint into the LOWER room's frame — the
+          // SAME physical point, so approach → ride → exit is continuous — and
+          // walk the exit leg out of the mouth instead of snapping.
+          const footLo = { x: wp.foot.x, y: wp.foot.y - this._bandC(upper.deck) + this._bandC(descending ? to.deck : from.deck) };
+          const A = descending ? wp.top : wp.foot;   // mouth this traversal enters (upper frame)
+          const B = descending ? wp.foot : wp.top;   // mouth it steps off at the far deck (upper frame)
+          // the far mouth in the DESTINATION room's own frame: descending you
+          // step off the foot (lower deck), ascending off the top (upper deck)
+          const Bdest = descending ? footLo : wp.top;
           const appT = a.move.appT ?? 0.15;
-          const handT = appT + (1 - appT) * flipT;
+          // the exit leg is TIMED BY DISTANCE (set at move start, same as the
+          // duct branch): walk to the mouth, ride the switchback, walk off it
+          const exitT = a.move.exitT ?? 0.18;
+          const handT = Math.max(appT + 1e-3, 1 - exitT);
           const px0 = a.x, py0 = a.y;                // last point, for heading
           if (k < appT) {
-            // walk from where you stood to the stair mouth, in the ORIGIN room
+            // walk from where you stood to the stair mouth, in the ORIGIN room's
+            // own frame: the top of the flight if descending, the foot of it
+            // (converted down a deck) if climbing
             const sx = a.move.sx ?? from.x, sy = a.move.sy ?? from.y;
-            const mouthX = descending ? A.x
-              : Math.max(from.x - from.w / 2 + 1, Math.min(from.x + from.w / 2 - 1, wp.foot.x));
-            const mouthY = descending ? A.y : from.y;
+            const mouth = descending ? A : footLo;
             const kk = appT > 1e-6 ? k / appT : 1;
-            a.x = sx + (mouthX - sx) * kk; a.y = sy + (mouthY - sy) * kk;
+            a.x = sx + (mouth.x - sx) * kk; a.y = sy + (mouth.y - sy) * kk;
           } else if (k < handT) {
             // ON THE SWITCHBACK: A → mid landing → B, in the UPPER room's frame.
             // deck = upper for the ride (the well is one two-storey volume) so
@@ -1102,10 +1119,14 @@ export class Sim {
             if (kk < 0.5) { const u = kk / 0.5; a.x = A.x + (wp.mid.x - A.x) * u; a.y = A.y + (wp.mid.y - A.y) * u; }
             else { const u = (kk - 0.5) / 0.5; a.x = wp.mid.x + (B.x - wp.mid.x) * u; a.y = wp.mid.y + (B.y - wp.mid.y) * u; }
           } else {
-            // step off the mouth into the destination room, onto your own slot
-            const [tx, ty] = this._parkSlot(a, to);
-            a.x = tx; a.y = ty;
+            // STEP OFF AND WALK IN (no snap): from the far mouth, in the
+            // destination room's frame, to this body's own parking slot over
+            // what's left of the leg — the same shape the duct exit uses.
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
+            const [tx, ty] = this._parkSlot(a, to);
+            const kk = handT < 1 ? Math.min(1, (k - handT) / (1 - handT)) : 1;
+            a.x = Bdest.x + (tx - Bdest.x) * kk;
+            a.y = Bdest.y + (ty - Bdest.y) * kk;
           }
           a.heading = Math.atan2(a.y - py0, a.x - px0) || a.heading;
         } else if (a.move.layer === 'std' && from.deck !== to.deck) {
@@ -1135,10 +1156,20 @@ export class Sim {
             a.x = sx + (padFrom.x - sx) * kk;
             a.y = sy + (padFrom.y - sy) * kk;
             a.heading = Math.atan2(padFrom.y - sy, padFrom.x - sx);
+            a.move.hidden = false;
           } else if (k < handT) {
+            // IN THE TRUNK (user: "ladders need to spawn them right at the
+            // opening only every time"). A climber used to STAND on the top
+            // hatch for the whole ride and then blink to the bottom one. It is
+            // inside the structure now — same rule the ducts follow: hidden
+            // while it climbs, untargetable, and it climbs OUT of the far hole
+            // (the renderer's emerge path snaps to that mouth and plays the
+            // rise). The player is exempt: you ride your own ladder in view.
             a.x = padFrom.x; a.y = padFrom.y;
+            a.move.hidden = !a.isPlayer;
           } else {
             a.x = padTo.x; a.y = padTo.y;
+            a.move.hidden = false;
             if (a.node !== a.move.to) { a.node = a.move.to; a.deck = to.deck; }
           }
           a.heading = Math.atan2(to.y - from.y, to.x - from.x);
@@ -1343,25 +1374,41 @@ export class Sim {
           const fromN = this.graph.node(a.node), toN = this.graph.node(step.to);
           if (fromN.deck !== toN.deck) {
             let px, py;
+            const mps = Math.max(0.5, this.P.movement.baseMps * mult);
             if (link.type === 'stairwell') {
               // approach the stair MOUTH (well), not a wall pad — see the
-              // stairwell render branch and _stairWaypoints
+              // stairwell render branch and _stairWaypoints. Both mouths are
+              // authored in the UPPER room's frame, so the one this body walks
+              // to must be converted into ITS OWN room's frame first (a room's
+              // sim y carries its deck band; mixing the two frames is what
+              // teleported climbers across the map).
               const upper = fromN.deck < toN.deck ? fromN : toN;
               const wp = this._stairWaypoints(upper);
+              const shift = this._bandC(fromN.deck) - this._bandC(upper.deck);
               const mouth = fromN === upper ? wp.top : wp.foot;
-              px = fromN === upper ? mouth.x
-                : Math.max(fromN.x - fromN.w / 2 + 1, Math.min(fromN.x + fromN.w / 2 - 1, mouth.x));
-              py = fromN === upper ? mouth.y : fromN.y;
+              px = mouth.x;
+              py = mouth.y + shift;
+              // ...and pay for the walk OFF the far mouth to this body's own
+              // slot in the destination room, at walking pace (the ride used
+              // to hand over at a fixed 82% and then cover that ground in the
+              // leftover ticks — a 20 m/s skate across the hangar)
+              const exitShift = this._bandC(toN.deck) - this._bandC(upper.deck);
+              const far = fromN === upper ? wp.foot : wp.top;
+              const [sx2, sy2] = this._parkSlot(a, toN);
+              const exitSec = Math.hypot(sx2 - far.x, sy2 - (far.y + exitShift)) / mps;
+              const appSec2 = Math.hypot(px - a.x, py - a.y) / mps;
+              a.move.travelSec += appSec2 + exitSec;
+              a.move.appT = appSec2 / a.move.travelSec;
+              a.move.exitT = exitSec / a.move.travelSec;
             } else {
               // walk to the REAL trunk pad (the drawn well), not a clamp guess
               const pad = (link.a === a.node ? link.padA : link.padB);
               px = pad ? pad.x : Math.max(fromN.x - fromN.w / 2 + 1.2, Math.min(fromN.x + fromN.w / 2 - 1.2, toN.x));
               py = pad ? pad.y : fromN.y;
+              const appSec = Math.hypot(px - a.x, py - a.y) / mps;
+              a.move.appT = appSec / (appSec + a.move.travelSec);
+              a.move.travelSec += appSec;
             }
-            const appSec = Math.hypot(px - a.x, py - a.y)
-              / Math.max(0.5, this.P.movement.baseMps * mult);
-            a.move.appT = appSec / (appSec + a.move.travelSec);
-            a.move.travelSec += appSec;
           } else if (link.door) {
             // REAL METERS, REAL SPEED (user report: bodies "flying" faster
             // than they walk, and everyone converging on the room's center):
@@ -1945,6 +1992,15 @@ export class Sim {
   // feet with groundHeightAt as the body crosses the well). Returns the three
   // waypoints of the dog-leg: top of the upper flight, the mid landing, and the
   // foot of the lower flight.
+  // The deck band's centre line — the offset between a room's sim y and the
+  // shared world frame (world z = sim y - bandC(deck)). MUST equal
+  // world.bandCenter: the stair traversal converts waypoints between decks
+  // with it, and the renderer maps them back.
+  _bandC(deck) {
+    const b = this.graph.deckBands[deck - 1];
+    return (b.y0 + b.y1) / 2;
+  }
+
   _stairWaypoints(U) {
     const wx = U.x + (U.w / 2) * 0.12, wy = U.y;
     const hx = Math.min(6.5, (U.w / 2) * 0.42), hy = Math.min(6, (U.d / 2) * 0.34);
@@ -2077,6 +2133,15 @@ export class Sim {
         if (a.dead || a.isPlayer || a.deck !== f.deck || a.faction === FACTION.CORPSE) continue;
         if (a.held === this.tickCount) continue; // a frantic host isn't steering anything
         if (a.leaping) continue;                 // mid-pounce: committed, no steering
+        // A BODY ON A MOVE LEG IS AUTHORED BY THE LEG (same rule _separate
+        // already follows). Its x/y are recomputed from the leg every tick, so
+        // a push here is discarded next tick anyway — but the clamp below uses
+        // `pnode`, which is only refreshed at the TOP of the tick. On the tick
+        // a mover changes deck (stairwell handover, ladder, lift) pnode still
+        // names the room it LEFT, on the other deck, and clamping a deck-5
+        // position into a deck-4 rect threw the body a whole deck band across
+        // the map for one frame — the stairwell "teleport" (user report).
+        if (a.move) continue;
         const dx = a.x - f.x, dy = a.y - f.y;
         const d2 = dx * dx + dy * dy;
         if (d2 > R * R || d2 < 1e-6) continue;
@@ -2194,7 +2259,10 @@ export class Sim {
       // turns it into a visible burst rather than a single-frame flicker.
       if (this.t - (a.flamingT ?? -99) < 0.5) flags |= FLAG.FLAMING;
       if (a.odst) flags |= FLAG.ODST;
-      if (a.move && a.move.layer === 'shaft' && a.move.hidden) flags |= FLAG.IN_SHAFT;
+      // hidden = inside the structure: a cross-deck TRUNK climb (ladder/lift)
+      // hides the same way a duct crawl does, so the body vanishes into the
+      // hatch and climbs out of the far one instead of standing on the collar
+      if (a.move && a.move.hidden && (a.move.layer === 'shaft' || a.move.layer === 'std')) flags |= FLAG.IN_SHAFT;
       // armed corpses carry the flag too so the renderer can lay the right
       // body down (and drop a rifle beside it)
       if (a.hostArmed || (a.faction === FACTION.CORPSE && a.wasArmed && a.damage < 100)) flags |= FLAG.ARMED_HOST;

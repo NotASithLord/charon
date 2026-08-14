@@ -675,19 +675,17 @@ export const marinePass = humanPass; // marines use the standard methods too
 // synthesized link — which is never blocked.
 export function infectionPass(link) {
   if (link.kind === LAYER.STD) return !link.locked;
-  if (link.kind === LAYER.VENT) return true; // the network is always open
-  return link.kind === LAYER.SHAFT;
+  return link.kind === LAYER.VENT; // the duct network is always open
 }
 export function bigFormPass(link) {
-  if (link.kind === LAYER.STD) return !link.locked;
-  return link.kind === LAYER.SHAFT;
+  return link.kind === LAYER.STD && !link.locked;
 }
 export function layersFor(kind) {
   switch (kind) {
     case 'human': return ['std'];
     case 'marine': return ['std'];               // humans never use the ducts
-    case 'infection': return ['std', 'shaft'];   // walking; the vent net is routed explicitly
-    case 'big': return ['std', 'shaft'];
+    case 'infection': return ['std'];   // walking; the vent net is routed explicitly
+    case 'big': return ['std'];         // stairs and ladders, like everyone else
     default: return ['std'];
   }
 }

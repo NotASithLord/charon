@@ -209,8 +209,8 @@ export function updateFloodTick(sim, dt) {
       // tick the door opens. (The dart runner keeps running its script; the
       // pack it baited for does the killing.)
       const springs = a.task?.kind === TASK.GUARD && a.task.muster !== undefined && preyHere;
-      const held = !springs && a.task && (a.task.kind === TASK.TRANSFORM || a.task.kind === TASK.AMBUSH
-        || a.task.kind === TASK.BAIT || a.task.kind === TASK.DECOY || a.task.kind === TASK.DART
+      const held = !springs && a.task && (a.task.kind === TASK.TRANSFORM
+        || a.task.kind === TASK.DECOY || a.task.kind === TASK.DART
         || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)
         || (a.task.kind === TASK.ATTACK && a.task.node === a.node));
       if (!held && preyHere) hive.assign(a, { kind: TASK.ATTACK, node: pn });
@@ -433,17 +433,6 @@ export function updateFloodTick(sim, dt) {
         break;
       }
 
-      case TASK.AMBUSH: {
-        // park mid-shaft at the corner nearest t.end and hold (§7)
-        const link = sim.graph.shafts[t.linkIdx];
-        if (a.inShaftAmbush === t.linkIdx) break; // waiting
-        if (a.node === t.end && !a.move) {
-          a.inShaftAmbush = t.linkIdx;
-          a.state = STATE.AMBUSHING;
-          (link.ambushers ??= new Set()).add(a.id);
-        } else moveToward(sim, a, t.end);
-        break;
-      }
 
       case TASK.DECOY: {
         // stage 0: run to the show node and be conspicuous until a human
@@ -487,26 +476,6 @@ export function updateFloodTick(sim, dt) {
         break;
       }
 
-      case TASK.BAIT: {
-        const squad = sim.squads[t.squadId];
-        const shaft = sim.graph.shafts[t.shaftIdx];
-        if (!squad || squad.broken) { a.task = null; break; }
-        if (t.stage === 0) {
-          // stand at the shaft mouth until a marine sees us
-          if (a.node !== t.mouth) moveToward(sim, a, t.mouth);
-          else {
-            const seen = sim.occupantsNear(a.node, 1).some((h) => h.faction === FACTION.MARINE && h.hp > 0);
-            if (seen) { t.stage = 1; sim.log('bait', 'the bait shows itself and slips into the shaft'); }
-          }
-        } else {
-          // flee through the shaft past the ambush corners
-          const far = a.node === shaft.a ? shaft.b : shaft.a;
-          if (a.node === shaft.a || a.node === shaft.b) {
-            if (!a.move) sim.setPath(a, [{ to: far, link: shaft, layer: 'shaft' }]);
-          } else if (!a.move && !a.path.length) a.task = null; // escaped; done
-        }
-        break;
-      }
     }
   }
 }
@@ -521,9 +490,9 @@ function moveToward(sim, a, node, pathFn = null) {
   // marched every form transiting near the last stand straight through it,
   // one at a time. NO VENTS for the big forms (user rule: the in-wall
   // ducting is infection-only now) — corridors and the cross-deck
-  // maintenance shafts are all they get.
+  // stairs, ladders and lifts are all they get.
   else path = hive.safeAssaultPath(a.node, node)
-    ?? sim.graph.path(a.node, node, ['std', 'shaft'], hive.combatPass);
+    ?? sim.graph.path(a.node, node, ['std'], hive.combatPass);
   if (path && path.length) sim.setPath(a, path);
   else if (!path) a.task = null; // believed-unreachable; hive will reassign
 }

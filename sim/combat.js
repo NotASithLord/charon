@@ -69,6 +69,10 @@ export function resolveCombat(sim, dt) {
     else if (a.move && a.move.layer === 'shaft' && a.move.hidden
       && sim.graph.node(a.move.link.a).deck !== sim.graph.node(a.move.link.b).deck) {
       key = `Lshaft${a.move.link.i}`;
+    } else if (a.move && a.move.layer === 'std' && a.move.hidden) {
+      // inside a ladder/lift trunk — out of every room's line of fire until
+      // it climbs out the far hatch (same rule as the ducts)
+      key = `Lclimb${a.move.link.i}`;
     } else key = `N${a.pnode ?? a.node}`;
     let g = groups.get(key);
     if (!g) groups.set(key, (g = []));

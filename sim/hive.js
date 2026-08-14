@@ -14,8 +14,6 @@ export const TASK = {
   GUARD: 'guard',          // {node} defend a carrier
   REANIMATE: 'reanimate',  // {targetId} downed combat form
   DRAG: 'drag',            // {corpseId, node} haul carrier food
-  AMBUSH: 'ambush',        // {linkIdx, end} lie in wait mid-shaft
-  BAIT: 'bait',            // {squadId, shaftIdx} get seen, retreat through shaft
   DECOY: 'decoy',          // {show, stage} get seen far from the dens, then evade
   ATTACK: 'attack',        // {node} open aggression (rampage)
   SCOUT: 'scout',          // {node} refresh a lost belief — costs forms to look
@@ -78,27 +76,24 @@ export class Hive {
   // VENTS ARE INFECTION-ONLY now (user redesign), and they are not walked —
   // the duct network is routed explicitly via ventRoute (safeInfectionPath
   // below picks walk vs network by time). The walking predicates here cover
-  // std corridors + the cross-deck maintenance shafts.
+  // std corridors only — stairs, ladders and lifts, like the crew.
   infectionPass = (link, from, to) => {
     if (this.sim.graph.burningUntil[to ?? -1] > this.sim.t) return false;
     if (link.kind === 'std') return !this.knownLocked.has(link.i) || !link.lockable;
-    if (link.kind === 'vent') return true; // synthesized network link — never blocked
-    return link.kind === 'shaft';
+    return link.kind === 'vent'; // synthesized network link — never blocked
   };
+  // THE MAINTENANCE SHAFTS ARE DEAD (user: "old vent system should be dead").
+  // Cross-deck crawlways were the legacy duct layer; the one-network vents
+  // replaced them for pods, and the big forms now climb like the crew do —
+  // stairs, ladders and lifts, through real doorways (user: "combat forms
+  // should have to use the stairs or ladders").
   bigPass = (link, from, to) => {
     if (this.sim.graph.burningUntil[to ?? -1] > this.sim.t) return false;
-    if (link.kind === 'std') return !this.knownLocked.has(link.i);
-    return link.kind === 'shaft';
+    return link.kind === 'std' && !this.knownLocked.has(link.i);
   };
-  // combat forms CANNOT crawl the vents any more (user rule) — the in-wall
-  // ducting is infection-only; the big forms keep corridors + shafts
-  combatPass = (link, from, to) => {
-    if (this.sim.graph.burningUntil[to ?? -1] > this.sim.t) return false;
-    if (link.kind === 'std') return !this.knownLocked.has(link.i);
-    return link.kind === 'shaft';
-  };
+  combatPass = this.bigPass;
   _layersFor(kind) {
-    return kind === 'infection' ? ['std', 'shaft'] : ['std', 'shaft'];
+    return ['std'];
   }
   _passFor(kind) {
     return kind === 'infection' ? this.infectionPass : kind === 'combat' ? this.combatPass : this.bigPass;
@@ -131,7 +126,7 @@ export class Hive {
   infectionHops(from, to) {
     if (from === to) return 0;
     const g = this.sim.graph;
-    const walk = g.hops(from, to, ['std', 'shaft'], this.infectionPass);
+    const walk = g.hops(from, to, ['std'], this.infectionPass);
     const hopSec = g.avgStdLenM / 1.4;
     const ventH = 1 + Math.ceil(this.ventEtaSec(from, to) / hopSec);
     return walk === -1 ? ventH : Math.min(walk, ventH);
@@ -272,7 +267,6 @@ export class Hive {
     let risk = 0;
     for (const step of path) {
       if (step.layer === 'vent') risk += this.ventWatched(step.link) * 0.5;
-      else if (step.layer === 'shaft') risk += Math.min(1, this.believedHardness[step.link.a] + this.believedHardness[step.link.b]) * 0.6;
       else {
         risk += Math.min(1.0, this.believedHumanStr[step.to] * 1.0);
         // absorbed doctrine: arteries and open bays carry patrol traffic
@@ -354,7 +348,7 @@ export class Hive {
       if (b !== from && b !== to && this.believedHardness[b] > 0.7) return false;
       return true;
     };
-    const path = this.sim.graph.path(from, to, ['std', 'shaft'], pass);
+    const path = this.sim.graph.path(from, to, ['std'], pass);
     memo.set(key, path);
     // callers consume paths (setPath aliases, then shift()) — never hand out
     // the stored array, on hit OR miss
@@ -393,7 +387,6 @@ export class Hive {
   exitCount(node) {
     let n = 1; // the room's own vent grate
     for (const _ of this.sim.graph.neighbors(node, ['std'], (l) => !this.knownLocked.has(l.i))) n++;
-    for (const _ of this.sim.graph.neighbors(node, ['shaft'], () => true)) n++;
     return n;
   }
 
@@ -524,7 +517,7 @@ export class Hive {
       if (f.faction === FACTION.COMBAT) continue;
       // never interrupt a rooting carrier — losing the 4s transform to an
       // evade/rampage yank was why the hive stopped producing carriers
-      if (f.task?.kind === TASK.AMBUSH || f.task?.kind === TASK.BAIT || f.task?.kind === TASK.ATTACK
+      if (f.task?.kind === TASK.ATTACK
         || f.task?.kind === TASK.TRANSFORM) continue;
       // a form staged for a muster holds its ground — the gathering point is
       // deliberately near the target, and evade would bleed the muster dry
@@ -655,7 +648,7 @@ export class Hive {
     const sweepLOS = new Set(sim.visibleNodes(g.breachNode));
     const out = [];
     for (const n of g.nodes) {
-      const d = g.hops(g.breachNode, n.idx, ['std', 'shaft'], this.bigPass);
+      const d = g.hops(g.breachNode, n.idx, ['std'], this.bigPass);
       if (d === -1 || d < 1 || d > maxHops || sweepLOS.has(n.idx)) continue;
       const route = this.stealthPath(g.breachNode, n.idx, 'big');
       if (!route) continue;
@@ -687,7 +680,7 @@ export class Hive {
     const chosen = [];
     for (const c of cand) {
       if (chosen.length >= count) break;
-      if (chosen.every((s) => g.hops(s, c.node, ['std', 'shaft'], this.bigPass) >= 2)) chosen.push(c.node);
+      if (chosen.every((s) => g.hops(s, c.node, ['std'], this.bigPass) >= 2)) chosen.push(c.node);
     }
     if (!chosen.length && cand.length) chosen.push(cand[0].node);
     return chosen;
@@ -817,11 +810,11 @@ export class Hive {
         let show = -1, bestScore = -Infinity;
         for (const n of g.nodes) {
           if (this.staticGarrison(n.idx) > 0) continue; // show yourself NEAR them, never IN their room
-          const d = g.hops(decoy.node, n.idx, ['std', 'shaft'], this.bigPass);
+          const d = g.hops(decoy.node, n.idx, ['std'], this.bigPass);
           if (d === -1 || d < 2 || d > 5) continue;
           let minDen = Infinity;
           for (const den of dens) {
-            const dd = g.hops(n.idx, den, ['std', 'shaft'], this.bigPass);
+            const dd = g.hops(n.idx, den, ['std'], this.bigPass);
             if (dd !== -1) minDen = Math.min(minDen, dd);
           }
           const score = Math.min(minDen, 6) * 1.0 + this.believedHumanStr[n.idx] * 1.5 - d * 0.2;
@@ -926,7 +919,7 @@ export class Hive {
         // soldiers (raise the dead → draft to carrier → rupture → raise…)
         const spares = combat.filter((c) => !c.fromPlayer
           && (!c.task || (c.task.kind === TASK.GUARD && c.task.muster === undefined) || c.task.kind === TASK.ATTACK));
-        const c = this.nearest(spares, target, ['std', 'shaft'], this.bigPass);
+        const c = this.nearest(spares, target, ['std'], this.bigPass);
         if (c) {
           if (c.node === target && !c.move && this.localThreat(target) < 0.5) this.assign(c, { kind: TASK.TRANSFORM });
           // seed: true protects the walk from the rampage muster — production
@@ -998,7 +991,7 @@ export class Hive {
         if (bestT !== -1) {
           const spares = combat.filter((c) => !c.fromPlayer && !c.downed
             && (!c.task || (c.task.kind === TASK.GUARD && c.task.muster === undefined && !c.task.seed)));
-          const r = this.nearest(spares, bestT, ['std', 'shaft'], this.combatPass);
+          const r = this.nearest(spares, bestT, ['std'], this.combatPass);
           if (r) {
             this._raiderId = r.id;
             this._raidCooldownUntil = sim.t + 60;
@@ -1017,7 +1010,7 @@ export class Hive {
       const guards = combat.filter((c) => c.task?.kind === TASK.GUARD && c.task.node === carrier.node);
       if (guards.length < guardsWanted) {
         const free = combat.filter((c) => !c.task);
-        const guard = this.nearest(free, carrier.node, ['std', 'shaft'], this.bigPass);
+        const guard = this.nearest(free, carrier.node, ['std'], this.bigPass);
         if (guard) this.assign(guard, { kind: TASK.GUARD, node: carrier.node });
       }
     }
@@ -1033,8 +1026,7 @@ export class Hive {
       // conscripted forms already standing near the fight — everyone
       // breeding three decks away sat the assault out forever
       if (!this.allIn && !rampaging.has(f.node)) continue;
-      if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.AMBUSH || f.task.kind === TASK.BAIT
-        || f.task.kind === TASK.TRANSFORM)) continue; // a rooting carrier is not a soldier
+      if (f.task && (f.task.kind === TASK.ATTACK || f.task.kind === TASK.TRANSFORM)) continue; // a rooting carrier is not a soldier
       if (f.task?.seed) continue; // carrier-seed detail is off-limits to the draft
       const target = this.nearestBelievedHuman(f.node);
       if (target === -1) continue;
@@ -1208,7 +1200,7 @@ export class Hive {
           const spares = combat.filter((c) => !c.task
             || (c.task.kind === TASK.GUARD && c.task.muster === undefined));
           const ranked = spares
-            .map((c) => ({ c, d: g.hops(c.node, stage, ['std', 'shaft'], this.bigPass) }))
+            .map((c) => ({ c, d: g.hops(c.node, stage, ['std'], this.bigPass) }))
             .filter((x) => x.d !== -1)
             .sort((x, y) => (x.d - y.d) || (x.c.id - y.c.id));
           let strength = forms.length;
@@ -1306,14 +1298,11 @@ export class Hive {
         const escorts = combat.filter((c) => c.task?.kind === TASK.GUARD && c.task.node === node).length;
         if (escorts >= want) continue;
         const free = combat.filter((c) => !c.task);
-        const e = this.nearest(free, node, ['std', 'shaft'], this.bigPass);
+        const e = this.nearest(free, node, ['std'], this.bigPass);
         if (e) this.assign(e, { kind: TASK.GUARD, node });
       }
     }
 
-    // 6. bait (§6.4): healthy military + a tracked squad + a shaft on their
-    //    predicted path. Gated on reserve health, with a cooldown.
-    if (C >= 4 && S <= 1.3 && sim.t >= this.baitCooldownUntil) this.tryBait(combat);
 
     // 6b. squad-wipe (user note): an isolated squad the hive can hit 2:1
     //     gets hit NOW, losses accepted, while a reserve exists elsewhere.
@@ -1414,7 +1403,7 @@ export class Hive {
       if (h && !h.dead && h.hp > 0 && h.faction === FACTION.MARINE && b.conf >= 0.4) marineNodes.push(b.node);
     }
     const marineDist = marineNodes.length
-      ? g.flowField(marineNodes, ['std', 'shaft'], () => true).dist : null;
+      ? g.flowField(marineNodes, ['std'], () => true).dist : null;
     let best = -1, bestScore = 0.2; // need a genuinely good spot
     for (const n of g.nodes) {
       const idx = n.idx;
@@ -1436,7 +1425,7 @@ export class Hive {
       }
       if (carrierNodes.length) {
         let near = Infinity;
-        for (const cn of carrierNodes) { const d = g.hops(idx, cn, ['std', 'shaft'], this.bigPass); if (d !== -1) near = Math.min(near, d); }
+        for (const cn of carrierNodes) { const d = g.hops(idx, cn, ['std'], this.bigPass); if (d !== -1) near = Math.min(near, d); }
         if (near === 0) continue;                 // already a carrier here
         if (near === 1) score -= 2.5;             // next door = one sweep kills both
         if (near !== Infinity) score += Math.min(near, 5) * 0.5;
@@ -1446,32 +1435,6 @@ export class Hive {
     return best;
   }
 
-  tryBait(combat) {
-    const sim = this.sim, g = sim.graph;
-    for (const squad of sim.squads) {
-      if (squad.broken) continue;
-      const leader = sim.byId.get(squad.members[0]);
-      if (!leader || leader.dead) continue;
-      const b = this.beliefs.get(leader.id);
-      if (!b || b.conf < 0.6) continue;
-      for (const shaft of g.shafts) {
-        const dA = g.hops(b.node, shaft.a, ['std'], humanPass);
-        const dB = g.hops(b.node, shaft.b, ['std'], humanPass);
-        const near = Math.min(dA === -1 ? 99 : dA, dB === -1 ? 99 : dB);
-        if (near > 2) continue;
-        const mouth = (dA !== -1 && (dB === -1 || dA <= dB)) ? shaft.a : shaft.b;
-        const farEnd = mouth === shaft.a ? shaft.b : shaft.a;
-        const free = combat.filter((c) => !c.task || c.task.kind === TASK.GUARD);
-        if (free.length < 3) return;
-        this.assign(free[0], { kind: TASK.AMBUSH, linkIdx: shaft.i, end: mouth });
-        this.assign(free[1], { kind: TASK.AMBUSH, linkIdx: shaft.i, end: farEnd });
-        this.assign(free[2], { kind: TASK.BAIT, squadId: squad.id, shaftIdx: shaft.i, mouth, stage: 0 });
-        this.baitCooldownUntil = sim.t + 90;
-        sim.log('bait', `hive baits squad ${squad.id + 1} toward the ${g.node(mouth).name} shaft`);
-        return;
-      }
-    }
-  }
 
   staleBeliefs() {
     for (const [id, b] of this.beliefs) {
@@ -1609,7 +1572,7 @@ export class Hive {
         if (f.task?.kind === TASK.TRANSFORM) continue;
         const d = f.faction === FACTION.INFECTION
           ? this.infectionHops(f.node, bel.node)
-          : g.hops(f.node, bel.node, ['std', 'shaft'], this.bigPass);
+          : g.hops(f.node, bel.node, ['std'], this.bigPass);
         if (d !== -1 && d <= P.musterHops) { muster.push(f); musterW += f.faction === FACTION.COMBAT ? 1 : 0.25; }
       }
       // reserve rule: only trade the swarm for marines if the hive keeps a
@@ -1628,7 +1591,7 @@ export class Hive {
   // weighted flood mass within `hops` of a node — what the hive could bring
   // to an assault there
   musterStrength(node, hops = 2) {
-    const near = new Set(this.sim.graph.nodesWithin(node, hops, ['std', 'shaft'], () => true));
+    const near = new Set(this.sim.graph.nodesWithin(node, hops, ['std'], () => true));
     let s = 0;
     for (const a of this.sim.agents) {
       if (a.dead || a.hp <= 0 || a.downed) continue;
@@ -1646,7 +1609,7 @@ export class Hive {
     const g = this.sim.graph;
     const adj = new Set((g.adj.std[target] ?? []).filter((e) => !e.link.locked).map((e) => e.to));
     let best = -1, bestScore = -Infinity;
-    for (const n of g.nodesWithin(target, 2, ['std', 'shaft'], this.bigPass)) {
+    for (const n of g.nodesWithin(target, 2, ['std'], this.bigPass)) {
       if (n === target) continue;
       const score = -this.localThreat(n) * 2 - (g.hasRole(n, 'artery') ? 0.5 : 0)
         + (adj.has(n) ? 0.8 : 0);
@@ -1735,11 +1698,6 @@ export class Hive {
     // a form yanked out of a grab must not stay frozen in GRABBING — that
     // state parks movement AND blocks eating (the breach-freeze regression)
     if (form.state === STATE.GRABBING) { form.state = STATE.IDLE; form.grabTimer = 0; }
-    if (form.inShaftAmbush !== undefined && task.kind !== TASK.AMBUSH) {
-      this.sim.graph.shafts[form.inShaftAmbush]?.ambushers?.delete(form.id);
-      form.inShaftAmbush = undefined;
-      if (form.state === STATE.AMBUSHING) form.state = STATE.IDLE;
-    }
   }
 }
 
