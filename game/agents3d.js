@@ -1102,21 +1102,6 @@ export class Agents3D {
       } else if (rp && rp.deck === body.deck) { rp.x = body.x; rp.y = body.y; }
       if (bp && bp.deck === body.deck) { bp.x = body.x; bp.y = body.y; }
     }
-    // transformation bookkeeping — BEFORE the per-agent loop, so `gone` is
-    // already stamped when a newborn combat form runs its first-sight check
-    // (the rise match requires it; review F5 — a live entry must never be
-    // claimable by a passer-by). A corpse that left the buffer (rose or
-    // reaped) is stamped here; one still in the buffer with its thrash
-    // cancelled is stamped in the corpse branch. Entries expire 1.5 s after.
-    if (this._thrashInfo?.size) {
-      const tn = performance.now();
-      for (const [id, ti] of this._thrashInfo) {
-        if (!seen.has(id)) {
-          if (!ti.gone) ti.gone = tn;
-          else if (tn - ti.gone > 1500) this._thrashInfo.delete(id);
-        } else if (ti.gone && tn - ti.gone > 1500) this._thrashInfo.delete(id);
-      }
-    }
 
     // deck-scoped stamping (perf, user: don't render the whole ship): a body
     // two opaque decks away cannot be seen — don't animate or stamp it
@@ -1169,25 +1154,9 @@ export class Agents3D {
       const heading = -buf.headingR[i];
 
       if (f === FACTION.CORPSE) {
-        // HALO-3 TRANSFORMATION (user): a corpse with a pod inside THRASHES —
-        // real physics, not a canned shake. The flag forces a ragdoll up even
-        // for a settled/pre-placed body, and _ragdollBody beats it with
-        // rising-intensity impulses until the combat form stands out of it.
-        const thrashing = (flags & FLAG.THRASHING) !== 0;
-        if (thrashing) {
-          const ti = (this._thrashInfo ??= new Map()).get(id);
-          if (!ti) this._thrashInfo.set(id, { t0: performance.now(), x: wx, z: wz, deck, last: 0, gone: 0 });
-          else { ti.x = wx; ti.z = wz; ti.deck = deck; ti.gone = 0; }
-        } else {
-          // thrash cancelled while the body stays in the buffer (burned to a
-          // husk): stamp `gone` so the entry expires instead of living forever
-          // as a false rise anchor (review F3)
-          const ti = this._thrashInfo?.get(id);
-          if (ti && !ti.gone) ti.gone = performance.now();
-        }
         // a fresh kill flops via physics (_ragdollBody handles the burned/capped
         // cases internally and returns false to hand back here).
-        if (this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts, thrashing)) continue;
+        if (this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts)) continue;
         // Legacy static render. Anchor at the ragdoll's settled spot if it
         // flopped (burned/cap-evicted after settling), so it doesn't snap back
         // to the sim node; otherwise the sim position (ragdoll off, or a
@@ -1214,22 +1183,9 @@ export class Agents3D {
           // the other through the deck. Rz(+90) stands the chest up instead:
           // the body lies face-up, both arms rest in the floor plane, and the
           // sprawl above can tuck them.
-          // Thrash fallback (ragdoll off or at cap): the body still convulses —
-          // a violent arch-and-drop with a rolling wobble, so the
-          // transformation reads on every rig.
-          let arch = 0, wob = 0;
-          if (flags & FLAG.THRASHING) {
-            const tn = performance.now();
-            arch = Math.abs(Math.sin(tn * 0.012 + id)) * 0.16;
-            wob = Math.sin(tn * 0.017 + id * 1.7) * 0.35;
-            // remember where this body is actually DRAWN, so the newborn
-            // form's rise starts from the visible corpse, not the sim anchor
-            const ti = this._thrashInfo?.get(id);
-            if (ti) { ti.lx = bx; ti.lz = bz; ti.ly = bElev; }
-          }
-          this._e.set(wob * 0.6, lieAng + wob, Math.PI / 2);
+          this._e.set(0, lieAng, Math.PI / 2);
           this._q.setFromEuler(this._e);
-          this._m.compose(this._p.set(bx, bElev + 0.16 + arch, bz), this._q, this._s.set(1, 1, 1));
+          this._m.compose(this._p.set(bx, bElev + 0.16, bz), this._q, this._s.set(1, 1, 1));
           if (flags & FLAG.ARMED_HOST) {
             this._stampSprawl(this.armedSet, counts.armed++, id);
             this._rifleAt(bx + Math.cos(lieAng + 1.2) * 0.55, bElev + 0.12,
@@ -1241,6 +1197,28 @@ export class Agents3D {
         }
         continue;
       }
+      // HALO-3 THRASH (user: the thrashing body IS a combat form already —
+      // counts, health, effects). A transforming form renders as a body
+      // convulsing under real physics: force a ragdoll up and beat it with
+      // crescendo impulses (_ragdollBody). When the flag clears, the SAME id
+      // falls through to the ordinary render below, where the existing
+      // ragdoll-rise telegraph plays the 0.85 s stand-up out of the settled
+      // pose — position slide and orientation slerp both come free.
+      if (f === FACTION.COMBAT && (flags & FLAG.THRASHING)) {
+        if (!(this._thrashInfo ??= new Map()).has(id)) this._thrashInfo.set(id, { t0: performance.now(), last: 0 });
+        if (this._ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts, true)) continue;
+        // fallback (ragdoll off or at cap): a violent arch-and-roll on the
+        // flat body so the transformation still reads
+        const tn = performance.now();
+        const arch = Math.abs(Math.sin(tn * 0.012 + id)) * 0.16;
+        const wob = Math.sin(tn * 0.017 + id * 1.7) * 0.35;
+        this._e.set(wob * 0.6, heading + wob, Math.PI / 2);
+        this._q.setFromEuler(this._e);
+        this._m.compose(this._p.set(wx, elev + 0.16 + arch, wz), this._q, this._s.set(1, 1, 1));
+        if (flags & FLAG.ARMED_HOST) this._stampSprawl(this.combatOdstSet, counts.combatOdst++, id);
+        else this._stampSprawl(this.combatCivSet, counts.combatCiv++, id);
+        continue;
+      } else if (this._thrashInfo?.has(id)) this._thrashInfo.delete(id);
       const downed = flags & FLAG.DOWNED;
       if (downed) { // downed combat forms FALL, then lie flat (death blend)
         // a fresh down flops via physics (_ragdollBody handles burned/capped
@@ -1273,33 +1251,6 @@ export class Agents3D {
       // suddenly, seems like a bug"): a form that was down last frame RISES
       // through a reverse of its death fall, with a shudder — 0.85 s of
       // clearly-readable "it's getting back up"
-      // HALO-3 RISE (user): a combat form BORN from a thrashing corpse stands
-      // up out of the body — the same 0.85 s reverse-fall telegraph a revived
-      // form plays — instead of popping in upright. A brand-new id whose
-      // spawn point matches a corpse that was convulsing moments ago IS that
-      // corpse's tenant.
-      if (!(this._knownIds ??= new Set()).has(id)) {
-        this._knownIds.add(id);
-        if (f === FACTION.COMBAT && !(flags & FLAG.DOWNED) && this._thrashInfo?.size) {
-          const tn = performance.now();
-          for (const [cid, ti] of this._thrashInfo) {
-            if (ti.deck !== deck || Math.hypot(wx - ti.x, wz - ti.z) > 0.6) continue;
-            // gone MUST be stamped (review F5): the real tenant appears the
-            // frame its corpse leaves the buffer — and the pre-loop sweep has
-            // stamped that by now — while a live entry belongs to a corpse
-            // still convulsing, and a passer-by must never steal it.
-            if (!ti.gone || tn - ti.gone > 1200) continue;
-            // rise out of the VISIBLE body: the flopped ragdoll's rest, else
-            // the legacy draw spot, else the sim anchor (review F4)
-            const from = ti.vx !== undefined ? [ti.vx, ti.vy, ti.vz]
-              : ti.lx !== undefined ? [ti.lx, ti.ly + 0.16, ti.lz]
-                : [ti.x, world.groundHeightAt(deck, ti.x, ti.z) + 0.16, ti.z];
-            (this._riseAt ??= new Map()).set(id, { t0: tn, from, fromQuat: null });
-            this._thrashInfo.delete(cid);
-            break;
-          }
-        }
-      }
       if (this._downAt.has(id) || this.ragdolls?.has(id)) {
         this._downAt.delete(id);
         // a form getting back up drops its ragdoll and plays the reverse-fall
@@ -1566,6 +1517,9 @@ export class Agents3D {
     }
     if (this._burrowAt?.size) {
       for (const id of this._burrowAt.keys()) if (!seen.has(id)) this._burrowAt.delete(id);
+    }
+    if (this._thrashInfo?.size) {
+      for (const id of this._thrashInfo.keys()) if (!seen.has(id)) this._thrashInfo.delete(id);
     }
 
     // DETONATION, RENDER-ONLY. explodeCarrier() kills the agent and spawns the
@@ -1943,10 +1897,6 @@ export class Agents3D {
       const ti = this._thrashInfo?.get(id);
       const tn = performance.now();
       if (ti) {
-        // remember the VISUAL body position for the rise handoff — the
-        // newborn combat form slides up out of where the flopped body
-        // actually lies, which can drift from the sim anchor
-        ti.vx = rag.rootPos[0]; ti.vy = rag.rootPos[1]; ti.vz = rag.rootPos[2];
         if (tn >= ti.last + 230 + (id % 5) * 25) {
           ti.last = tn;
           const ramp = Math.min(1, (tn - ti.t0) / 2800);

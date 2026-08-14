@@ -1431,6 +1431,7 @@ export class Sim {
   _spatialSteer(a, dt) {
     const P = this.P;
     if (a.isPlayer || a.state === STATE.GRABBING || a.state === STATE.AMBUSHING) return false;
+    if (a.transformingUntil !== undefined) return false; // mid-thrash: rooted, no hunting
     if (!this._physAnchored(a)) return false; // inside ducting/a cross-deck crawl
     const pn = a.pnode ?? a.node;
     let target = null, stopAt = 0, mps = 0;
@@ -1676,6 +1677,8 @@ export class Sim {
   // clamped to the body by floodExec — the separation pass must leave it there
   // (else it drifts off the corpse it's rising from).
   _rootingBody(a) {
+    // a transforming body thrashes where it lies — the crowd flows around it
+    if (a.transformingUntil !== undefined) return true;
     return (a.task?.kind === TASK.CONVERT || a.task?.kind === TASK.REANIMATE)
       && !a.move && a.path.length === 0;
   }
@@ -1892,6 +1895,7 @@ export class Sim {
   // Sprung/retasked forms move again the moment their task changes.
   _holdsDeadStill(a) {
     if (a.state === STATE.AMBUSHING) return true;
+    if (a.transformingUntil !== undefined) return true; // thrashing where the body lies
     return a.task?.kind === TASK.GUARD && a.task.muster !== undefined
       && a.node === a.task.node && !a.move;
   }
@@ -2123,14 +2127,12 @@ export class Sim {
     // above already return true for every active form and carrier — i.e. for
     // everything capable of reanimating anything — so by the time we reach a
     // downed form here, its self-revive schedule is the only way back.
+    // (a body mid-transformation needs no special clause any more: it IS a
+    // combat form agent from the instant the pod burrows in — user rule —
+    // so isActiveFloodForm counts it like any other)
     const anyFlood = this.agents.some((a) => !a.dead &&
       (isActiveFloodForm(a) || a.faction === FACTION.CARRIER ||
-        (a.faction === FACTION.COMBAT && a.downed && a.damage < 100 && a.reviveAt >= 0) ||
-        // a corpse mid-transformation IS live flood: the pod is already spent
-        // (removed at burrow completion) and the combat form rises in
-        // thrashSec — declaring "contained" inside that window handed out
-        // victories 3 seconds before a form stood up (review repro)
-        (a.faction === FACTION.CORPSE && a.risingAt !== undefined && a.damage < 100)));
+        (a.faction === FACTION.COMBAT && a.downed && a.damage < 100 && a.reviveAt >= 0)));
     const anyHuman = this.agents.some((a) => !a.dead && isLivingHuman(a));
     if (!anyFlood) {
       this.outcome = 'contained';
@@ -2180,9 +2182,9 @@ export class Sim {
       if (a.move || a.leaping || a.steeredTick === this.tickCount
         || (a.state === STATE.GRABBING && a.grabTimer > 0)) flags |= FLAG.MOVING;
       // HALO-3 conversion phases for the renderer (and the tracker: a
-      // convulsing corpse IS motion — it paints)
+      // convulsing body IS motion — it paints)
       if (a.faction === FACTION.INFECTION && a.task?.kind === TASK.CONVERT && a.taskProgress > 0) flags |= FLAG.BURROWING;
-      if (a.faction === FACTION.CORPSE && a.risingAt !== undefined) flags |= FLAG.THRASHING | FLAG.MOVING;
+      if (a.faction === FACTION.COMBAT && a.transformingUntil !== undefined) flags |= FLAG.THRASHING | FLAG.MOVING;
       if (a.inShaftAmbush !== undefined) flags |= FLAG.AMBUSH;
       if (a.damage >= 100) flags |= FLAG.BURNED;
       if (a.flamer) flags |= FLAG.FLAMER;

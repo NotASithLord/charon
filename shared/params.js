@@ -234,13 +234,12 @@ export const PARAMS = {
     // timer. The pod must be RIGHT ON TOP of the body (seatRangeM) before
     // anything starts; then it BURROWS in — pod visible, digging, still
     // shootable (kill it and the corpse is spared); then the pod is spent
-    // and the CORPSE takes over — thrashing violently where it lies before
-    // rising as the combat form. Burning the thrashing body past damageMax
-    // kills the thing inside it. burrow+thrash ≈ the old 7 s total once the
-    // crawl-on time is counted.
+    // and the body IS a combat form already (user: counts, health, effects —
+    // everything but movement): it thrashes where it lies for thrashSec,
+    // shootable at full combat-form HP, before it stands and fights.
     seatRangeM: 0.12,          // "on top" means on top — the old gate was 0.35 m + a snap
-    burrowSec: 2.4,            // pod digging into the corpse (interruptible)
-    thrashSec: 3.2,            // corpse convulsing before it stands
+    burrowSec: 1.5,            // pod digging into the corpse (interruptible)
+    thrashSec: 4.0,            // the transforming body convulsing before it stands
     // POINT-BLANK RISK (user rule): letting an infection form get this close
     // is always a mistake, marine or not — it lunges for the latch
     lungeRiskM: 3.0,

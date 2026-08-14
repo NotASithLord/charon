@@ -9,30 +9,26 @@ export function updateFloodTick(sim, dt) {
   const hive = sim.hive;
   for (const a of sim.agents) {
     if (a.dead) continue;
-    // HALO-3 TURN, PHASE 2 — THRASH AND RISE (user): a corpse with a pod
-    // inside convulses where it lies (renderer reads FLAG.THRASHING and
-    // beats the ragdoll), then stands as a combat form on that exact spot.
-    // Burning the body past damageMax mid-thrash kills the thing inside —
-    // the husk stays a husk.
-    if (a.faction === FACTION.CORPSE) {
-      if (a.risingAt !== undefined) {
-        if (a.damage >= 100) {
-          a.risingAt = undefined;
-          a.claimed = false;
-          sim.log('convert', `the convulsing corpse in ${sim.graph.node(a.node).name} burns — whatever was inside dies with it`, a.node, a.x, a.y);
-        } else if (sim.t >= a.risingAt) {
-          a.dead = true;
-          a.risingAt = undefined;
-          const cf = spawnCombatForm(sim, a.node, a); // rises where the body thrashed
-          cf.hostArmed = a.wasArmed === true; // the host's weapon comes up with it
-          sim.stats.conversions++; sim.stats.conversionsRound++;
-          sim.log('convert', `a corpse rises as a combat form in ${sim.graph.node(a.node).name}`, a.node, a.x, a.y);
-        }
-      }
-      continue;
-    }
     if (a.faction === FACTION.CARRIER) { updateCarrier(sim, a, dt); continue; }
     if (a.faction !== FACTION.INFECTION && a.faction !== FACTION.COMBAT) continue;
+
+    // HALO-3 TURN, PHASE 2 — THRASH AND RISE (user: "when a body starts
+    // thrashing it's already a combat form in count and effects, health
+    // etc"). The corpse died at burrow completion and THIS agent — a real
+    // combat form, in the hive's numbers, targetable at full combat-form HP
+    // — convulses rooted on the spot until transformingUntil, then stands
+    // and fights. Shooting it down mid-thrash is killing a combat form,
+    // self-revive rules and all.
+    if (a.faction === FACTION.COMBAT && a.transformingUntil !== undefined) {
+      if (sim.t >= a.transformingUntil) {
+        a.transformingUntil = undefined;
+        sim.log('convert', `the body rises as a combat form in ${sim.graph.node(a.node).name}`, a.node, a.x, a.y);
+      } else {
+        a.move = null; a.path = [];
+        a.animTime += dt;
+        continue; // rooted: no tasks, no movement, no swings until it rises
+      }
+    }
 
     // self-revive (§7)
     if (a.downed) {
@@ -187,7 +183,7 @@ export function updateFloodTick(sim, dt) {
           // own corpse, the 3s conversions all run at once, and every form
           // that can't claim a body flees. One fast wave, then gone. No
           // serial grazing window (that read as "sitting on the crash site").
-          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed && c.risingAt === undefined);
+          const corpse = here.find((c) => c.faction === FACTION.CORPSE && !c.dead && c.damage < 100 && !c.claimed);
           if (corpse) {
             corpse.claimed = true;
             hive.assign(a, { kind: TASK.CONVERT, corpseId: corpse.id });
@@ -333,8 +329,7 @@ export function updateFloodTick(sim, dt) {
 
       case TASK.CONVERT: {
         const body = sim.byId.get(t.corpseId);
-        // a body already mid-transformation is spoken for — this pod moves on
-        if (!body || body.dead || body.damage >= 100 || body.risingAt !== undefined) { a.task = null; break; }
+        if (!body || body.dead || body.damage >= 100) { a.task = null; break; }
         if (a.node === body.node && !a.move) {
           // RIGHT ON TOP (user: "they need to get right on top of the bodies
           // to start the turning cycle"). The old approach eased proportionally
@@ -359,13 +354,17 @@ export function updateFloodTick(sim, dt) {
           a.taskProgress += dt;
           a.animTime += dt;
           if (a.taskProgress >= sim.P.combat.burrowSec) {
-            // PHASE 2 — the pod is INSIDE and spent. The corpse takes over:
-            // risingAt arms the thrash (floodExec's corpse pass below), the
-            // claim holds so no second pod piles onto a body already taken.
-            body.risingAt = sim.t + sim.P.combat.thrashSec;
-            body.claimed = true;
+            // PHASE 2 — the pod is INSIDE and spent, and the body is a
+            // COMBAT FORM from this instant (user: counts, health, effects):
+            // it spawns rooted, thrashing where the corpse lay, and stands
+            // at transformingUntil. The corpse leaves the roster now.
+            body.dead = true;
+            const cf = spawnCombatForm(sim, body.node, body);
+            cf.hostArmed = body.wasArmed === true; // the host's weapon comes up with it
+            cf.transformingUntil = sim.t + sim.P.combat.thrashSec;
+            sim.stats.conversions++; sim.stats.conversionsRound++;
             sim.removeAgent(a);
-            sim.log('convert', `an infection form burrows into a corpse in ${sim.graph.node(body.node).name} — it begins to convulse`, body.node, body.x, body.y);
+            sim.log('convert', `an infection form burrows into a corpse in ${sim.graph.node(body.node).name} — the body begins to convulse`, body.node, body.x, body.y);
           }
         } else moveToward(sim, a, body.node, hive.safeInfectionPath.bind(hive));
         break;

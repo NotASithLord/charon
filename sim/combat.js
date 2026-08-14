@@ -439,6 +439,10 @@ export function resolveCombat(sim, dt) {
           // unarmed): sprint/leap to arm's reach, then a heavy SWIPE on a
           // cooldown — discrete hits that knock chunks off armor, with a
           // real recovery gap between swings to shoot it in
+          // a transforming body is a target, never an attacker: it soaks fire
+          // at full combat-form HP but throws no swipes and fires no host
+          // weapon until it has actually risen
+          if (f.transformingUntil !== undefined) continue;
           if (range <= P.combat.meleeRangeM && sim.t >= (f.nextSwingAt ?? 0)) {
             const swing = P.combat.combatForm.swing;
             f.nextSwingAt = sim.t + swing.cooldownSec;

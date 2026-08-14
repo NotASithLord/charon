@@ -2259,12 +2259,12 @@ function flameTick(dt) {
     if (_fto.dot(_fdir) / d < cosLimit) continue;
     sim.hurtHuman(a, burn, player.agent.id); // blamed on you, like any friendly fire
   }
-  // BODIES BURN (user: burning the thrashing corpse kills the thing inside).
-  // Corpses are deliberately NOT shotCandidates — bullets must not stop on
-  // the dead — but the stream chars them: damage 100 is 'permanently out of
-  // the economy', and if a pod is mid-transformation inside one, pushing it
-  // past 100 cancels the rise (floodExec's corpse pass). Double rate, same
-  // as flame vs forms — fire is the anti-conversion tool.
+  // BODIES BURN. Corpses are deliberately NOT shotCandidates — bullets must
+  // not stop on the dead — but the stream chars them: damage 100 is
+  // 'permanently out of the economy', so torching the larder denies the hive
+  // its future combat forms. (A body already TURNING is a live combat form
+  // agent — the flood loop above burns it like any other form.) Double rate,
+  // same as flame vs forms — fire is the anti-conversion tool.
   for (const a of sim.agents) {
     if (a.dead || a.faction !== 6 || a.damage >= 100) continue;
     if (a.deck !== player.deck) continue;
@@ -2472,11 +2472,11 @@ function drawTracker(now) {
   for (let i = 0; i < buf.count; i++) {
     if (buf.id[i] === player.agent.id) continue;
     const fbuf = buf.faction[i];
-    // a corpse mid-transformation convulses violently — that IS motion, and
-    // the tracker paints it hostile: a red blip where no one is standing is
-    // the only warning you get before the body finishes turning
+    if (fbuf === 6) continue;
+    // a body mid-transformation convulses violently — that IS motion, and it
+    // paints even though its position never changes: a red blip where nothing
+    // stands is the warning that a body is turning
     const thrashing = (buf.flags[i] & FLAG.THRASHING) !== 0;
-    if (fbuf === 6 && !thrashing) continue;
     // MOVING CONTACTS ONLY (user rule): hold still and you vanish, exactly
     // like the real motion tracker. TWO gates now: the sim's own
     // purposeful-motion flag (a committed move leg / an airborne arc — set in
@@ -2499,7 +2499,7 @@ function drawTracker(now) {
     // project into tracker space: up = facing, right = your right hand
     const tx = R + ((dx * rightX + dz * rightZ) / RANGE) * 70;
     const ty = R - ((dx * fwdX + dz * fwdZ) / RANGE) * 70;
-    const hostile = fbuf === 3 || fbuf === 4 || fbuf === 5 || thrashing;
+    const hostile = fbuf === 3 || fbuf === 4 || fbuf === 5;
     trk.fillStyle = hostile ? 'rgba(255,72,56,0.95)' : 'rgba(255,214,64,0.95)';
     if (deck === player.deck) {
       trk.beginPath(); trk.arc(tx, ty, 3.4, 0, Math.PI * 2); trk.fill();
