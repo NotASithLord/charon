@@ -1,8 +1,10 @@
+// 4: the row carries player armor (moved into the sim to fix a co-op death
+// desync — a client used to heal its own agent past the host's damage).
 // 3: the snapshot row carries the leap arc (hoverY + leaping). The row is a
 // positional array validated on its LENGTH, so a v2 peer would reject every
 // v3 row wholesale — the version is what keeps the two builds from meeting in
 // the same room at all instead of staring at frozen NPCs.
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const MAX_PLAYERS = 4;
 export const QUICKPLAY_ROOM = `charon:quickplay:v${PROTOCOL_VERSION}`;
 const ROOM_PREFIX = `charon:v${PROTOCOL_VERSION}:`;

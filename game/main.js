@@ -326,7 +326,6 @@ if (LAUNCH.session) {
       warn.textContent = voiceBlocked ? '🔇 AUDIO BLOCKED — CLICK TO HEAR YOUR TEAM' : '';
     }
     // only meter our own mic once the player has actually turned voice on
-    if (voiceActive) startVoiceMeter();
     if (!voiceActive) player.talking = false;
   };
   LAUNCH.session.on('roster', updateNetwork);
@@ -335,8 +334,11 @@ if (LAUNCH.session) {
   LAUNCH.session.voiceStatus().then(updateVoice).catch(() => updateVoice(null));
   // ...and heal it without the player having to understand any of that: the
   // next click or keypress anywhere resumes playback.
+  let _resumeAt = 0;
   const tryResumeVoice = () => {
     if (!voiceBlocked) return;
+    if (performance.now() - _resumeAt < 800) return; // one attempt per gesture burst
+    _resumeAt = performance.now();
     LAUNCH.session.resumeVoicePlayback().then(updateVoice).catch(() => {});
   };
   window.addEventListener('pointerdown', tryResumeVoice, true);
@@ -1918,34 +1920,14 @@ const commsRows = [];
     }
   }
 }
-// LOCAL VOICE ACTIVITY. The voice stack keeps its MediaStream on the trusted
-// side and exposes no levels, so the speaking bit is measured here off our own
-// capture and broadcast on the pose packet. Entirely best-effort: if the mic
-// is unavailable or blocked, `talking` simply never goes true and the roster
-// falls back to showing MIC / MUTED instead of SPEAKING.
-let _vadData = null, _vadAnalyser = null;
-function startVoiceMeter() {
-  if (_vadAnalyser || !navigator.mediaDevices?.getUserMedia) return;
-  navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-    audio.ensure?.();
-    const ctx = audio.ctx ?? new (window.AudioContext || window.webkitAudioContext)();
-    const src = ctx.createMediaStreamSource(stream);
-    const an = ctx.createAnalyser();
-    an.fftSize = 512; an.smoothingTimeConstant = 0.5;
-    src.connect(an);
-    _vadAnalyser = an;
-    _vadData = new Uint8Array(an.frequencyBinCount);
-  }).catch(() => { _vadAnalyser = null; });
-}
-let _vadAt = 0;
-function updateVoiceMeter(now) {
-  if (!_vadAnalyser || now - _vadAt < 60) return;
-  _vadAt = now;
-  _vadAnalyser.getByteTimeDomainData(_vadData);
-  let peak = 0;
-  for (let i = 0; i < _vadData.length; i += 4) peak = Math.max(peak, Math.abs(_vadData[i] - 128));
-  player.talking = !voiceMuted && peak > 6; // ~5% of full scale: speech, not room tone
-}
+// NO SECOND MIC CAPTURE (co-op report: voice went from one-way to dead in
+// BOTH directions after this shipped). Measuring our own level for the
+// SPEAKING dot meant a second getUserMedia on the same device alongside the
+// one the voice stack is already holding — two captures, one microphone,
+// and on this hardware it took the call down with it. The indicator is not
+// worth the call: the roster reports MIC / MUTED from the voice stack's own
+// status instead, and `talking` stays false until the voice layer can hand
+// us a real level.
 let _commsAt = 0;
 function updateComms(now) {
   if (!commsRows.length || now - _commsAt < 125) return;
@@ -1953,7 +1935,7 @@ function updateComms(now) {
   for (const row of commsRows) {
     if (row.self) {
       row.node.className = player.talking ? 'cm talking' : 'cm';
-      row.micEl.textContent = !_vadAnalyser ? '' : voiceMuted ? 'MUTED' : player.talking ? 'SPEAKING' : 'MIC';
+      row.micEl.textContent = !voiceActive ? '' : voiceMuted ? 'MUTED' : 'MIC';
       continue;
     }
     const talking = !!gameSync?.peerTalking(row.did);
@@ -3403,7 +3385,6 @@ function frame(now) {
   renderLog();
   updateNameplate();
   updateMates();
-  updateVoiceMeter(now);
   updateComms(now);
 
   if (player.dead && ghost) {

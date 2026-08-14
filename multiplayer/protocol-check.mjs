@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  PROTOCOL_VERSION,
   createInviteCode,
   inviteProof,
   matchScope,
@@ -20,27 +21,27 @@ const invite = createInviteCode(fixedRandom);
 assert.equal(invite.length, 20);
 assert.equal(normalizeInviteCode(` ${invite.toUpperCase()} `), invite);
 const inviteRoom = await privateRoom(invite);
-assert.match(inviteRoom, /^charon:v3:private:[0-9a-f]{32}$/);
+assert.match(inviteRoom, new RegExp(`^charon:v${PROTOCOL_VERSION}:private:[0-9a-f]{32}$`));
 assert.equal(inviteRoom.includes(invite), false);
 const proof = await inviteProof(invite, 'did:key:test');
 assert.equal(await verifyInviteProof(invite, 'did:key:test', proof), true);
 assert.equal(await verifyInviteProof(invite, 'did:key:other', proof), false);
-assert.equal(quickplayRoom(0), 'charon:quickplay:v3');
-assert.equal(quickplayRoom(119_999), 'charon:quickplay:v3');
-assert.equal(quickplayRoom(120_000), 'charon:quickplay:v3');
+assert.equal(quickplayRoom(0), `charon:quickplay:v${PROTOCOL_VERSION}`);
+assert.equal(quickplayRoom(119_999), `charon:quickplay:v${PROTOCOL_VERSION}`);
+assert.equal(quickplayRoom(120_000), `charon:quickplay:v${PROTOCOL_VERSION}`);
 assert.equal(matchScope(['did:b', 'did:a']), matchScope(['did:a', 'did:b', 'did:a']));
 assert.notEqual(matchScope(['did:a']), matchScope(['did:b']));
-assert.equal(seedForScope('test'), 'charon-multiplayer-v3:test');
-assert.equal(matchRoom('match-abc123'), 'charon:v3:match-abc123');
+assert.equal(seedForScope('test'), `charon-multiplayer-v${PROTOCOL_VERSION}:test`);
+assert.equal(matchRoom('match-abc123'), `charon:v${PROTOCOL_VERSION}:match-abc123`);
 assert.deepEqual(rankHosts(['did:b', 'did:a'], new Map([
   ['did:a', { score: 120 }], ['did:b', { score: 300 }],
 ])), ['did:b', 'did:a']);
 assert.deepEqual(rankHosts(['did:b', 'did:a'], new Map()), ['did:a', 'did:b']);
 assert.equal(peerNumber('did:a'), peerNumber('did:a'));
-assert.equal(validGamePacket({ v: 3, kind: 'state', from: 'did:a', seq: 1 }), true);
-assert.equal(validGamePacket({ v: 2, kind: 'state', from: 'did:a', seq: 1 }), false);
-assert.equal(validGamePacket({ v: 3, kind: 'eval', from: 'did:a', seq: 1 }), false);
-assert.equal(validGamePacket({ v: 3, kind: 'state', from: 'did:a', seq: -1 }), false);
+assert.equal(validGamePacket({ v: PROTOCOL_VERSION, kind: 'state', from: 'did:a', seq: 1 }), true);
+assert.equal(validGamePacket({ v: PROTOCOL_VERSION - 1, kind: 'state', from: 'did:a', seq: 1 }), false);
+assert.equal(validGamePacket({ v: PROTOCOL_VERSION, kind: 'eval', from: 'did:a', seq: 1 }), false);
+assert.equal(validGamePacket({ v: PROTOCOL_VERSION, kind: 'state', from: 'did:a', seq: -1 }), false);
 const ready = { __peerdMedia: 1, scope: 'squad', kind: 'ready', session: '0123456789ab', ack: false };
 assert.equal(isRoomVoiceSignal(ready), true);
 assert.equal(isRoomVoiceSignal({ ...ready, session: 'short' }), false);

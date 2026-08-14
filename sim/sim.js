@@ -220,6 +220,7 @@ export class Sim {
   attachPlayer(nodeIdx, opts = {}) {
     const a = makeAgent(opts.odst ? FACTION.ARMED : FACTION.CIVILIAN, nodeIdx, this.graph);
     a.hp = a.maxHp = opts.odst ? 45 : this.P.combat.civilian.hp;
+    a.armor = this.P.player.armor;
     a.isPlayer = true;
     a.hasRadio = true;
     this.spawn(a);
@@ -499,6 +500,17 @@ export class Sim {
   hurtHuman(a, dmg, by = -1, impact = null) {
     if (a.hp <= 0 || a.dead) return;
     if (by >= 0 && dmg > 0) { a.lastHurtBy = by; a.lastHurtTick = this.tickCount; }
+    // ARMOR FIRST, and on the authority's side of the wire (co-op death
+    // desync): ballistic plate soaks the hit before meat does. Applied here
+    // so BOTH players get it — a peer used to run this in its own client and
+    // heal itself past a death the host had already decided.
+    if (a.isPlayer && dmg > 0 && a.armor > 0) {
+      const absorbed = Math.min(a.armor, dmg);
+      a.armor -= absorbed;
+      dmg -= absorbed;
+      a.armorHitAt = this.t;
+      if (dmg <= 0) return;
+    } else if (a.isPlayer && dmg > 0) a.armorHitAt = this.t;
     a.hp -= dmg;
     if (a.hp <= 0) {
       if (impact) a.deathImpulse = impact;
@@ -605,6 +617,15 @@ export class Sim {
     updateHumansTick(this, dt);
     updateFloodTick(this, dt);
     this._grenadeTick();
+    // player armor recovers after a lull (authority-owned; peers read it off
+    // the snapshot row, so both ends agree on how much buffer is left)
+    for (const a of this.agents) {
+      if (!a.isPlayer || a.dead || a.hp <= 0) continue;
+      const P = this.P.player;
+      if (this.t - (a.armorHitAt ?? -99) >= P.armorDelaySec && a.armor < P.armor) {
+        a.armor = Math.min(P.armor, a.armor + P.armorRegenPerSec * dt);
+      }
+    }
     this._advanceMovement(dt);
     this._separate(dt);
     this._fireAvoid(dt);

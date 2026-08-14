@@ -93,6 +93,7 @@ export function makeAgent(kind, node, graph) {
     lastFledFrom: undefined, panicUntil: undefined, desperateSince: undefined,
     steeredTick: undefined, // last tick _spatialSteer/held-spin displaced the body (MOVING flag)
     givingGround: false,    // shooter backing away while it fires (morale)
+    armor: 0, armorHitAt: -99, // player ballistic armor (sim-owned; see hurtHuman)
     frags: 0, nextFragAt: undefined, // marine grenades
     transformingUntil: undefined, // combat form born from a corpse: rooted + thrashing until this sim second
     _fleeLogAt: undefined, doorBalks: undefined, doorHold: undefined,

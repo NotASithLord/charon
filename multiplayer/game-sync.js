@@ -61,6 +61,9 @@ function agentRow(agent) {
     // Two integers per row, and only a body actually in the air is ever
     // non-zero, so the delta cache still suppresses everyone on the floor.
     pack(agent.hoverY ?? 0), agent.leaping ? 1 : 0,
+    // player ballistic armor: sim-owned since the co-op death desync, so it
+    // has to reach the peer or its HUD would show a buffer it does not have
+    pack(agent.armor ?? 0),
   ];
   const hit = agent.deathImpulse;
   if (hit?.kind === 'melee') row.push(
@@ -100,7 +103,7 @@ function validSnapshotRow(row, graph) {
   // 17/18 are the leap arc (see agentRow); the layout change is why
   // PROTOCOL_VERSION moved — a peer on the old shape rejects every row rather
   // than misreading one.
-  return Array.isArray(row) && (row.length === 19 || row.length === 25)
+  return Array.isArray(row) && (row.length === 20 || row.length === 26)
     && packedIntegers(row.slice(0, 12))
     && Number.isSafeInteger(row[0]) && row[0] > 0
     && Number.isInteger(row[1]) && row[1] >= 0 && row[1] <= 6
@@ -115,7 +118,8 @@ function validSnapshotRow(row, graph) {
     && Number.isSafeInteger(row[16]) && row[16] >= -WIRE_SCALE && row[16] <= 10_000 * WIRE_SCALE
     && Number.isSafeInteger(row[17]) && row[17] >= 0 && row[17] <= 100 * WIRE_SCALE // hoverY: up, never down
     && (row[18] === 0 || row[18] === 1)                                             // leaping
-    && row.slice(19).every((value) => Number.isSafeInteger(value) && Math.abs(value) <= 100 * WIRE_SCALE);
+    && Number.isSafeInteger(row[19]) && row[19] >= 0 && row[19] <= 1_000 * WIRE_SCALE // armor
+    && row.slice(20).every((value) => Number.isSafeInteger(value) && Math.abs(value) <= 100 * WIRE_SCALE);
 }
 
 export function createGameSync({
@@ -223,7 +227,7 @@ export function createGameSync({
     const live = new Set();
     for (const row of rows) {
       const [id, faction, state, node, x, y, deck, hp, maxHp, damage,
-        heading, animTime, dead, downed, helpless, panicked, meleeUntil, hoverY, leaping] = row;
+        heading, animTime, dead, downed, helpless, panicked, meleeUntil, hoverY, leaping, armor] = row;
       live.add(id);
       let agent = sim.byId.get(id);
       if (!agent) {
@@ -252,9 +256,10 @@ export function createGameSync({
       agent.damage = unpack(damage);
       agent.animTime = unpack(animTime);
       agent.meleeUntil = unpack(meleeUntil);
-      agent.deathImpulse = row.length === 25 ? {
-        kind: 'melee', dirX: unpack(row[19]), dirY: unpack(row[20]),
-        speed: unpack(row[21]), up: unpack(row[22]), spin: unpack(row[23]), kick: unpack(row[24]),
+      agent.armor = unpack(armor);
+      agent.deathImpulse = row.length === 26 ? {
+        kind: 'melee', dirX: unpack(row[20]), dirY: unpack(row[21]),
+        speed: unpack(row[22]), up: unpack(row[23]), spin: unpack(row[24]), kick: unpack(row[25]),
       } : null;
       agent.dead = !!dead;
       agent.downed = !!downed;
@@ -294,6 +299,8 @@ export function createGameSync({
       if (packet.world.outcome === null || packet.world.outcome === 'contained' || packet.world.outcome === 'lost') {
         sim.outcome = packet.world.outcome;
       }
+      if (packet.world.outcomeAt === null) sim.outcomeAt = null;
+      else if (Number.isSafeInteger(packet.world.outcomeAt)) sim.outcomeAt = unpack(packet.world.outcomeAt);
       sim.lastStand = !!packet.world.lastStand;
       if (Number.isFinite(packet.world.armoryStock)) sim.armoryStock = packet.world.armoryStock;
       sim.armoryLocked = !!packet.world.armoryLocked;
@@ -458,6 +465,12 @@ export function createGameSync({
             ...(full ? { world: {
               edges: sim.graph.edges.map((edge) => (edge.locked ? 1 : 0) | (edge.burning ? 2 : 0)),
               outcome: sim.outcome,
+              // THE CLOCK ON THE END CARD (co-op report: both won, the host's
+              // time was 2 s faster). outcomeAt is frozen when the last form
+              // goes down; without it on the wire a peer fell back to its own
+              // sim.t, which is a checkpoint behind. One number, and both ends
+              // read the same run time.
+              outcomeAt: sim.outcomeAt === null ? null : pack(sim.outcomeAt),
               lastStand: sim.lastStand,
               armoryStock: sim.armoryStock,
               armoryLocked: sim.armoryLocked,

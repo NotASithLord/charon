@@ -133,6 +133,14 @@ export const PARAMS = {
   // HOW HUMANS GIVE GROUND (user rules): unarmed crew always run the other
   // way; armed crew back away firing; marines hold against one or two forms
   // and fight a withdrawal against a real pack.
+  // PLAYER ARMOR, IN THE SIM (co-op: "he died on my end but was still alive
+  // on his"). This lived only in the client's Player controller, which
+  // intercepted its own agent's hp drops and wrote them BACK UP — so a peer
+  // healed itself out of the damage the host had already applied, and the two
+  // ends disagreed about whether it was alive. The authority owns it now, so
+  // both players get the same buffer and the same death. Mirrors fps-data's
+  // old ODST numbers exactly.
+  player: { armor: 50, armorDelaySec: 4.2, armorRegenPerSec: 22 },
   morale: {
     marineHoldForms: 2,    // stand your ground at this many forms or fewer
     backpedalMps: 1.0,     // retreating fire is a walk backwards, not a sprint

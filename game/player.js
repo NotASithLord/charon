@@ -36,8 +36,8 @@ export class Player extends FpsController {
     this._wLatch = false;
     this._armoryIdx = sim.graph.byId.get('armory');
 
-    // armor over health (first-strike shield model, ODST-flavored)
-    this.armor = ODST.armor;
+    // armor over health (first-strike shield model, ODST-flavored) — the
+    // VALUE lives on the sim agent; this is just the read-through for the HUD
     this.sinceHit = 99;
 
     this.agent = existingAgent ?? sim.attachPlayer(startNode, { odst: true });
@@ -47,6 +47,7 @@ export class Player extends FpsController {
   }
 
   get dead() { return this.agent.dead || this.agent.hp <= 0; }
+  get armor() { return this.agent.armor ?? 0; }
   get pinned() { return this.agent.held === this.sim.tickCount; }
 
   // feet world Y follows the climb transition when one is running
@@ -60,20 +61,13 @@ export class Player extends FpsController {
     if (!this.dead) this.adoptCapsule();
     if (this.dead) { this._cur = this._worldPose(); return; }
 
-    // --- armor layer: intercept sim damage; armor soaks, then recovers ---
-    const hpNow = this.agent.hp;
-    if (hpNow < this._lastHp) {
-      const dmg = this._lastHp - hpNow;
-      const absorbed = Math.min(this.armor, dmg);
-      this.agent.hp = Math.min(this.agent.maxHp, hpNow + absorbed);
-      this.armor = Math.max(0, this.armor - dmg);
-      this.sinceHit = 0;
-    }
+    // ARMOR IS THE SIM'S NOW (co-op death desync). This used to read its own
+    // agent's hp drop and write it back up by the absorbed amount — which on
+    // a peer meant healing past damage the host had already applied, so one
+    // end thought you were dead and the other kept playing. sim.hurtHuman
+    // spends the plate on the authority and the value rides the snapshot, so
+    // both players see the same armor and die at the same moment.
     this._lastHp = this.agent.hp;
-    this.sinceHit += dt;
-    if (this.sinceHit >= ODST.armorDelayS && this.armor < ODST.armor) {
-      this.armor = Math.min(ODST.armor, this.armor + ODST.armorRegenPerS * dt);
-    }
 
     // --- E: scavenge ammo from the armory rack or the armed dead ---
     if (this.keys.has('KeyE') && !this._eLatch) {
@@ -174,12 +168,32 @@ export class Player extends FpsController {
   _containToHull() {
     if (this.climb || this.dead) return;              // a climb owns the body
     const [sx, sy] = this.world.worldToSim(this.x, this.z, this.deck);
-    if (this.world.insideHull(this.deck, sx, sy)) { this._outSince = 0; return; }
+    if (this.world.insideHull(this.deck, sx, sy)) {
+      this._outSince = 0;
+      // remember the last spot we KNOW was legal, at ~5 Hz so it is always a
+      // little behind us rather than the frame we clipped on
+      if (!this._safeAt || performance.now() - this._safeAt > 200) {
+        this._safeAt = performance.now();
+        this._safe = [this.x, this.z, this.deck, this.h];
+      }
+      return;
+    }
     // one frame outside can be a legitimate straddle mid-transition; two in a
     // row is the void
     if (!this._outSince) { this._outSince = 1; return; }
-    const [rx, ry] = this.world.nearestHullPoint(this.deck, sx, sy);
-    const [wx, wz] = this.world.simToWorld(rx, ry, this.deck);
+    // RECOVER TO WHERE YOU JUST WERE (user: "randomly teleported... to another
+    // place in the ship"). Snapping to the nearest room rect can be most of a
+    // deck away when you slip out of a big hall — which reads as a teleport
+    // even though it is the backstop doing its job. Stepping back to the last
+    // position we know was legal reads as bumping the wall you just clipped.
+    let wx, wz;
+    if (this._safe && this._safe[2] === this.deck) {
+      [wx, wz] = this._safe;
+      this.h = this._safe[3];
+    } else {
+      const [rx, ry] = this.world.nearestHullPoint(this.deck, sx, sy);
+      [wx, wz] = this.world.simToWorld(rx, ry, this.deck);
+    }
     this.x = wx; this.z = wz;
     this.vx = this.vz = 0;
     this.h = Math.max(this.h, 0);
