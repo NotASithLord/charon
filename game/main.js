@@ -187,8 +187,15 @@ const hemi = new THREE.HemisphereLight(0x9fb2d0, 0x141821, 0.07);
 scene.add(hemi);
 const ambient = new THREE.AmbientLight(0x7d879e, 0.06);
 scene.add(ambient);
-const lamp = new THREE.PointLight(0xcfe0ff, 0, 10, 1.8);
-scene.add(lamp);
+// THE PLAYER'S ROOM FILL IS A POOL LIGHT (perf pass 5). It used to be a
+// permanent scene PointLight, which meant every fragment on every rung paid
+// for it whether or not it contributed — the ladder's `lights: N` only ever
+// sized LightPool, so rung 4 advertised 6 lights and shaded 10. Declared
+// into the pool instead, it competes on the pool's own brightest-and-nearest
+// terms and simply does not exist when the room is dark. One analytic light
+// off EVERY rung, no rung machinery, and no light-order churn: the light is
+// never added to the scene, so it cannot permute LightsNode's cache key.
+let _fillX = 0, _fillY = 0, _fillZ = 0, _fillI = 0;
 // FLASHLIGHT (user rule): in flood-held darkness this is all you have. In
 // spore fog its throw clamps to a few meters instead of the whole room.
 // It casts REAL shadows now — a soft-penumbra spot, not a dumb hard cone.
@@ -789,6 +796,13 @@ else {
 // pipelines on — count-0 instanced sets, hidden flood veils — so the FIRST
 // muzzle flash / veil / decal of a run doesn't compile mid-fight; the
 // governor guarantees the restore runs even if a compile fails.
+// THE CAMERA SUBTREE MUST BE IN THE SCENE BEFORE PREWARM (perf pass 5
+// audit). scene.add(camera) used to run ~290 lines below this call, and
+// prewarm's first rung compiles synchronously — so rung 2 was compiled
+// against a scene with no camera child: the viewmodel and flamer meshes were
+// never warmed at all, and their pipelines compiled mid-game on first sight,
+// which is exactly the shader storm prewarm exists to prevent.
+scene.add(camera);
 governor.prewarm(scene, camera, {
   forceWarm: (s) => {
     const warmed = [];
@@ -1082,7 +1096,6 @@ flamerModel.add(flamerMesh);
 flamerModel.scale.setScalar(FLAMER_TUNE.s);
 flamerModel.visible = false;
 camera.add(flamerModel);
-scene.add(camera);
 
 // --- THE BUTT-STROKE ------------------------------------------------------
 // User: melee should be "the barrel of the gun coming to the left as you
@@ -3179,7 +3192,7 @@ function frame(now) {
   const hemiTarget = inDark ? 0.0 : 0.12;
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
-  lamp.intensity = inDark ? 0.0 : 4.5 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  _fillI = inDark ? 0.0 : 4.5 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
   // candela, not the old 1.5-decay number: at true inverse-square 430 cd puts
   // a wall at 4 m near clipping and a bulkhead at 20 m at a believable glimmer,
   // which is what a handheld actually does. The spill is a tenth of it, and
@@ -3234,6 +3247,9 @@ function frame(now) {
   sparks.update(dtReal, now / 1000, player.x, player.z, elevOf(player.deck));
   updateMotes(dtReal);
   updateRoomLightPool(inDark);
+  // the player's own fill, declared like any fixture (add() no-ops under
+  // 0.02 intensity, so the dark case costs nothing and needs no branch)
+  lightPool.add(_fillX, _fillY, _fillZ, 0xcfe0ff, _fillI, 10, 1.8);
   updateDoorSpill();
   updateMuzzleLights();
   lightPool.commit(player.x, player.z);
@@ -3301,7 +3317,7 @@ function frame(now) {
     camera.position.set(gx, gy, gz);
     camera.rotation.set(0, 0, 0);
     camera.rotateY(Math.atan2(-Math.cos(ghost.heading), -Math.sin(ghost.heading)));
-    lamp.position.set(gx, gy + 0.2, gz);
+    _fillX = gx; _fillY = gy + 0.2; _fillZ = gz;
     viewmodel.visible = false;
     flamerModel.visible = false;
   } else {
@@ -3311,7 +3327,7 @@ function frame(now) {
     camera.rotation.set(0, 0, 0);
     camera.rotateY(pose.yaw + (shake > 0 ? Math.sin(now * 0.09) * 0.02 * shake : 0));
     camera.rotateX(pose.pitch + (shake > 0 ? Math.sin(now * 0.11) * 0.018 * shake : 0));
-    lamp.position.set(pose.x, pose.y + 0.2, pose.z);
+    _fillX = pose.x; _fillY = pose.y + 0.2; _fillZ = pose.z;
     // exactly one weapon on screen
     viewmodel.visible = !player.dead && !heldIsFlamer;
     flamerModel.visible = !player.dead && heldIsFlamer;
