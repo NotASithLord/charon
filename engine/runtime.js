@@ -253,6 +253,17 @@ export class QualityGovernor {
     // still read correctly as "at cadence, hold quality".
     const cadence = this._interval < 16.0 ? 16.7 : this._interval;
     const locked = this._ema <= cadence + 0.8;
+    // ...but "at cadence" is NOT headroom when the cadence itself is slow.
+    // A machine that cannot hold 60 gets vsync-halved to exactly 33.3 ms, so
+    // _interval converges on 33.3, `locked` goes true, and the ladder reads a
+    // GPU drowning at 30 fps as a healthy 30 Hz display — it then stops
+    // descending and periodically climbs BACK up (playtest: a 2017 integrated
+    // GPU pinned at 30). Treat a cadence at/above ~20 ms as evidence of a
+    // problem rather than proof of comfort: hold what we have, never promote.
+    // (macOS Low Power Mode's real 30 Hz rAF lands here too and simply stops
+    // auto-ascending, which is the conservative direction.)
+    const slowCadence = cadence > 20;
+    const headroom = this._ema < 13 || (locked && !slowCadence);
     // NOTHING moves while pinned or prewarming (swarm finding: the walk used
     // to run on prewarm's TRANSIENT rungs — it read rung 3's 0.60 floor
     // mid-compile-grind and stranded pixel ratio below rung 0's 0.85 floor
@@ -279,7 +290,7 @@ export class QualityGovernor {
     // snap-above-cap correction stays immediate (boot-only) and the
     // stranded-below-floor self-heal stays immediate (rare, one-off).
     const resReady = now - (this._resMovedAt ?? 0) > 9000;
-    const wantAscend = (this._ema < 13 || locked) && cur < cap;
+    const wantAscend = headroom && cur < cap;
     // snap into range FIRST: boot can start above the cap (pixelRatioCap is a
     // fixed 1.25) and no other branch walks it down
     if (cur > cap + 0.01) next = cap;
@@ -302,7 +313,13 @@ export class QualityGovernor {
     // or CATASTROPHICALLY slow (~<25fps), where waiting out the resolution
     // walk first costs 12+ seconds of slideshow (swarm finding): drop a rung
     // immediately per evaluation until the machine breathes
-    const catastrophic = this._ema > 40 && this.rung < this.rungs.length - 1;
+    // 33 ms IS catastrophic on a 60 Hz panel — it is a halved present rate,
+    // not a comfortable cadence — so the fast descent has to see it. The old
+    // >40 ms gate sat just above the vsync-halved 33.3 ms, which is exactly
+    // where a GPU-bound machine parks, so the fast path never fired for the
+    // hardware that needed it most.
+    const catastrophic = (this._ema > 40 || (slowCadence && this._ema > 30))
+      && this.rung < this.rungs.length - 1;
     if (catastrophic || (this._ema > 24 && cur <= floor + 0.01 && this.rung < this.rungs.length - 1)) {
       if (catastrophic || ++this._slow >= 2) {
         this.applyRung(this.rung + 1);
@@ -317,7 +334,7 @@ export class QualityGovernor {
     // rung — 7-8 minutes total — read as too punishing). A failed promotion
     // still descends immediately and re-sits the cooldown, so the worst
     // oscillation is one gentle probe every ~47s.
-    if ((this._ema < 13 || locked) && cur >= cap - 0.01 && this.rung > 0 && now - this._movedAt > 35000) {
+    if (headroom && cur >= cap - 0.01 && this.rung > 0 && now - this._movedAt > 35000) {
       if (++this._fast >= 4) {
         this.applyRung(this.rung - 1);
         this._fast = 0;
