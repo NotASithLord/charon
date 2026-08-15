@@ -266,6 +266,24 @@ export class RagdollSystem {
     clampVec(rag.omega, p.maxAngSpeed);
   }
 
+  // TRIM TO THE CAP. The quality ladder lowers maxActive (48 -> 16 by rung 4)
+  // precisely to shed CPU on a weak machine, but eviction only ever ran when
+  // a NEW body flopped — so a pool that was already full stayed full and the
+  // rung's saving never materialised on the machine that asked for it.
+  trimToCap() {
+    while (this._byId.size > this.p.maxActive) {
+      let victim = null;
+      for (const r of this._byId.values()) {
+        if (!victim) { victim = r; continue; }
+        const better = (r.asleep && !victim.asleep)
+          || (r.asleep === victim.asleep && r.seq < victim.seq);
+        if (better) victim = r;
+      }
+      if (!victim) return;
+      this._byId.delete(victim.id);
+    }
+  }
+
   _evictIfFull() {
     if (this._byId.size < this.p.maxActive) return;
     let victim = null;
@@ -284,6 +302,7 @@ export class RagdollSystem {
   // can't spiral. Asleep bodies are frozen — free to keep around as the resting
   // pose until the sim removes the corpse.
   step(dtReal) {
+    if (this._byId.size > this.p.maxActive) this.trimToCap();
     const p = this.p;
     this._acc += Math.min(dtReal, p.dtCap);
     let n = 0;

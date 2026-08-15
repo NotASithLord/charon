@@ -174,7 +174,11 @@ function setTeamSpots(n) {
   em(0x8fa8d8, 1.2, 3, 2, -9.9, 1.5, 0, Math.PI / 2);  // pale port glow
   em(0xff5030, 0.8, 2, 1, 9.9, 1.2, 0, -Math.PI / 2);  // faint red starboard
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(env, 0.04).texture;
+  // size 128, not the 256 default: this environment is sampled at 8%
+  // intensity as a broad wash (environmentIntensity below), so the extra
+  // mip detail is invisible and costs ~4.5 MB of RGBA16F on a machine that
+  // shares its 8 GB with the GPU
+  scene.environment = pmrem.fromScene(env, 0.04, 0.1, 100, { size: 128 }).texture;
   scene.environmentIntensity = 0.08;
   pmrem.dispose();
 }
@@ -2106,6 +2110,8 @@ function resize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
+let _vpW = window.innerWidth, _vpH = window.innerHeight;
+window.addEventListener('resize', () => { _vpW = window.innerWidth; _vpH = window.innerHeight; });
 window.addEventListener('resize', resize);
 resize();
 
@@ -3111,6 +3117,10 @@ function frame(now) {
   }
 
   agents.viewX = player.x; agents.viewZ = player.z; // fog-exact stamp culling
+  // ...and which way you are facing, so bodies behind the camera are neither
+  // posed nor stamped (the instanced sets are frustumCulled=false, so every
+  // stamped body is submitted regardless of where the camera points)
+  agents._viewFX = -Math.sin(player.yaw); agents._viewFZ = -Math.cos(player.yaw);
   agents.update(dtReal);
   gameSync?.update(dtReal, now);
   // the sweep voices 10-15Hz sim data; every one-shot has a >=220ms throttle
@@ -3429,7 +3439,10 @@ function frame(now) {
   // quality ladder: resolution walk + rung descend/ascend live in the
   // engine governor now (engine/runtime.js) — per-rung effects still land
   // through this game's apply callback above
-  governor.frame(now, dtReal, window.innerWidth, window.innerHeight);
+  // viewport size from a cached value, not a per-frame read: the governor
+  // consults it once every 3 s, and querying the window every frame is a
+  // layout touch the frame does not need
+  governor.frame(now, dtReal, _vpW, _vpH);
 
   // PERF READOUT (user: benchmark across hardware) — live FPS + frame ms +
   // a slow-decaying worst spike + resolution/rung/backend, top right under

@@ -98,24 +98,24 @@ export class World {
   // ONE PLACARD AT A TIME: the nearest room sign on the player's deck, within
   // range. Anything else stays hidden, so signs can never overlap or stack.
   showRoomSign(deck, px, pz, maxM = 26) {
-    const signs = this.roomSigns;
-    if (!signs) return;
+    const anchors = this.roomSigns;
+    if (!anchors) return;
     let best = -1, bestD = maxM * maxM;
-    for (let i = 0; i < signs.length; i++) {
-      const s = signs[i];
-      if (!s) continue;
-      if (s.visible && i !== this._signShown) s.visible = false;
-      const nd = this.graph.node(i);
-      if (nd.deck !== deck) continue;
-      const dx = s.position.x - px, dz = s.position.z - pz;
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i];
+      if (!a || this.graph.node(i).deck !== deck) continue;
+      const dx = a.x - px, dz = a.z - pz;
       const d2 = dx * dx + dz * dz;
       if (d2 < bestD) { bestD = d2; best = i; }
     }
-    if (this._signShown !== undefined && this._signShown !== best && signs[this._signShown]) {
-      signs[this._signShown].visible = false;
-    }
-    if (best >= 0) signs[best].visible = true;
+    if (best === this._signShown) return;
     this._signShown = best;
+    const spr = this._signSprite();
+    if (best < 0) { spr.visible = false; return; }
+    const a = anchors[best];
+    this._paintSign(a.name);
+    spr.position.set(a.x, a.y, a.z);
+    spr.visible = true;
   }
 
   // Both return a REUSED scratch pair (perf pass 3): every caller in the
@@ -275,7 +275,7 @@ export class World {
     // NOT doors/veils/signs, whose visibility/opacity is animated per frame)
     const binned = new Set();
     for (const list of this._volBins.values()) for (const o of list) binned.add(o);
-    const skip = new Set([...moving, ...this.darkVeils.filter(Boolean), ...(this.roomSigns ?? []).filter(Boolean)]);
+    const skip = new Set([...moving, ...this.darkVeils.filter(Boolean)]);
     for (const o of this.scene.children) {
       if (!o.isMesh || o.isInstancedMesh || skip.has(o) || binned.has(o)) continue;
       binVol(deckOf(o.position.y), thirdOf(o.position.x), o);
@@ -476,21 +476,39 @@ export class World {
     return tex;
   }
 
-  _label(text) {
+  // ONE PLACARD, REUSED (perf pass 5). Every room used to own a private
+  // 512x96 CanvasTexture — 63 of them, ~15.7 MB of GPU texture plus ~11.8 MB
+  // of retained 2D backing store — to display exactly ONE sign at a time
+  // (showRoomSign picks the nearest and hides the rest). There is now a
+  // single sprite that moves to whichever room you are in and repaints its
+  // canvas when the name changes. Same look, ~27 MB back on a machine that
+  // shares 8 GB with its GPU.
+  _signSprite() {
+    if (this._sign) return this._sign;
     const c = document.createElement('canvas');
     c.width = 512; c.height = 96;
-    const x = c.getContext('2d');
-    x.fillStyle = 'rgba(8, 12, 18, 0.85)'; x.fillRect(0, 0, 512, 96);
-    x.strokeStyle = '#31435f'; x.lineWidth = 4; x.strokeRect(2, 2, 508, 92);
-    x.fillStyle = '#9fc3ef'; x.font = '600 44px monospace'; x.textAlign = 'center'; x.textBaseline = 'middle';
-    x.fillText(text.toUpperCase(), 256, 50);
+    this._signCtx = c.getContext('2d');
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.95 }));
     // smaller than it was: at 4.6 m wide a sign a few metres away filled the
     // screen and ran off its edge (user)
     spr.scale.set(3.0, 0.56, 1);
+    spr.visible = false;
+    this._signTex = tex;
+    this._sign = spr;
+    this.scene.add(spr);
     return spr;
+  }
+
+  _paintSign(text) {
+    const x = this._signCtx;
+    x.clearRect(0, 0, 512, 96);
+    x.fillStyle = 'rgba(8, 12, 18, 0.85)'; x.fillRect(0, 0, 512, 96);
+    x.strokeStyle = '#31435f'; x.lineWidth = 4; x.strokeRect(2, 2, 508, 92);
+    x.fillStyle = '#9fc3ef'; x.font = '600 44px monospace'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(String(text).toUpperCase(), 256, 50);
+    this._signTex.needsUpdate = true;
   }
 
   _build() {
@@ -582,15 +600,9 @@ export class World {
         slab.position.set((a0 + a1) / 2, elev + roomH, (b0 + b1) / 2);
         this.scene.add(slab);
       }
-      const sign = this._label(n.name);
-      sign.position.set(wx, elev + roomH - 0.45, wz);
-      // EVERY room hung one of these and every one of them was visible, so any
-      // view across a room boundary stacked two or three huge overlapping
-      // placards (user: "this ... tag doesnt make any sense"). They start
-      // hidden; showRoomSign picks exactly one per frame.
-      sign.visible = false;
-      this.scene.add(sign);
-      (this.roomSigns ??= [])[n.idx] = sign;
+      // just the anchor — the single shared placard moves here when this is
+      // the room you are standing in (see showRoomSign)
+      (this.roomSigns ??= [])[n.idx] = { x: wx, y: elev + roomH - 0.45, z: wz, name: n.name };
 
       // flood-darkness veil: fills the room volume; invisible until the sim
       // says the flood has held the room long enough (updateDarkness)
@@ -1708,9 +1720,17 @@ export class World {
   // player's own room is exempted from its veil (interior darkness is done
   // with real lights by the game) — you see INTO held rooms as black murk.
   updateDarkness(sim, playerNode, dt) {
+    // A VEIL IS A ROOM-SIZED TRANSPARENT BOX. They are deliberately kept out
+    // of the volume bins (they animate), so every darkened room anywhere on
+    // the ship submitted one every frame — including decks you cannot see
+    // through. Two opaque decks away it is pure fill on a GPU that has none
+    // to spare. The opacity still eases for every room (the state must be
+    // right the moment you arrive); only the DRAW is gated.
+    const playerDeck = sim.graph.node(playerNode)?.deck ?? 3;
     for (let n = 0; n < sim.graph.n; n++) {
       const veil = this.darkVeils[n];
       if (!veil) continue;
+      const nearDeck = Math.abs(sim.graph.node(n).deck - playerDeck) <= 1;
       const fog = sim.fogAt(n);
       // unlit rooms are veiled from OUTSIDE too — but NOT flat black (user:
       // light transfers between rooms). A dead-fixture room's veil is thin
@@ -1722,7 +1742,7 @@ export class World {
         : fixtureDead ? 0.5 : 0;
       const m = veil.material;
       m.opacity += (target - m.opacity) * Math.min(1, dt * 2.5);
-      veil.visible = m.opacity > 0.03;
+      veil.visible = nearDeck && m.opacity > 0.03;
       // spore fog reads green-brown, plain darkness reads black
       m.color.setHex(fog ? 0x18200c : 0x000000);
       // an overgrown room's fixture dies with it — and its sign fades into
@@ -1731,8 +1751,11 @@ export class World {
       if (L && sim.darkAt(n)) { L.lvl = 0.02; L.mat.emissiveIntensity = 0.02; }
       // even the battery lamps die when the growth takes the room
       if (L?.emMat) L.emMat.emissiveIntensity = sim.darkAt(n) ? 0.04 : 2.4;
-      const sign = this.roomSigns?.[n];
-      if (sign) sign.material.opacity = sim.darkAt(n) ? 0.06 : 0.95;
+      // the placard is ONE shared sprite now, so only the room it is
+      // currently hanging in can fade it into the murk
+      if (n === this._signShown && this._sign) {
+        this._sign.material.opacity = sim.darkAt(n) ? 0.06 : 0.95;
+      }
     }
   }
 

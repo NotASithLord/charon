@@ -1012,6 +1012,13 @@ export class Agents3D {
     }
     // advance the flops (fixed sub-step inside; asleep bodies are frozen)
     if (this.ragdolls) this.ragdolls.step(dt);
+    // CULL RADIUS TRACKS THE FOG (perf pass 5). scene.fog.far collapses to
+    // ~34 m in flood dark and ~11 m in spore fog — the frames where the
+    // machine is already drowning — so a fixed 62 m posed and stamped its
+    // biggest crowd at the worst possible moment.
+    const far = this.scene?.fog?.far;
+    const cullR = Math.max(14, Math.min(62, (far ?? 62) + 6));
+    this._cullD2 = cullR * cullR;
     // age recent blasts (a death registers a frame or two after the boom)
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
@@ -1132,7 +1139,20 @@ export class Agents3D {
         const [ax, az] = world.simToWorld(rp.x, rp.y, deck);
         const vdx = ax - this.viewX, vdz = az - this.viewZ;
         this._curD2 = vdx * vdx + vdz * vdz;
-        if (this._curD2 > 62 * 62) continue;
+        // CULL AT THE FOG WALL, NOT A FIXED 62 m (perf pass 5). scene.fog.far
+        // collapses to ~34 m in flood dark and ~11 m in spore fog, and those
+        // are exactly the moments the frame is already drowning — so the old
+        // constant posed and stamped its largest crowd at the worst possible
+        // time. Nothing past the fog can be seen by definition.
+        if (this._curD2 > this._cullD2) continue;
+        // ...and nothing BEHIND you can be seen either. The instanced sets are
+        // frustumCulled=false, so every stamped body is submitted whatever the
+        // camera is doing; a generous half-space test (cos ~ -0.35, well wider
+        // than the 72 deg fov) drops ~40% of them with no popping at the edge.
+        if (this._viewFX !== undefined && this._curD2 > 9) {
+          const inv = 1 / Math.sqrt(this._curD2);
+          if ((vdx * inv) * this._viewFX + (vdz * inv) * this._viewFZ < -0.35) continue;
+        }
       }
       let [wx, wz] = world.simToWorld(rp.x, rp.y, deck);
       // a body whose sim transit crosses the enclosed stair housing at
