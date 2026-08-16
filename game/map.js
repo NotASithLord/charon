@@ -93,7 +93,14 @@ export class MarineMap {
       if (a.faction === FACTION.INFECTION || a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER) {
         // a form HIDDEN mid-crawl is out of everyone's sight — it counts
         // toward nothing on this board; one at the grate is a normal contact
-        if (!(a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft') && a.move.hidden)) {
+        // A DOWNED FORM IS NOT A CONTACT (user: "dead flood bodies are marked
+        // as red dots. Shouldn't be the case"). hurtFloodForm never sets
+        // `dead` on a combat form — killing one leaves hp 0 / downed true, and
+        // a fully burned husk keeps dead=false ON PURPOSE so it survives as a
+        // husk marker. So the `a.dead` guard below never fired for any of
+        // them, and a room of husks scored as a heavy contact.
+        if (!a.downed
+          && !(a.move && (a.move.layer === 'vent' || a.move.layer === 'shaft') && a.move.hidden)) {
           this._floodScratch[a.node] += a.faction === FACTION.CARRIER ? 2 : 1;
         }
         continue;
@@ -384,8 +391,23 @@ export class MarineMap {
       const f = a.faction;
       if (f === FACTION.INFECTION || f === FACTION.COMBAT || f === FACTION.CARRIER) {
         const r = f === FACTION.INFECTION ? this._rr(0.35, 2) : f === FACTION.CARRIER ? this._rr(0.85, 4) : this._rr(0.6, 3);
-        ctx.fillStyle = f === FACTION.INFECTION ? '#51ff6a' : f === FACTION.CARRIER ? '#b15fd9' : '#e04434';
-        ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI * 2); ctx.fill();
+        // A FILLED DOT MEANS THE SAME THING HERE AS A BLIP ON THE TRACKER: a
+        // live hostile. The tracker already refuses anything downed (clip 4),
+        // motionless or without FLAG.MOVING; this board was painting downed
+        // forms in full contact red because they are not flagged `dead`, so
+        // the two instruments disagreed about the same room.
+        // Downed bodies still DRAW — hollow, dim, no fill. They are real
+        // intel: a form under 100 damage can self-revive, and one at 100 is a
+        // husk the hive can still reanimate. Hiding them would trade one lie
+        // for another.
+        if (a.downed) {
+          ctx.strokeStyle = 'rgba(150, 74, 62, 0.55)';
+          ctx.lineWidth = this._lw(1.1);
+          ctx.beginPath(); ctx.arc(a.x, a.y, r * 0.85, 0, Math.PI * 2); ctx.stroke();
+        } else {
+          ctx.fillStyle = f === FACTION.INFECTION ? '#51ff6a' : f === FACTION.CARRIER ? '#b15fd9' : '#e04434';
+          ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI * 2); ctx.fill();
+        }
       } else if (f === FACTION.CIVILIAN || f === FACTION.ARMED) {
         if (a.id === this.playerAgentId) continue; // drawn as the player marker
         if (a.isPlayer) continue;                  // teammates get their own marker below
