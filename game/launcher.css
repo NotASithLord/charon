@@ -18,6 +18,12 @@ body.launcher-active > :not(#launcher) { display: none !important; }
   /* amber is the ACTION colour now; cyan reads as data, the way VISR splits them */
   --hub-amber: #f2a93b; --hub-amber-dim: #8a6428;
   --hub-cyan: #7fc4d8; --hub-red: #c14a37; --hub-green: #85c79d;
+  /* FLOOD GREEN, for the one line that says who won. Taken off the game's own
+     hit-flash (agents3d.js floodFlash, 0x8fef5a) rather than picked by eye,
+     then walked down a little — 96px of the raw flash is blinding. It is
+     deliberately NOT --hub-red: that still means "error" on this page, and a
+     green error state reads as success. */
+  --hub-flood: #8fd96a;
   --hub-chamfer: 9px;
   /* condensed technical caps, from what the OS already has — Halo's UI voice */
   --hub-face: "Bahnschrift", "DIN Alternate", "Roboto Condensed", "Arial Narrow", "Helvetica Neue", system-ui, sans-serif;
@@ -115,7 +121,7 @@ body.launcher-active > :not(#launcher) { display: none !important; }
   box-shadow: 0 0 18px rgba(242,169,59,.55);
 }
 .hub-hero h1:focus, .hub-page-title:focus { outline: none; }
-.hub-hero h1 span { display: block; color: var(--hub-red); }
+.hub-hero h1 span { display: block; color: var(--hub-flood); }
 .hub-deck { max-width: 690px; color: #9db0bc; font: 17px/1.65 system-ui, sans-serif; }
 .hub-actions { display: grid; gap: 10px; margin-top: 34px; max-width: 590px; }
 /* CHAMFERED, with a lit rail on the leading edge that fills on hover. The

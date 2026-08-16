@@ -3567,7 +3567,7 @@ requestAnimationFrame(frame);
 // debug hooks
 window.__game = {
   sim, world, player, agents, weapon, camera, scene, renderer, flamer,
-  viewmodel, flamerModel, jets, FLAMER_TUNE,
+  viewmodel, flamerModel, jets, FLAMER_TUNE, marineMap,
   // test/debug hooks for the flamethrower (harnesses can't press E at a body)
   giveFlamer: () => { hasFlamer = true; heldIsFlamer = true; flamer.fuel = FLAME.tankUnits; },
   setTrigger: (v) => { fireHeld = !!v; },

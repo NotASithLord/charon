@@ -90,6 +90,24 @@ export const PARAMS = {
       armoryRefill: 55,   // a spare tank off the rack, not a full swap
     },
   },
+  // DECK LINK (user: "depending on the floor you're on, the status of the other
+  // floors in your map may be unreachable... it might be offline for a whole
+  // minute at a time. You current floor always shows fine. We're aiming other
+  // floors to show status only 60% of the time.")
+  //
+  // This is NOT the existing per-team sitrep dice (game/map.js _rep) and not
+  // the tracker's ragged static. Those model one report failing. This models
+  // the RELAY for a whole deck going down: while it is out you get nothing
+  // from that deck at all — no contacts, no marine positions, no room status.
+  //
+  // The duty cycle is the mean up-dwell over the mean cycle: 75 / (75 + 50) =
+  // 60%. Dwells are LONG on purpose — the brief is explicitly "not temp
+  // flickering", so an outage has to outlast the walk to the next room and be
+  // something you plan around rather than wait out.
+  tacnet: {
+    linkUpMinSec: 45, linkUpMaxSec: 105,    // mean 75
+    linkDownMinSec: 25, linkDownMaxSec: 75, // mean 50
+  },
   // lockedFraction: per-run graph mutation (visible variety run to run).
   // shiftEverySec: the damaged ship keeps shifting — every ~2 min (jittered)
   // a working door jams or a jammed one grinds free, connectivity-guarded

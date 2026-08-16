@@ -36,6 +36,11 @@ export class MarineMap {
     // received reports their rooms and their own markers age on the board.
     this._rep = new Map();       // agentId -> { next, ok, burst }
     this._marineRep = new Map(); // agentId -> { x, y, deck, hp, maxHp, heading, t }
+    // DECK LINK (user): the deck you are STANDING ON always reads true — you
+    // are the sensor. Every other deck arrives over a relay that drops for
+    // long stretches, and while it is down that deck reports nothing at all.
+    this._link = new Map();      // deck -> { up, until }
+    this._pd = -1;               // player's deck, stamped each draw
     this._panelAt = 0;
     this.marines0 = sim.agents.filter((a) => a.faction === FACTION.MARINE).length;
     this.s = 1;
@@ -44,8 +49,41 @@ export class MarineMap {
 
   // Run every frame, cheap — intel accumulates even while the map is closed,
   // exactly like a real ops board someone else is keeping up to date.
+  // Advance every deck's relay. Driven off SIM time, not wall time, so an
+  // outage does not tick away while the game is paused or the tab is hidden.
+  _stepLinks() {
+    const { sim } = this;
+    const P = sim.P.tacnet;
+    for (let d = 1; d <= 5; d++) {
+      let L = this._link.get(d);
+      if (!L) {
+        // STAGGER THE FIRST FLIP. Seeded off the deck number rather than
+        // rolled: with a common start time every deck would drop and recover
+        // together, which reads as one global outage instead of five
+        // independent relays.
+        const phase = ((d * 7919) % 97) / 97;
+        this._link.set(d, (L = { up: true, until: sim.t + P.linkUpMinSec * (0.15 + 0.85 * phase) }));
+      }
+      if (sim.t >= L.until) {
+        L.up = !L.up;
+        const lo = L.up ? P.linkUpMinSec : P.linkDownMinSec;
+        const hi = L.up ? P.linkUpMaxSec : P.linkDownMaxSec;
+        L.until = sim.t + lo + Math.random() * (hi - lo);
+      }
+    }
+  }
+
+  // is this deck reporting? your own always is
+  linkUp(deck) { return deck === this._pd || (this._link.get(deck)?.up ?? true); }
+  // seconds until the current state flips — drives the countdown on the band
+  linkFor(deck) { return Math.max(0, (this._link.get(deck)?.until ?? 0) - this.sim.t); }
+
   observe() {
     const { sim } = this;
+    // the player's deck has to be known BEFORE the link gate is applied, and
+    // observe() runs every frame whether the map is open or not
+    this._pd = sim.byId.get(this.playerAgentId)?.deck ?? this._pd;
+    this._stepLinks();
     this.liveObs.fill(0);
     this._corpseScratch.fill(0);
     this._floodScratch.fill(0);
@@ -65,8 +103,15 @@ export class MarineMap {
       // same-deck teams feed the board LIVE; a team on another deck only
       // lands intel when its sitrep gets through (ODST gear always does).
       if ((a.faction === FACTION.MARINE && a.hp > 0) || a.id === this.playerAgentId) {
-        const pd = sim.byId.get(this.playerAgentId)?.deck;
+        const pd = this._pd;
         let live = a.id === this.playerAgentId || a.deck === pd || a.squad === this.fireteamId;
+        // THE RELAY OUTRANKS EVERY OTHER RULE. A downed deck lands nothing —
+        // not a same-deck team's live feed, not your own fireteam's, not an
+        // ODST's guaranteed sitrep. Gating here rather than at draw time is
+        // what makes the outage real: the board simply stops learning, so
+        // when the link returns the intel is genuinely a minute old instead
+        // of having quietly updated behind the curtain.
+        if (a.id !== this.playerAgentId && !this.linkUp(a.deck)) live = false;
         if (!live) {
           let r = this._rep.get(a.id);
           if (!r) { r = { next: sim.t + 4 + (a.id % 7), ok: false, burst: -99 }; this._rep.set(a.id, r); }
@@ -156,8 +201,31 @@ export class MarineMap {
         ctx.roundRect(x0, y0, x1 - x0, y1 - y0, 3);
         ctx.fill(); ctx.stroke();
       }
-      ctx.fillStyle = '#38445a';
+      // LINK LOST: hatch the whole band and say so. Blanking a deck without
+      // marking it would be the one genuinely unfair version of this — an
+      // empty deck has to read as "no signal", never as "no contacts".
+      const down = !this.linkUp(d);
+      if (down) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, band.y0, g.width, band.y1 - band.y0);
+        ctx.clip();
+        ctx.strokeStyle = 'rgba(224, 154, 74, 0.13)';
+        ctx.lineWidth = this._lw(1);
+        const step = this._lw(9);
+        for (let x = -(band.y1 - band.y0); x < g.width; x += step) {
+          ctx.beginPath();
+          ctx.moveTo(x, band.y1); ctx.lineTo(x + (band.y1 - band.y0), band.y0);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+      ctx.fillStyle = down ? '#7a5a2c' : '#38445a';
       ctx.fillText(`DECK ${d} — ${['COMMAND', 'HABITATION', 'OPERATIONS', 'ENGINEERING', 'FLIGHT'][d - 1]}`, 3, band.y0 + this._lw(13));
+      if (down) {
+        ctx.fillStyle = '#e09a4a';
+        ctx.fillText(`◆ LINK LOST — ${fmtTime(this.linkFor(d))}`, g.width - this._lw(150), band.y0 + this._lw(13));
+      }
     }
     ctx.fillStyle = '#232b38';
     ctx.fillText('BOW ◄', 3, g.deckBands[0].y0 - this._lw(4));
@@ -268,6 +336,7 @@ export class MarineMap {
     for (const squad of sim.squads) {
       if (squad.contactNode === undefined || sim.tickCount - squad.contactTick > 15 * 10) continue;
       const n = g.node(squad.contactNode);
+      if (!this.linkUp(n.deck)) continue; // that deck's calls are not reaching you
       const r = this._rr(1.4, 7);
       const pulse = 0.55 + 0.35 * Math.sin(sim.t * 6);
       ctx.strokeStyle = `rgba(255, 70, 50, ${pulse})`;
@@ -332,6 +401,11 @@ export class MarineMap {
       if (a.dead || a.hp <= 0 || a.faction !== FACTION.MARINE) continue;
       const rep = this._marineRep.get(a.id);
       if (!rep) continue;
+      // the relay is down for the deck they last reported from — you do not
+      // get to see where they are (user: "you can't see contact, or where
+      // marines are"). Their last report is still on the board the moment it
+      // comes back, aged by however long the outage ran.
+      if (!this.linkUp(rep.deck)) continue;
       const age = sim.t - rep.t;
       const alpha = age < 4 ? 1 : Math.max(0.3, 1 - (age - 4) / 90);
       const r = this._rr(0.6, 3.2);
