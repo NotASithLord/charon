@@ -31,17 +31,35 @@ body.launcher-active > :not(#launcher) { display: none !important; }
   background-size: 44px 44px, 44px 44px, auto, auto, auto;
   color: var(--hub-ink); font: 14px/1.55 "SF Mono", "Cascadia Code", Consolas, monospace;
 }
-/* RAIN + VIGNETTE. Two static gradient layers drifting on one transform — no
-   per-drop DOM, no canvas, nothing to schedule against the game's frame budget.
-   Held under 5% opacity: at readable strength it fights every label on screen. */
+/* DUST, NOT RAIN (user: "No raining. The dust effect from the game itself is
+   good."). Rain was the wrong borrow — it belongs to ODST's city, and this menu
+   opens onto a sealed drifting warship where the air does not go anywhere.
+   So this matches the game's own motes (game/main.js) rather than inventing a
+   second look: soft round specks, the same cool grey 0x9daabb, tiny, sparse,
+   and barely moving.
+   Three tiled layers instead of one. A single tiled dot field reads as a GRID
+   the moment the eye catches two neighbours; three layers on co-prime tile
+   sizes drifting at different rates and directions never line up, so it reads
+   as scatter. Slow on purpose — the game's motes wander on 0.22-0.3 rad/s
+   sines, so anything quick here would look like a screensaver next to it. */
 #launcher::after {
-  content: ""; position: fixed; inset: -30% -10% -10%; pointer-events: none; z-index: 0;
-  background:
-    repeating-linear-gradient(74deg, transparent 0 13px, rgba(190,225,240,.075) 13px 14px, transparent 14px 27px),
-    repeating-linear-gradient(78deg, transparent 0 41px, rgba(190,225,240,.05) 41px 42px, transparent 42px 63px);
-  animation: hub-rain 0.9s linear infinite;
+  content: ""; position: fixed; inset: -25%; pointer-events: none; z-index: 0;
+  background-image:
+    radial-gradient(circle 1.6px at 22% 31%, rgba(157,170,187,.50), transparent 100%),
+    radial-gradient(circle 1.1px at 68% 74%, rgba(157,170,187,.38), transparent 100%),
+    radial-gradient(circle 2.0px at 44% 12%, rgba(157,170,187,.28), transparent 100%);
+  background-size: 227px 181px, 313px 263px, 173px 431px;
+  animation: hub-dust 84s linear infinite;
 }
-@keyframes hub-rain { to { transform: translate3d(-27px, 96px, 0); } }
+/* ONE animation driving all three layers, not three animations — they would
+   all be writing background-position and the last declared would simply win,
+   leaving the other two frozen. Each layer instead gets its own travel vector
+   inside the single keyframe, and each vector is an exact whole number of that
+   layer's own tiles (1x1, 1x1, 1x2), so the wrap is seamless and the three
+   speeds and directions still disagree. */
+@keyframes hub-dust {
+  to { background-position: 227px -181px, -313px -263px, 173px -862px; }
+}
 .hub-shell, .hub-top { position: relative; z-index: 1; }
 #launcher[hidden] { display: none; }
 #launcher::before {
