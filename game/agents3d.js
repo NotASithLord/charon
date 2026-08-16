@@ -1874,7 +1874,11 @@ export class Agents3D {
       // a thrash-forced flop starts with a SEIZE (a jolt and a limb whip
       // where it lies), not the full death launch that would hurl the body
       const impulse = thrashing
-        ? { dirX: 0, dirZ: 0, speed: 0.3, up: 1.6, spin: 3.5, kick: 8 }
+        // a SEIZE where it lies — no lift, no travel, no jitter. The old
+        // profile hurled the body: measured 1.57 m into the air and 4.64 m
+        // across the deck over one 4 s convulsion (user: "flipping around in
+        // the air"). The agony belongs in the roll and the limbs.
+        ? { dirX: 1, dirZ: 0, speed: 0, up: 0, jitter: 0, jitterUp: 0, spin: 1.4, kick: 9 }
         : this._deathImpulse(id, f, flags, wx, wz, deck, heading);
       // the ceiling sampler is called for BOTH capsule ends every substep,
       // and ceilHeightAt is a linear all-rooms scan (swarm finding) — the
@@ -1947,15 +1951,18 @@ export class Agents3D {
       const ti = this._thrashInfo?.get(id);
       const tn = performance.now();
       if (ti) {
+        // hold it where it fell — a convulsion must not migrate
+        sys.tether(id, rag.originX, rag.originZ, 0.4,
+          this.world.groundHeightAt(deck, wx, wz), 0.22);
         if (tn >= ti.last + 230 + (id % 5) * 25) {
           ti.last = tn;
+          // ROLLING IN AGONY, NOT CARTWHEELING (user). reimpulse is ADDITIVE,
+          // so the old rising `up` compounded into flight and the old linear
+          // jitter random-walked the body across the room. writhe() spends the
+          // energy on the roll and the limbs and none on translation; the ramp
+          // still builds toward the moment it rises.
           const ramp = Math.min(1, (tn - ti.t0) / 2800);
-          const ang = Math.random() * Math.PI * 2;
-          sys.reimpulse(id, {
-            dirX: Math.cos(ang), dirZ: Math.sin(ang),
-            speed: 0.4 + 1.0 * ramp, up: 1.3 + 1.9 * ramp,
-            spin: 4 + 8 * ramp, kick: 7 + 11 * ramp,
-          });
+          sys.writhe(id, 0.35 + 0.65 * ramp);
         }
       }
     }

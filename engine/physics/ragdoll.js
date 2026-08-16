@@ -243,10 +243,15 @@ export class RagdollSystem {
     const tumbleAxis = [-dz, hash11(id ^ 0x51) * 0.5, dx]; // mostly horizontal, ⟂ to travel
     const ta = len3(tumbleAxis) || 1;
     const ov = [(tumbleAxis[0] / ta) * spin, (tumbleAxis[1] / ta) * spin, (tumbleAxis[2] / ta) * spin];
+    // the random component of a launch. A death flop wants it (0.6/0.5 keeps
+    // two bodies killed by the same burst from landing identically); a body
+    // writhing in place must not have it, or repeated additive kicks random-
+    // walk it across the room.
+    const jl = impulse.jitter ?? 0.6, ju = impulse.jitterUp ?? 0.5;
     const vv = [
-      dx * impulse.speed + hash11(id ^ 0x11) * 0.6,
-      (impulse.up ?? 2.5) + hash11(id ^ 0x22) * 0.5,
-      dz * impulse.speed + hash11(id ^ 0x33) * 0.6,
+      dx * impulse.speed + hash11(id ^ 0x11) * jl,
+      (impulse.up ?? 2.5) + hash11(id ^ 0x22) * ju,
+      dz * impulse.speed + hash11(id ^ 0x33) * jl,
     ];
     for (let a = 0; a < 3; a++) {
       rag.vel[a] = (additive ? rag.vel[a] : 0) + vv[a];
@@ -297,6 +302,62 @@ export class RagdollSystem {
     if (victim) this._byId.delete(victim.id);
   }
 
+  // WRITHE IN PLACE — a body convulsing where it lies (a corpse being taken,
+  // a man burning, a seizure), as opposed to _launch's hurl. The distinction
+  // that matters is that reimpulse is ADDITIVE: a repeated kick with any real
+  // `up` compounds into flight, and a repeated kick with any linear jitter
+  // random-walks across the room. So this profile spends its energy on the
+  // ROOT SPIN (rolling) and the LIMBS (flailing) and almost none on the root's
+  // translation — which is what "agony" actually looks like.
+  //
+  //   sys.writhe(id, 0..1)  — intensity ramps the roll and the limb whip
+  //
+  // Pair it with tether() to guarantee the body cannot wander at all.
+  writhe(id, intensity = 1) {
+    const k = Math.max(0, Math.min(1, intensity));
+    const rag = this._byId.get(id);
+    if (!rag) return false;
+    this.reimpulse(id, {
+      // a direction for the roll axis to be perpendicular to; no travel along it
+      dirX: Math.cos(id * 2.399 + k * 6.283), dirZ: Math.sin(id * 2.399 + k * 6.283),
+      speed: 0,          // no push across the deck
+      up: 0,             // no lift: the deck keeps it
+      jitter: 0, jitterUp: 0,
+      spin: 1.1 + 1.6 * k,   // a roll, not a cartwheel
+      kick: 9 + 9 * k,       // the limbs carry the agony
+    });
+    // A CONVULSION REPEATS, SO IT MUST NOT COMPOUND. reimpulse is additive by
+    // design (that is what makes a grenade re-fling feel like one), but a body
+    // kicked every quarter second would otherwise ratchet its roll into a
+    // cartwheel and — via the floor depenetration lifting a spinning rig — climb
+    // off the deck. Cap the roll and never allow upward velocity: gravity, not
+    // the convulsion, decides the vertical.
+    clampVec(rag.omega, 1.8 + 2.0 * k);
+    if (rag.vel[1] > 0) rag.vel[1] = 0;
+    return true;
+  }
+
+  // Hold a body near a point on the deck. Anything beyond `radius` is pulled
+  // back and has its outward velocity killed, so a long convulsion cannot
+  // migrate. Cheap: one distance test per sub-step per tethered body.
+  // `y` (optional) is the DECK the body is writhing on: the root is also kept
+  // from climbing more than `lift` above it. That ceiling is not cosmetic —
+  // limbs whipping at 10+ rad/s punch through the floor every sub-step, and
+  // the depenetration that pushes them out ratchets the root upward, so a long
+  // convulsion slowly levitates (measured: median root height climbing to
+  // 0.35 m over 4 s, half the frames airborne) even with zero upward velocity.
+  tether(id, x, z, radius = 0.45, y = null, lift = 0.3) {
+    const rag = this._byId.get(id);
+    if (!rag) return false;
+    rag.tether = { x, z, r: radius, y, lift };
+    return true;
+  }
+
+  clearTether(id) {
+    const rag = this._byId.get(id);
+    if (rag) rag.tether = null;
+  }
+
   // Advance every awake ragdoll by a real frame delta, in whole fixed sub-steps
   // (leftover carried in the accumulator). Capped sub-steps so a stalled frame
   // can't spiral. Asleep bodies are frozen — free to keep around as the resting
@@ -324,6 +385,19 @@ export class RagdollSystem {
     r.rootPos[1] += r.vel[1] * dt;
     r.rootPos[2] += r.vel[2] * dt;
     r.rootQuat = qintegrate(r.rootQuat, r.omega, dt);
+    // TETHER: keep a writhing body where it fell (see tether()). Applied to the
+    // root before collision so the projection below still has the last word.
+    if (r.tether) {
+      const tx = r.rootPos[0] - r.tether.x, tz = r.rootPos[2] - r.tether.z;
+      const td = Math.hypot(tx, tz);
+      if (td > r.tether.r) {
+        const nx = tx / td, nz = tz / td;
+        r.rootPos[0] = r.tether.x + nx * r.tether.r;
+        r.rootPos[2] = r.tether.z + nz * r.tether.r;
+        const out = r.vel[0] * nx + r.vel[2] * nz;   // kill only the outward part
+        if (out > 0) { r.vel[0] -= out * nx; r.vel[2] -= out * nz; }
+      }
+    }
     // Bulkheads, props, and door panels are render-world collision. The
     // callback projects a swept root back to the last free point and supplies
     // a contact normal; reflecting only the inward component loses energy and
@@ -415,6 +489,19 @@ export class RagdollSystem {
     // is somehow squeezed by both — it must never sink below the deck.)
     if (maxCeilPen > 0) r.rootPos[1] -= maxCeilPen;
     if (maxPen > 0) r.rootPos[1] += maxPen;
+
+    // TETHER CEILING — after depenetration, because depenetration is what
+    // lifts a writhing body: limbs whipping at ~10 rad/s punch the floor every
+    // sub-step and the push-out ratchets the root upward (measured: a 4 s
+    // convulsion levitating to a 0.35 m median with ZERO upward velocity).
+    // Clamped here, the deck genuinely holds the body down.
+    if (r.tether && r.tether.y !== null && r.tether.y !== undefined) {
+      const ceil = r.tether.y + r.tether.lift;
+      if (r.rootPos[1] > ceil) {
+        r.rootPos[1] = ceil;
+        if (r.vel[1] > 0) r.vel[1] = 0;
+      }
+    }
 
     // 3) friction as damping while grounded (never adds energy → always stable)
     if (grounded) {
