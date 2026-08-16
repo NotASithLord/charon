@@ -329,7 +329,9 @@ function maybeThrowFrag(sim, a, dt) {
   (sim.grenades ??= []).push({
     at: sim.t + G.fuseSec, deck: sim.graph.node(best).deck, x: bx, y: by, by: a.id,
   });
-  sim.log('combat', `${a.callsign ?? 'a marine'} throws a frag into ${sim.graph.node(best).name}`, best, bx, by);
+  // callsign is a {rank, name} RECORD, not a string — interpolating it raw
+  // printed "[object Object] throws a frag" in the radio log (playtest)
+  sim.log('combat', `${a.callsign ? `${a.callsign.rank} ${a.callsign.name}` : 'a marine'} throws a frag into ${sim.graph.node(best).name}`, best, bx, by);
 }
 
 // --- marines (§5.3) ---
