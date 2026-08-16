@@ -888,18 +888,18 @@ governor.prewarm(scene, camera, {
 // invisible on the room. A small pool of pooled point lights now rides the
 // nearest unsteady fixtures on your deck, so a guttering room actually
 // throws guttering light on its walls, floor and occupants.
-function updateRoomLightPool(inDark) {
+function updateRoomLightPool(inDark, pnode, pDeck, pX, pZ) {
   // every powered fixture and every dead-room red lamp declares a VIRTUAL
-  // light — the global pool picks the winners near you (dead ship, discrete
-  // sources instead of an ambient wash)
-  const pnode = player.agent.node;
+  // light — the global pool picks the winners near the POV (dead ship,
+  // discrete sources instead of an ambient wash; the POV is the ghost's room
+  // when the flood has taken you)
   for (let n = 0; n < sim.graph.n; n++) {
     const L = world.roomLights[n];
     if (!L || L.x === undefined) continue;
     if (sim.darkAt(n)) continue; // flood-held rooms are DARK — nothing burns there
     const nd = sim.graph.node(n);
-    if (nd.deck !== player.deck) continue;
-    const d2 = (L.x - player.x) * (L.x - player.x) + (L.z - player.z) * (L.z - player.z);
+    if (nd.deck !== pDeck) continue;
+    const d2 = (L.x - pX) * (L.x - pX) + (L.z - pZ) * (L.z - pZ);
     if (d2 > 40 * 40) continue;
     // NEIGHBOURS DON'T SHINE THROUGH THE BULKHEAD. A pooled point light has
     // no occluder — a strip two compartments away with a 19 m reach lit our
@@ -993,10 +993,10 @@ function updateRoomLightPool(inDark) {
 // doesn't end at a flat black doorway — its fixtures push a pool of light a
 // little way into the dark side. A small pool of spill lights sits just
 // inside the dark room at each lit->dark doorway near the player.
-function updateDoorSpill() {
+function updateDoorSpill(pDeck, pX, pZ) {
   for (const d of world.doors) {
-    if (d.deck !== player.deck) continue;
-    const dx = d.x - player.x, dz = d.z - player.z;
+    if (d.deck !== pDeck) continue;
+    const dx = d.x - pX, dz = d.z - pZ;
     if (dx * dx + dz * dz > 30 * 30) continue;
     if (d.open01 < 0.05) continue; // a shut door spills nothing
     const a = d.edge.a, b = d.edge.b;
@@ -3207,18 +3207,32 @@ function frame(now) {
   hemi.color.setRGB(0.62 + hemiPulse * 0.35, 0.70 - hemiPulse * 0.4, 0.82 - hemiPulse * 0.55);
   // seeded room lighting: your lamp follows the room fixture's state, so a
   // faulty compartment strobes around you and a dead one goes near-black
+  // THE CAMERA'S ROOM, NOT YOUR CORPSE'S (user: "the view as an infected is
+  // weird"). When the flood takes you, the camera rides the combat form —
+  // but every room-visual system below kept keying off the DEAD body's
+  // node/deck/position: the darkness pass exempted the corpse's room from
+  // its veil instead of the one you are looking out of (so you sat INSIDE a
+  // room-sized murk box — the sickly green wash in the report), the fog and
+  // light state tracked the wrong compartment, the active render volume and
+  // the room sign followed the corpse, and the fixture pool lit rooms around
+  // a body that no longer sees. One POV triple drives all of it.
+  const _povA = player.dead ? ghostAlive() : null;
+  const povNode = _povA ? _povA.node : player.agent.node;
+  const povDeck = _povA ? _povA.deck : player.deck;
+  let povX = player.x, povZ = player.z;
+  if (_povA) { const [gx, gz] = world.simToWorld(_povA.x, _povA.y, _povA.deck); povX = gx; povZ = gz; }
   if (now - _lightingAt >= 66) {
     const lightingDt = Math.min(0.2, (now - _lightingAt) / 1000);
     _lightingAt = now;
     world.updateLights(now * 0.001);
-    world.updateDarkness(sim, player.agent.node, lightingDt);
+    world.updateDarkness(sim, povNode, lightingDt);
   }
   // TOTAL DARKNESS (user rule): an unlit room — flood-darkened OR just a dead
   // fixture — has NO ambient wash at all. The only light is what actually
   // emits: your flashlight, the red emergency lamps over the hatches, fire,
   // and gunfire.
-  const inDark = sim.darkAt(player.agent.node) || world.lightLevel(player.agent.node) <= 0.1;
-  const inFog = sim.fogAt(player.agent.node);
+  const inDark = sim.darkAt(povNode) || world.lightLevel(povNode) <= 0.1;
+  const inFog = sim.fogAt(povNode);
   // FLOOD DARKNESS (user rule): inside a held room the world's light dies —
   // your flashlight is all that works. Spore fog closes the flashlight's
   // throw down to a few meters and stains the air green-brown.
@@ -3235,7 +3249,7 @@ function frame(now) {
   const hemiTarget = inDark ? 0.0 : 0.12;
   ambient.intensity += (ambTarget - ambient.intensity) * dimT;
   hemi.intensity += (hemiTarget - hemi.intensity) * dimT;
-  _fillI = inDark ? 0.0 : 4.5 * (0.3 + 0.7 * world.lightLevel(player.agent.node));
+  _fillI = inDark ? 0.0 : 4.5 * (0.3 + 0.7 * world.lightLevel(povNode));
   // candela, not the old 1.5-decay number: at true inverse-square 430 cd puts
   // a wall at 4 m near clipping and a bulkhead at 20 m at a believable glimmer,
   // which is what a handheld actually does. The spill is a tenth of it, and
@@ -3280,22 +3294,22 @@ function frame(now) {
   scene.background.setHex(inFog ? 0x151b0a : 0x05070a);
   // volume-scoped rendering (user: don't draw the whole ship): decks beyond
   // ±1 and fore/aft thirds beyond full fog are hidden — both pixel-exact
-  world.setActiveVolume(player.deck, player.x);
-  world.showRoomSign(player.deck, player.x, player.z);
+  world.setActiveVolume(povDeck, povX);
+  world.showRoomSign(povDeck, povX, povZ);
   updateBarks(now);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
-  fire.update(dtReal, player.x, player.z, elevOf(player.deck));
+  fire.update(dtReal, povX, povZ, elevOf(povDeck));
   updateFlameJets(dtReal);
-  sparks.update(dtReal, now / 1000, player.x, player.z, elevOf(player.deck));
+  sparks.update(dtReal, now / 1000, povX, povZ, elevOf(povDeck));
   updateMotes(dtReal);
-  updateRoomLightPool(inDark);
+  updateRoomLightPool(inDark, povNode, povDeck, povX, povZ);
   // the player's own fill, declared like any fixture (add() no-ops under
   // 0.02 intensity, so the dark case costs nothing and needs no branch)
   lightPool.add(_fillX, _fillY, _fillZ, 0xcfe0ff, _fillI, 10, 1.8);
-  updateDoorSpill();
+  updateDoorSpill(povDeck, povX, povZ);
   updateMuzzleLights();
-  lightPool.commit(player.x, player.z);
+  lightPool.commit(povX, povZ); // brightest-and-nearest scores around the CAMERA's body
   // EXPOSURE GRADE (user: the fog dimming should be very good): the camera
   // itself stops down in murk — fog crushes the frame, plain darkness dims
   // it, clean compartments read bright. Slow lerp so it feels like eyes
