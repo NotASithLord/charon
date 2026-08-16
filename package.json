@@ -17,7 +17,8 @@
     "check": "npm run multiplayer && npm run determinism && npm run physics && npm run ragdoll && npm run melee && npm run melee-arc && npm run commands",
     "vendor:peerd": "node scripts/vendor-peerd-browser.mjs",
     "build:dwapp": "node scripts/build-dwapp.mjs",
-    "deploy": "wrangler deploy"
+    "build:site": "node scripts/build-site.mjs",
+    "deploy": "npm run build:site && wrangler deploy"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"

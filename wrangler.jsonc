@@ -2,7 +2,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "charon",
   "compatibility_date": "2026-08-11",
-  // Static site, no build step: serve the repo as-is. .assetsignore keeps
-  // tooling, docs and .git out of the upload.
-  "assets": { "directory": "." }
+  // Serve the BUILT site, not the repo. Pointing this at "." shipped ~60 raw ES
+  // modules with every comment and blank line in them; `npm run build:site`
+  // bundles and minifies the game's graph into dist/site and mirrors everything
+  // else verbatim. Measured on the game path: 2,078 KB gzipped -> 1,765 KB, and
+  // a few dozen fewer round-trips.
+  //
+  // Run `npm run build:site` before `npm run deploy` — `npm run deploy` does it
+  // for you. dist/ is gitignored, so a clean checkout must build first.
+  "assets": { "directory": "./dist/site" }
 }
