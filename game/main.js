@@ -854,7 +854,13 @@ governor.prewarm(scene, camera, {
     // the past (review finding) — with the live clock it is just a frame
     post.render(scene, camera, performance.now() / 1000);
   },
-}).then(() => post.allowLiteFree()); // free full-post targets under lite — but never mid-prewarm
+});
+// LITE-FREE IS DISARMED (playtest: first-ever black screen / freeze on an M4
+// at rung 2, right after perf pass 5 shipped). It is the only thing in that
+// pass that mutates GPU render-target state behind three's back, and it is
+// worth ~10-14 MB of VRAM and ZERO frame time — nowhere near enough to
+// justify being a suspect in a black screen. Re-arm only with a repro.
+// post.allowLiteFree();
 
 // REAL FLICKER SPILL (user: flickering lighting for real in each room): the
 // ceiling strips' flicker used to be emissive-only — visible on the fixture,
@@ -2988,6 +2994,15 @@ let spectateShown = false;
 let last = performance.now();
 const doorMovers = [];
 function frame(now) {
+  // ONE BAD FRAME MUST NOT KILL THE GAME (playtest: a first-ever hard freeze
+  // with a black canvas and a live-looking HUD). The re-request used to be the
+  // LAST statement, after post.render — so a single exception anywhere in this
+  // function skipped it and the loop stopped FOREVER: the DOM keeps whatever it
+  // last painted, the 4 Hz dirty-checked perf readout freezes on its last value
+  // (which is why it still read "60 FPS"), and the canvas keeps whatever the
+  // aborted frame left in the swapchain, which after a clear is black.
+  // Requesting FIRST means the loop survives anything downstream.
+  requestAnimationFrame(frame);
   const dtReal = Math.min(0.1, (now - last) / 1000);
   last = now;
 
@@ -3494,9 +3509,18 @@ function frame(now) {
   // gate on the CASTER, not the renderer flag — the flag is pinned on now
   if (torch.castShadow && now - _shadowAt >= 30) { _shadowAt = now; torch.shadow.needsUpdate = true; }
   renderer.info.reset(); // per-frame accumulation across all post passes
-  post.render(scene, camera, now / 1000);
-  requestAnimationFrame(frame);
+  // ...and the render itself is guarded: a throw here is reported ONCE and the
+  // next frame is attempted, rather than taking the session down silently.
+  try {
+    post.render(scene, camera, now / 1000);
+  } catch (err) {
+    if (!_renderFailed) {
+      _renderFailed = true;
+      console.error('[charon] render failed — the frame loop is continuing; please report this', err);
+    }
+  }
 }
+let _renderFailed = false;
 requestAnimationFrame(frame);
 
 // debug hooks
