@@ -40946,16 +40946,34 @@ class PassNode extends TempNode {
 	 */
 	async compileAsync( renderer ) {
 
+		// charon patch: restore the render target on the SAME TICK, not after
+		// the await. Renderer.compileAsync consumes the active target only in
+		// its synchronous prefix (it builds the render context and queues the
+		// per-object compilation items, then awaits per item, deliberately
+		// yielding so live frames can interleave — the awaited tail works from
+		// each item's CAPTURED renderContext, not the live _renderTarget).
+		// Restoring after the await therefore left the live renderer pointed
+		// at this pass's own HDR texture for the entire multi-frame compile,
+		// and every interleaved frame rendered the post quad INTO the texture
+		// it samples: "[Texture "output"] usage includes writable usage and
+		// another usage in the same synchronization scope", invalid command
+		// buffers, and — once a rung switch resized the target mid-window —
+		// "Destroyed texture [Texture "output"] used in a submit" (playtest,
+		// game start, four banners).
+		if ( renderer._initialized === false ) await renderer.init();
+
 		const currentRenderTarget = renderer.getRenderTarget();
 		const currentMRT = renderer.getMRT();
 
 		renderer.setRenderTarget( this.renderTarget );
 		renderer.setMRT( this._mrt );
 
-		await renderer.compileAsync( this.scene, this.camera );
+		const promise = renderer.compileAsync( this.scene, this.camera );
 
 		renderer.setRenderTarget( currentRenderTarget );
 		renderer.setMRT( currentMRT );
+
+		await promise;
 
 	}
 
