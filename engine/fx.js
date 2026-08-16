@@ -480,10 +480,13 @@ export class FlameJetFX {
 export class BloodFX {
   constructor(scene) {
     this.scene = scene;
-    this.pool = [];
     this.idx = 0;
     this.max = 44;
     this._geo = new THREE.PlaneGeometry(1, 1);
+    // decals are floor-flat; bake the lie-down into the geometry once so the
+    // per-instance matrix carries only the deck-normal spin (was rotation.z
+    // pre-rotate; the same seed spins about Y now — identical visual)
+    this._geo.rotateX(-Math.PI / 2);
     // Several baked VARIANTS, picked per mark: one shared texture made every
     // pool in the ship a rotated copy of the same perfect circle, which read
     // as a decal sticker rather than something that bled out of a body.
@@ -491,6 +494,29 @@ export class BloodFX {
       const tex = new THREE.CanvasTexture(BloodFX._bake(v));
       tex.colorSpace = THREE.SRGBColorSpace;
       return new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+    });
+    // FOUR INSTANCED MESHES, ONE PER VARIANT (perf pass 5, adversarially
+    // verified) — the old pool allocated one transparent Mesh PER DECAL, up
+    // to 44 individual object passes late-game. Instances write their matrix
+    // on add() and never per frame; zero-scale slots are degenerate triangles
+    // the rasterizer drops. Do NOT mark these static (the ring recycles
+    // slots — a static object skips the binding update and a recycled decal
+    // would render at its previous position), and do NOT deck-gate via count
+    // (ring slots for one deck are not contiguous; measured worth ~4 calls).
+    this._slotVar = new Int8Array(this.max).fill(-1);
+    this._zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    this._m4 = new THREE.Matrix4();
+    this._q = new THREE.Quaternion();
+    this._e = new THREE.Euler();
+    this._pos = new THREE.Vector3();
+    this._scl = new THREE.Vector3();
+    this._meshes = this._mats.map((mat) => {
+      const im = new THREE.InstancedMesh(this._geo, mat, this.max);
+      for (let i = 0; i < this.max; i++) im.setMatrixAt(i, this._zero);
+      im.renderOrder = 1;
+      im.frustumCulled = false; // instance matrices are world-space
+      this.scene.add(im);
+      return im;
     });
   }
 
@@ -596,23 +622,25 @@ export class BloodFX {
   // `sizeMul` lets the caller mark a heavier event (a body dragging itself
   // back up leaves more than a clean fall).
   add(wx, wz, elev, seed = 0, sizeMul = 1) {
-    let m = this.pool[this.idx];
-    if (!m) {
-      m = new THREE.Mesh(this._geo, this._mats[0]);
-      m.renderOrder = 1;
-      this.scene.add(m);
-      this.pool[this.idx] = m;
+    const v = (seed >>> 3) % this._meshes.length;
+    const prev = this._slotVar[this.idx];
+    if (prev >= 0 && prev !== v) { // ring reuse across variants: clear the old home
+      this._meshes[prev].setMatrixAt(this.idx, this._zero);
+      this._meshes[prev].instanceMatrix.needsUpdate = true;
     }
-    m.material = this._mats[(seed >>> 3) % this._mats.length];
-    m.rotation.set(-Math.PI / 2, 0, (seed * 2.399) % (Math.PI * 2));
-    m.scale.setScalar((1.1 + ((seed * 97) % 10) / 8) * sizeMul);
-    m.position.set(
+    this._q.setFromEuler(this._e.set(0, (seed * 2.399) % (Math.PI * 2), 0));
+    this._scl.setScalar((1.1 + ((seed * 97) % 10) / 8) * sizeMul);
+    this._pos.set(
       // the jitter used to be ±0.42 m, which threw the mark clear of the body
       // it belonged to; now the sim hands us the exact spot, so this is only
       // enough wobble to keep repeat marks from stacking perfectly
       wx + (((seed * 31) % 7) - 3) * 0.05,
       elev + 0.014 + (this.idx % 7) * 0.0005, // tiny y-stagger kills z-fighting between marks
       wz + (((seed * 17) % 7) - 3) * 0.05);
+    this._m4.compose(this._pos, this._q, this._scl);
+    this._meshes[v].setMatrixAt(this.idx, this._m4);
+    this._meshes[v].instanceMatrix.needsUpdate = true;
+    this._slotVar[this.idx] = v;
     this.idx = (this.idx + 1) % this.max;
   }
 }

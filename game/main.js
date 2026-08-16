@@ -695,7 +695,7 @@ scene.traverse((o) => {
   o.receiveShadow = true;
 });
 for (const m of world.wallMeshes) { m.castShadow = true; }
-for (const set of [agents.civSet, agents.armedSet, agents.marineSet, agents.odstSet,
+for (const set of [agents.civSet, agents.armedSet, agents.marineSet,
   agents.infectionSet, agents.combatCivSet, agents.combatOdstSet]) {
   for (const mesh of set) mesh.castShadow = true;
 }
@@ -717,12 +717,16 @@ agents.rifle.castShadow = true;
 // stepping down mid-fight costs a uniform change, not a shader storm.
 // ?q=full pins rung 0, ?q=low pins rung 4; ?hd=1 pins 0 with a 2.0 cap.
 let _shadowAt = 0; // torch shadow refresh clock (wall time, not frame parity)
+// NOTE: the shadow MAP SIZE is deliberately NOT per-rung — resizing the map
+// orphans the old target and Dawn crashed on exactly that ("Destroyed
+// texture [ShadowDepthTexture] used in a submit"). It is fixed for the
+// session at boot (fixedShadowSize below); rungs only stop the caster.
 const RUNGS = [
-  { res: [0.85, 1.25], shadowMap: 1024, shadows: true, lights: 14, bloom: 0.5, litePost: false, motes: 36, rag: 48, rifleLights: 6, teamSpots: 3 },
-  { res: [0.7, 1.1], shadowMap: 768, shadows: true, lights: 14, bloom: 0.5, litePost: false, motes: 36, rag: 48, rifleLights: 6, teamSpots: 3 },
-  { res: [0.7, 1.0], shadowMap: 512, shadows: true, lights: 10, bloom: 0.375, litePost: false, motes: 24, rag: 32, rifleLights: 4, teamSpots: 2 },
-  { res: [0.6, 1.0], shadowMap: 512, shadows: false, lights: 8, bloom: 0.375, litePost: true, motes: 24, rag: 24, rifleLights: 3, teamSpots: 1 },
-  { res: [0.55, 0.9], shadowMap: 512, shadows: false, lights: 6, bloom: 0.25, litePost: true, motes: 12, rag: 16, rifleLights: 2, teamSpots: 0 },
+  { res: [0.85, 1.25], shadows: true, lights: 14, bloom: 0.5, litePost: false, motes: 36, rag: 48, rifleLights: 6, teamSpots: 3 },
+  { res: [0.7, 1.1], shadows: true, lights: 14, bloom: 0.5, litePost: false, motes: 36, rag: 48, rifleLights: 6, teamSpots: 3 },
+  { res: [0.7, 1.0], shadows: true, lights: 10, bloom: 0.375, litePost: false, motes: 24, rag: 32, rifleLights: 4, teamSpots: 2 },
+  { res: [0.6, 1.0], shadows: false, lights: 8, bloom: 0.375, litePost: true, motes: 24, rag: 24, rifleLights: 3, teamSpots: 1 },
+  { res: [0.55, 0.9], shadows: false, lights: 6, bloom: 0.25, litePost: true, motes: 12, rag: 16, rifleLights: 2, teamSpots: 0 },
 ];
 // whole-frame pixel budget: huge windows can't buy retina supersampling on
 // an integrated GPU — the cap yields before the budget does (HD opts out)
@@ -845,9 +849,12 @@ governor.prewarm(scene, camera, {
   compileRung: async (R) => {
     await post.compileScene();
     if (torch.castShadow) { torch.shadow.needsUpdate = true; _shadowAt = performance.now(); }
-    post.render(scene, camera, 0);
+    // real clock, not 0: a compile that outlives prewarm's deadline still
+    // lands here later, and a 0 would seed the lite-free stability clock in
+    // the past (review finding) — with the live clock it is just a frame
+    post.render(scene, camera, performance.now() / 1000);
   },
-});
+}).then(() => post.allowLiteFree()); // free full-post targets under lite — but never mid-prewarm
 
 // REAL FLICKER SPILL (user: flickering lighting for real in each room): the
 // ceiling strips' flicker used to be emissive-only — visible on the fixture,

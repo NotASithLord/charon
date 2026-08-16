@@ -82,7 +82,7 @@ export class PostFX {
     // Lottes console preset ported from the old GLSL, running on an 8-bit
     // RTT (the grade output is [0,1] sRGB; the default half-float target
     // would double the bandwidth of the most expensive link in the chain).
-    const ldr = rtt(grade, null, null, { type: THREE.UnsignedByteType, depthBuffer: false });
+    const ldr = this._ldr = rtt(grade, null, null, { type: THREE.UnsignedByteType, depthBuffer: false });
     const lum = (c) => dot(c, vec3(0.299, 0.587, 0.114));
     const fxaaFn = Fn(() => {
       const invRes = vec2(1.0).div(vec2(textureSize(ldr))).toVar();
@@ -135,6 +135,19 @@ export class PostFX {
     this.litePost.outputColorTransform = false;
     this.litePost.outputNode = liteGrade;
     this.lite = false;
+    // LITE STRANDS THE FULL-POST TARGETS (perf pass 5, verified): only
+    // BloomNode.updateBefore and the LDR RTTNode's updateBefore ever size
+    // them, and neither node is in the lite graph — so once lite latches
+    // they sit on the GPU at their last full-post size, unsampled, forever
+    // (~10-14 MB on a laptop panel; more than the live PassNode target).
+    // Shrink only after lite has been STABLE for a second — a failed rung
+    // probe must not pay a reallocation each way — and only once prewarm
+    // has resolved (main.js arms freeWhenLite then), because the rAF loop
+    // renders THROUGH prewarm and an early free would discard targets the
+    // warm renders just built.
+    this._liteSince = -1;
+    this._freed = false;
+    this.freeWhenLite = false;
 
     this._scene = scene;
     this._camera = camera;
@@ -161,9 +174,24 @@ export class PostFX {
   // PassNode/BloomNode track renderer size + pixel ratio on their own
   setSize() {}
 
+  // armed by the host once prewarm has resolved (see the field notes above)
+  allowLiteFree() { this._liteSince = -1; this.freeWhenLite = true; }
+
   render(scene, camera, timeSec) {
     if (!this.enabled) { this.renderer.render(scene, camera); return; }
     this._uTime.value = timeSec % 100;
-    (this.lite ? this.litePost : this.post).render();
+    if (this.lite) {
+      if (this._liteSince < 0) this._liteSince = timeSec;
+      else if (!this._freed && this.freeWhenLite && timeSec - this._liteSince > 1) {
+        this._freed = true;
+        this.bloomNode.shrinkTargets();
+        this._ldr.renderTarget.setSize(1, 1);
+      }
+      this.litePost.render();
+    } else {
+      this._liteSince = -1;
+      this._freed = false;
+      this.post.render();
+    }
   }
 }

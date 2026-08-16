@@ -446,6 +446,23 @@ class BloomNode extends TempNode {
 	 * Frees internal resources. This method should be called
 	 * when the effect is no longer required.
 	 */
+	// (dispose()'s JSDoc block above belongs to dispose(), two methods down.)
+	// charon patch (perf pass 5): release the blur chain's GPU memory WITHOUT
+	// touching the compiled materials — dispose() would free the high-pass,
+	// composite and blur materials, which is exactly what the quality
+	// governor's prewarm pinning spent the intro protecting. Per-target
+	// setSize(1,1) rather than this.setSize(2,2): the /2 mip walk would floor
+	// the second mip to a 0x0 target. updateBefore re-sizes all of them from
+	// the drawing buffer before the next full-post render, so recovery is the
+	// ordinary resize path.
+	shrinkTargets() {
+		this._renderTargetBright.setSize( 1, 1 );
+		for ( let i = 0; i < this._nMips; i ++ ) {
+			this._renderTargetsHorizontal[ i ].setSize( 1, 1 );
+			this._renderTargetsVertical[ i ].setSize( 1, 1 );
+		}
+	}
+
 	dispose() {
 
 		for ( let i = 0; i < this._renderTargetsHorizontal.length; i ++ ) {

@@ -152,6 +152,8 @@ export const AIM = {
 };
 const RIFLE_TIP = 0.515;   // muzzle along the rifle's own +X (RIFLE_MUZZLE.z)
 const AXIS_Z = new THREE.Vector3(0, 0, 1);   // model-frame fore/aft swing axis
+// folded-ODST diffuse tints (setColorAt needs Color objects, not hex numbers)
+const PLATE_ODST = new THREE.Color(0x3f434c), PLATE_LINE = new THREE.Color(0xffffff);
 
 // per-body constant in [0,1) — stance, stride length and step phase all vary
 // off it so a crowd never marches in lockstep
@@ -381,11 +383,20 @@ export class Agents3D {
     this.civSet = mkSet('civilian', 256);
     this.armedSet = mkSet('crew_armed', 128);
     this.marineSet = mkSet('marine', 128);
-    // ODST reserve: the marine mesh in blackout plate — the material tint
-    // multiplies the texture, so green BDU armor reads as matte-black ODST
-    // hardsuit with a darkened visor (user: armory ODSTs need their own skin)
-    this.odstSet = mkSet('marine', 128);
-    for (const mesh of this.odstSet) mesh.material.color.setHex(0x3f434c);
+    // ODST reserve rides the SAME set with a per-instance tint (perf pass 5:
+    // odstSet was a byte-identical clone of marineSet differing only by
+    // material.color — 13 duplicate InstancedMeshes for at most 5 bodies).
+    // instanceColor multiplies DIFFUSE, so green BDU armor still reads as
+    // matte-black ODST hardsuit with a darkened visor (user: armory ODSTs
+    // need their own skin). The buffer is allocated NOW, not lazily via the
+    // first setColorAt: prewarm compiles every set at boot, and a buffer
+    // that appears later builds render objects without the instanceColor
+    // node — the ODSTs would silently render marine-green.
+    for (const m of this.marineSet) {
+      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(128 * 3).fill(1), 3);
+      m.instanceColor.setUsage(THREE.DynamicDrawUsage);
+    }
+    this.marineSet.tintLast = new Uint8Array(128).fill(0xff);
     this.infectionSet = mkSet('infection', 256);
     this.combatCivSet = mkSet('combat_civ', 256);
     this.combatOdstSet = mkSet('combat_odst', 128);
@@ -513,7 +524,7 @@ export class Agents3D {
                                // deaths inside one get a big radial flailing launch, and a
                                // blast re-flings bodies already on the deck
     this._seen = new Set();
-    this._counts = { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flash: 0, beam: 0 };
+    this._counts = { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flamer: 0, flash: 0, beam: 0 };
   }
 
   // The game calls this when a grenade detonates (game/main.js stepFrags). It
@@ -1023,7 +1034,7 @@ export class Agents3D {
     if (this._blasts.length) this._blasts = this._blasts.filter((b) => (b.ttl -= dt) > 0);
     const k = Math.min(1, dt * 14);
     // pooled and zeroed rather than rebuilt: this runs every frame
-    const counts = (this._counts ??= { civ: 0, armed: 0, marine: 0, odst: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flamer: 0, flash: 0, beam: 0 });
+    const counts = (this._counts ??= { civ: 0, armed: 0, marine: 0, infection: 0, combatCiv: 0, combatOdst: 0, carrier: 0, corpse: 0, rifle: 0, flamer: 0, flash: 0, beam: 0 });
     for (const key in counts) counts[key] = 0;
     let clip = 0, animT = 0, curId = 0, curPanic = false, curBob = 0, curAim = 0;
     const stamp = (set, i) => this._stampAnimated(set, i, clip, animT, curId, null, 0, curPanic);
@@ -1373,7 +1384,7 @@ export class Agents3D {
           break;
         }
         case FACTION.MARINE: {
-          const set = (flags & FLAG.ODST) ? this.odstSet : this.marineSet;
+          const set = this.marineSet;
           curAim = this._aimBlend(id, clip === CLIP.ATTACK, dt);
           const aimLean = this._aimLean(curAim);
           const lean = flinch + aimLean;
@@ -1383,7 +1394,9 @@ export class Agents3D {
           const sh = lg ? this._aimShift(set.rig.legLen, curAim, lg.rock) : 0;
           const bx = wx + Math.cos(heading) * sh, bz = wz - Math.sin(heading) * sh;
           this._pose(bx, gy, bz, heading, 1, 1, 1, lean);
-          stampHold(set, (flags & FLAG.ODST) ? counts.odst++ : counts.marine++);
+          const slot = counts.marine++;
+          stampHold(set, slot);
+          this._tintSlot(set, slot, (flags & FLAG.ODST) ? 1 : 0);
           const carry = this._holdFor(set, curAim);
           this._carryAt(bx, gy, bz, heading, carry.rifle, curBob, lean);
           if (flags & FLAG.FLAMER) this.flamer.setMatrixAt(counts.flamer++, this._m);
@@ -1713,14 +1726,19 @@ export class Agents3D {
     // uploading.
     const cull = this.shadowCull !== false; // ?nosc=1 pins every set casting
     for (const [set, c] of [[this.civSet, counts.civ], [this.armedSet, counts.armed],
-    [this.marineSet, counts.marine], [this.odstSet, counts.odst], [this.infectionSet, counts.infection],
+    [this.marineSet, counts.marine], [this.infectionSet, counts.infection],
     [this.combatCivSet, counts.combatCiv], [this.combatOdstSet, counts.combatOdst]]) {
       const cast = !cull || this._castNear.has(set);
       for (const mesh of set) { mesh.castShadow = cast; commitInstanced(mesh, c); }
+      // folded-ODST tint: upload only when some slot's faction bit moved
+      if (set.tintDirty) {
+        for (const mesh of set) mesh.instanceColor.needsUpdate = true;
+        set.tintDirty = false;
+      }
     }
     // a carried rifle is only ever within torch reach when its carrier is
     this.rifle.castShadow = !cull || this._castNear.has(this.armedSet) || this._castNear.has(this.marineSet)
-      || this._castNear.has(this.odstSet) || this._castNear.has(this.combatOdstSet);
+      || this._castNear.has(this.combatOdstSet);
     this.flamer.castShadow = this.rifle.castShadow;
     this.carrier.castShadow = !cull || this._castNear.has(this.carrier);
     for (const [mesh, c] of [[this.carrier, counts.carrier],
@@ -1812,6 +1830,18 @@ export class Agents3D {
   // (drift → follow the sim); or the body just burned/was cap-evicted after
   // flopping — in which case _ragRest carries the settled spot so the legacy
   // render anchors there instead of teleporting to the sim node.
+  // per-slot diffuse tint for the folded ODST look. Keyed on SLOT, not agent
+  // id — the slot->agent mapping reshuffles every frame, and this repaints
+  // exactly the slots whose faction bit moved. Slots past `count` keep stale
+  // colors and are never drawn.
+  _tintSlot(set, slot, kind) {
+    if (set.tintLast[slot] === kind) return;
+    set.tintLast[slot] = kind;
+    const c = kind ? PLATE_ODST : PLATE_LINE;
+    for (const mesh of set) mesh.setColorAt(slot, c);
+    set.tintDirty = true;
+  }
+
   _ragdollBody(id, f, flags, rp, wx, wz, deck, heading, counts, thrashing = false) {
     const sys = this.ragdolls;
     if (!sys) return false;

@@ -107,7 +107,10 @@ export class MarineMap {
   draw(playerAgent, playerDead) {
     const { canvas, ctx, sim } = this;
     const g = sim.graph;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // capped at 1.25, the same ceiling the renderer boots with — the tacnet
+    // was rasterising at dpr 2 (a 2880x1800 canvas on a retina panel) while
+    // the game itself rendered at a fraction of that
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
     this.dpr = dpr;
     const cw = canvas.clientWidth, ch = canvas.clientHeight;
     if (!cw || !ch) return;

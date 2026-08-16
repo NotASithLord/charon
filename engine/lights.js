@@ -14,6 +14,7 @@
 // IDENTICAL — the far sources were pure waste.
 
 import * as THREE from './vendor/three.webgpu.module.js';
+import * as TSL from './vendor/three.tsl.module.js';
 
 export class LightPool {
   constructor(scene, n = 10) {
@@ -82,5 +83,81 @@ export class LightPool {
       L.distance = v.distance;
       L.decay = v.decay;
     }
+  }
+}
+
+// INSTANCED EMISSIVE FIXTURES (perf pass 5) — the reusable answer to "every
+// room builds its own light-fixture mesh with its own material so the
+// emissive can animate". That shape costs one draw call and one 55-property
+// material refresh per fixture per frame, and it is why fixtures were half
+// the visible static draw calls on this engine's first game. One of these
+// per fixture KIND instead: a single InstancedMesh whose per-instance
+// emissive level rides an instanced float attribute into `emissiveNode`
+// (NOT `instanceColor` — that multiplies DIFFUSE, and a dead fixture's
+// housing must stay its own colour rather than go black).
+//
+//   const strips = new InstancedEmissiveFixtures({
+//     geometry, capacity, color: 0x8fa4c8, emissive: 0xbfd8ff, gain: 1.25,
+//   });
+//   const i = strips.place(x, y, z, { sx: 2.1 });  // world transform, baked once
+//   strips.finalize(scene);                        // count = placed, add to scene
+//   strips.setLevel(i, lvl);                       // 0..1, any frame
+//   strips.commit();                               // once per frame IF changed
+//
+// TSL compiles the same graph to WGSL and GLSL, so this works on both
+// backends. Normals: instance scale is axis-aligned on box fixtures, so
+// transformNormal through the instance matrix is exact.
+export class InstancedEmissiveFixtures {
+  constructor({ geometry, capacity, color, emissive, gain = 1, roughness = 0.5, metalness = 0.3 }) {
+    this._level = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+    this._level.setUsage(THREE.DynamicDrawUsage);
+    const mat = new THREE.MeshStandardNodeMaterial({ color, roughness, metalness });
+    mat.emissiveNode = TSL.color(emissive).mul(TSL.instancedDynamicBufferAttribute(this._level, 'float')).mul(gain);
+    this.mesh = new THREE.InstancedMesh(geometry, mat, capacity);
+    // fixtures span the whole hull — a per-instance-set bounding sphere would
+    // always intersect the frustum anyway, so skip the test outright
+    this.mesh.frustumCulled = false;
+    this.mesh.castShadow = false;
+    // receiveShadow is left at the host's discretion: an opaque fixture that
+    // ignored the scene's shadows would visibly float, and hosts commonly run
+    // a shadow-plumbing traverse that sets it anyway
+    this._placed = 0;
+    this._m = new THREE.Matrix4();
+    this._dirty = false;
+  }
+
+  place(x, y, z, { sx = 1, sy = 1, sz = 1, ry = 0, level = 1 } = {}) {
+    const i = this._placed++;
+    this._m.makeRotationY(ry);
+    this._m.scale(new THREE.Vector3(sx, sy, sz));
+    this._m.setPosition(x, y, z);
+    this.mesh.setMatrixAt(i, this._m);
+    this._level.array[i] = level;
+    return i;
+  }
+
+  // seals the set: count = what was placed (capacity keys the shader's
+  // instance-matrix storage, so it must be set at construction and the
+  // surplus is simply never drawn)
+  finalize(scene) {
+    this.mesh.count = this._placed;
+    this.mesh.instanceMatrix.needsUpdate = true;
+    scene.add(this.mesh);
+  }
+
+  setLevel(i, v) {
+    // quantize BEFORE comparing: the store is float32, and fround(0.04) !==
+    // 0.04 — without this, exactly the steady dead/dark levels re-dirtied
+    // the buffer on every write and it re-uploaded at 15 Hz forever
+    v = Math.fround(v);
+    if (this._level.array[i] === v) return;
+    this._level.array[i] = v;
+    this._dirty = true;
+  }
+
+  commit() {
+    if (!this._dirty) return;
+    this._dirty = false;
+    this._level.needsUpdate = true;
   }
 }

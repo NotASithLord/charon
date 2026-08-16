@@ -595,11 +595,17 @@ export class Sim {
       applyCommand(this, entry);
     }
 
-    // strategic tick ("infection round", §2.3)
-    if (this.tickCount % this.strategicEvery === 0) {
+    // strategic tick ("infection round", §2.3) — the HIVE's round and the
+    // MARINES' round are STAGGERED half an interval apart (perf pass 5): both
+    // measured multi-ms late-game, and sharing one 15 Hz tick made that tick
+    // a periodic frame-killer (p90 12.9 ms headless — 3-4x that on the 2017
+    // playtest machine). Each still runs every strategicEvery ticks; they
+    // just never run together. Influence is recomputed on both boundaries
+    // (both consumers read it fresh, same as before).
+    const halfRound = this.tickCount % this.strategicEvery;
+    if (halfRound === 0) {
       this._computeInfluence();
       this.hive.strategicTick();
-      strategicSquads(this);
       this._commandTick();
       this._checkSelfArming();
       // BEFORE the fall-back check (user: the seal should release "just before
@@ -612,6 +618,10 @@ export class Sim {
       this._doorShiftTick();
       this.stats.conversionsRound = 0;
       this._expireCalls();
+    } else if (halfRound === (this.strategicEvery >> 1)) {
+      // the marines' half of the round, 19 ticks after the hive's
+      this._computeInfluence();
+      strategicSquads(this);
     }
 
     updateHumansTick(this, dt);
@@ -913,10 +923,16 @@ export class Sim {
   // node (cheap, and stable at shared-wall boundaries), then scans the deck.
   _pnodeOf(a) {
     if (!this._physAnchored(a)) return a.node;
-    const inRect = (n) => n.deck === a.deck &&
-      Math.abs(a.x - n.x) <= n.w / 2 + 0.4 && Math.abs(a.y - n.y) <= n.d / 2 + 0.4;
-    if (inRect(this.graph.node(a.node))) return a.node;
-    for (const n of this._deckRooms[a.deck] ?? []) if (inRect(n)) return n.idx;
+    // inlined rect test (perf pass 5: the closure here allocated per agent,
+    // twice per tick — measured 2.1x slower than the flat form)
+    const cur = this.graph.node(a.node);
+    // the deck test is load-bearing mid-stair-climb: a.deck flips to the
+    // upper deck at the handover while a.node still names the lower room
+    if (cur.deck === a.deck
+      && Math.abs(a.x - cur.x) <= cur.w / 2 + 0.4 && Math.abs(a.y - cur.y) <= cur.d / 2 + 0.4) return a.node;
+    for (const n of this._deckRooms[a.deck] ?? []) {
+      if (Math.abs(a.x - n.x) <= n.w / 2 + 0.4 && Math.abs(a.y - n.y) <= n.d / 2 + 0.4) return n.idx;
+    }
     return a.node;
   }
 

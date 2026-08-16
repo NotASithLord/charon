@@ -7,6 +7,7 @@
 // enclosed stairwell trunks. No teleport pads.
 
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
+import { InstancedEmissiveFixtures } from '../engine/lights.js';
 import { DOORS } from './fps-data.js';
 import { RNG } from '../shared/rng.js';
 import { DECK_H, CLEAR_H, elevOf, clearHeightOf } from '../shared/geometry.js';
@@ -285,23 +286,18 @@ export class World {
     // every one paid an unconditional Matrix4.compose + world multiply per
     // render pass, and a NodeMaterialObserver.equals walk per object per
     // pass. Bake each matrix once, then turn both auto flags off; mark
-    // `static` so the observer walk short-circuits — EXCEPT meshes whose
-    // material animates (the flicker strips L.mat and battery lamps
-    // L.emMat flip emissiveIntensity per frame; a static-flagged mesh's
-    // material uniform copies freeze, and one-mesh-per-frame refresh would
-    // desync flicker across fixtures sharing a material).
-    const animMats = new Set();
-    for (const L of this.roomLights ?? []) {
-      if (L?.mat) animMats.add(L.mat);
-      if (L?.emMat) animMats.add(L.emMat);
-    }
+    // `static` so the observer walk short-circuits. (The old exemption for
+    // the flicker strips / battery lamps is gone — their emissive now rides
+    // a per-instance attribute on two InstancedMeshes, so NOTHING in the
+    // bins animates its material and every binned static gets the flag.
+    // That is the second half of the fixture win.)
     for (const list of this._volBins.values()) {
       for (const o of list) {
         o.updateMatrix();
         o.updateMatrixWorld();
         o.matrixAutoUpdate = false;
         o.matrixWorldAutoUpdate = false;
-        if (!animMats.has(o.material)) o.static = true;
+        o.static = true;
       }
     }
   }
@@ -575,6 +571,30 @@ export class World {
         .push({ x: gm.wellCx, z: gm.wellCz, hw: gm.wellHx, hd: gm.wellHz });
     }
 
+    // FIXTURES ARE TWO INSTANCED SETS, NOT 181 MESHES (perf pass 5,
+    // adversarially specified and reviewed): every room used to build its
+    // own strip material and its own lamp material so the emissive could
+    // animate — 126 unique materials the static merge could not collapse and
+    // the static flag had to exempt; half the visible static draw calls.
+    // Now: one InstancedMesh per fixture kind, per-instance emissive level,
+    // identical pixels (emissiveNode = emissive * level * gain is the same
+    // product the old emissiveIntensity computed), two draw calls total.
+    {
+      let lampCap = 0; // one lamp per (room, same-deck doored edge) incidence
+      for (const e of g.edges) {
+        if (e.door && g.node(e.a).deck === g.node(e.b).deck) lampCap += 2;
+      }
+      this._strips = new InstancedEmissiveFixtures({
+        geometry: new THREE.BoxGeometry(1, 0.07, 0.55), capacity: g.nodes.length,
+        color: 0x8fa4c8, emissive: 0xbfd8ff, gain: 1.25, roughness: 0.4, metalness: 0.3,
+      });
+      this._lamps = new InstancedEmissiveFixtures({
+        // metalness 0, matching the old lamp material's default — the helper's
+        // 0.3 default would add sheen the old look never had
+        geometry: new THREE.BoxGeometry(0.5, 0.09, 0.12), capacity: Math.max(1, lampCap),
+        color: 0x2a0e0a, emissive: 0xff3018, gain: 1, roughness: 0.6, metalness: 0,
+      });
+    }
     for (const n of g.nodes) {
       const deck = n.deck, elev = elevOf(deck);
       const [wx, wz] = this.simToWorld(n.x, n.y, deck);
@@ -625,16 +645,14 @@ export class World {
       // costs the marines their aim (combat.js fixture-state penalties)
       {
         const mode = ['steady', 'soft', 'harsh', 'dead'][g.lightMode[n.idx]];
-        const lmat = new THREE.MeshStandardMaterial({
-          color: 0x8fa4c8, emissive: 0xbfd8ff,
-          emissiveIntensity: mode === 'dead' ? 0.04 : 1.25, roughness: 0.4, metalness: 0.3,
+        // per-room width bakes into the instance scale (the base box is 1 m)
+        const stripIdx = this._strips.place(wx, elev + roomH - 0.06, wz, {
+          sx: Math.min(3.4, n.w * 0.55),
+          // dead fixtures glow at 0.04/1.25 of gain; live ones start at full
+          level: mode === 'dead' ? 0.04 / 1.25 : 1,
         });
-        const strip = new THREE.Mesh(
-          new THREE.BoxGeometry(Math.min(3.4, n.w * 0.55), 0.07, 0.55), lmat);
-        strip.position.set(wx, elev + roomH - 0.06, wz);
-        this.scene.add(strip);
         this.roomLights[n.idx] = {
-          mat: lmat, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1,
+          stripIdx, mode, phase: this._fxRng.range(0, 20), lvl: mode === 'dead' ? 0.04 : 1,
           x: wx, y: elev + roomH - 0.06, z: wz, // fixture world position (light pool)
         };
         // EMERGENCY LUMINAIRES (user rule: it's a DEAD SHIP on secondary
@@ -644,10 +662,8 @@ export class World {
         // emergency power; in a dead room they're the only thing burning.
         // They die with the room if the flood takes it (updateDarkness).
         {
-          const emMat = new THREE.MeshStandardMaterial({
-            color: 0x2a0e0a, emissive: 0xff3018, emissiveIntensity: 2.4, roughness: 0.6,
-          });
           let anchor = null;
+          const emSlots = [];
           for (const e of g.edges) {
             if (!e.door || (e.a !== n.idx && e.b !== n.idx)) continue;
             const other = g.node(e.a === n.idx ? e.b : e.a);
@@ -657,14 +673,12 @@ export class World {
             // the overhead, just inside the room so it clears the doorframe
             const ox = wx - dx2, oz = wz - dz2, ol = Math.hypot(ox, oz) || 1;
             const px = dx2 + (ox / ol) * 0.35, pz = dz2 + (oz / ol) * 0.35;
-            const lampM = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.09, 0.12), emMat);
-            lampM.position.set(px, elev + roomH - 0.06, pz);
-            this.scene.add(lampM);
+            emSlots.push(this._lamps.place(px, elev + roomH - 0.06, pz, { level: 2.4 }));
             if (!anchor) anchor = { x: px, y: elev + roomH - 0.35, z: pz };
           }
           const L = this.roomLights[n.idx];
           L.emergency = mode === 'dead'; // pool throws red light only where the mains are out
-          L.emMat = emMat;
+          L.emSlots = emSlots;
           L.em = anchor ?? { x: wx, y: elev + roomH - 0.5, z: wz };
         }
       }
@@ -811,6 +825,9 @@ export class World {
         ry: m.rotation.y || 0,
       };
     });
+    // seal the fixture sets (count = placed; capacity keys the shader)
+    this._strips.finalize(this.scene);
+    this._lamps.finalize(this.scene);
     this._mergeStaticPass();
   }
 
@@ -1504,6 +1521,9 @@ export class World {
     this.doorPanelsBad = new THREE.InstancedMesh(geo, matBad, Math.max(1, nBad * 2));
     this.doorPanels.count = (entries.length - nBad) * 2;
     this.doorPanelsBad.count = nBad * 2;
+    // a count-0 InstancedMesh still costs an object pass per frame per pass —
+    // the exact anti-pattern agents3d's commitInstanced already fixes
+    this.doorPanelsBad.visible = nBad > 0;
     this.doorPanels.frustumCulled = false;
     this.doorPanelsBad.frustumCulled = false;
     this.scene.add(this.doorPanels, this.doorPanelsBad);
@@ -1704,16 +1724,20 @@ export class World {
   updateLights(t) {
     for (const L of this.roomLights) {
       if (!L) continue;
-      if (L.mode === 'steady') { L.lvl = 1; continue; }
-      if (L.mode === 'dead') { L.lvl = 0.04; continue; }
-      if (L.mode === 'soft') {
+      if (L.mode === 'steady') L.lvl = 1;
+      else if (L.mode === 'dead') L.lvl = 0.04;
+      else if (L.mode === 'soft') {
         L.lvl = 0.72 + 0.28 * Math.sin(t * 1.7 + L.phase) * Math.sin(t * 0.9 + L.phase * 2);
       } else { // harsh: strobing dropouts
         const s = Math.sin(t * 13 + L.phase) * Math.sin(t * 7.3 + L.phase * 1.7);
         L.lvl = s > -0.25 ? 0.55 + 0.45 * Math.abs(s) : 0.05;
       }
-      L.mat.emissiveIntensity = 1.25 * L.lvl;
+      // levels are in GAIN units (emissive = level * 1.25). L.lvl stays the
+      // raw intensity for the light pool / lightLevel consumers; dead rooms
+      // write 0.04/1.25 so the fixture glows at exactly the old 0.04.
+      this._strips.setLevel(L.stripIdx, L.mode === 'dead' ? 0.04 / 1.25 : L.lvl);
     }
+    this._strips.commit();
   }
 
   // drive the veils + room fixtures from the sim's darkness clocks. The
@@ -1748,15 +1772,21 @@ export class World {
       // an overgrown room's fixture dies with it — and its sign fades into
       // the dark instead of glowing through the murk
       const L = this.roomLights[n];
-      if (L && sim.darkAt(n)) { L.lvl = 0.02; L.mat.emissiveIntensity = 0.02; }
+      if (L && sim.darkAt(n)) { L.lvl = 0.02; this._strips.setLevel(L.stripIdx, 0.02 / 1.25); } // gain units: old raw 0.02
       // even the battery lamps die when the growth takes the room
-      if (L?.emMat) L.emMat.emissiveIntensity = sim.darkAt(n) ? 0.04 : 2.4;
+      if (L?.emSlots) {
+        const lv = sim.darkAt(n) ? 0.04 : 2.4;
+        for (const slot of L.emSlots) this._lamps.setLevel(slot, lv);
+      }
       // the placard is ONE shared sprite now, so only the room it is
       // currently hanging in can fade it into the murk
       if (n === this._signShown && this._sign) {
         this._sign.material.opacity = sim.darkAt(n) ? 0.06 : 0.95;
       }
     }
+    // both fixture sets may have taken dark-room overrides above
+    this._strips.commit();
+    this._lamps.commit();
   }
 
   updateDoors(dt, movers, nMovers = movers.length) {
