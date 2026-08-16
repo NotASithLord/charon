@@ -41057,19 +41057,32 @@ class PassNode extends TempNode {
 
 		scene.name = this.name ? this.name : scene.name;
 
-		renderer.render( scene, camera );
+		// charon patch: try/finally. Without it, a throw inside the scene render
+		// skips every restore below — most destructively `setRenderTarget`, which
+		// leaves the renderer pointing at THIS pass's HDR target. From the next
+		// frame on, _renderScene sees a non-null renderTarget, never reaches
+		// _getDefaultRenderPassDescriptor, and so never calls getCurrentTexture():
+		// the canvas keeps its last presented image forever. That turns one bad
+		// frame into a permanently black screen even when the host catches.
+		try {
 
-		scene.name = currentSceneName;
-		scene.overrideMaterial = currentOverrideMaterial;
+			renderer.render( scene, camera );
 
-		renderer.setRenderTarget( currentRenderTarget );
-		renderer.setMRT( currentMRT );
-		renderer.autoClear = currentAutoClear;
-		renderer.transparent = currentTransparent;
-		renderer.opaque = currentOpaque;
-		renderer.contextNode = currentContextNode;
+		} finally {
 
-		camera.layers.mask = currentMask;
+			scene.name = currentSceneName;
+			scene.overrideMaterial = currentOverrideMaterial;
+
+			renderer.setRenderTarget( currentRenderTarget );
+			renderer.setMRT( currentMRT );
+			renderer.autoClear = currentAutoClear;
+			renderer.transparent = currentTransparent;
+			renderer.opaque = currentOpaque;
+			renderer.contextNode = currentContextNode;
+
+			camera.layers.mask = currentMask;
+
+		}
 
 	}
 

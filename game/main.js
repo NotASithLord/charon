@@ -73,6 +73,27 @@ try {
 // WebGPU while the WebGL2 harness path is clean). Validation errors are
 // normally swallowed into the console — surface the first few ON SCREEN so a
 // playtest screenshot carries the actual GPU error text.
+// FAILURES MUST BE VISIBLE. There was no window.onerror and no
+// unhandledrejection handler anywhere in this app, so the one hard freeze a
+// playtester hit produced a black screen and no evidence whatsoever. Anything
+// that escapes now paints itself on screen, so the next report arrives with
+// the exception in the screenshot instead of "it froze".
+let _fatalShown = 0, _renderFails = 0, _renderStopped = false;
+function reportFatal(what, err) {
+  console.error('[charon] ' + what, err);
+  if (_fatalShown >= 3) return;
+  _fatalShown++;
+  const div = document.createElement('div');
+  div.style.cssText = 'position:fixed;left:10px;top:' + (40 + _fatalShown * 92) + 'px;z-index:99;'
+    + 'max-width:52em;background:rgba(60,10,10,0.94);color:#ffb0a0;font:11px monospace;'
+    + 'padding:6px 8px;border:1px solid #a05040;white-space:pre-wrap;pointer-events:none';
+  div.textContent = 'CHARON ' + what.toUpperCase() + ': '
+    + String(err?.message ?? err).slice(0, 400)
+    + '\n' + String(err?.stack ?? '').split('\n').slice(1, 5).join('\n').slice(0, 600);
+  document.body.appendChild(div);
+}
+window.addEventListener('error', (e) => reportFatal('uncaught error', e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => reportFatal('unhandled rejection', e.reason));
 {
   const gpuDev = renderer.backend?.device;
   if (gpuDev?.addEventListener) {
@@ -3509,18 +3530,38 @@ function frame(now) {
   // gate on the CASTER, not the renderer flag — the flag is pinned on now
   if (torch.castShadow && now - _shadowAt >= 30) { _shadowAt = now; torch.shadow.needsUpdate = true; }
   renderer.info.reset(); // per-frame accumulation across all post passes
-  // ...and the render itself is guarded: a throw here is reported ONCE and the
-  // next frame is attempted, rather than taking the session down silently.
+  // ...and the render itself is guarded: a throw is REPAIRED and reported, and
+  // the next frame attempted, rather than taking the session down silently.
+  if (_renderStopped) return; // banner is up; the sim and HUD stay alive
   try {
     post.render(scene, camera, now / 1000);
+    _renderFails = 0;
   } catch (err) {
-    if (!_renderFailed) {
-      _renderFailed = true;
-      console.error('[charon] render failed — the frame loop is continuing; please report this', err);
+    // A CAUGHT THROW IS NOT A HANDLED THROW. three's render path is not
+    // exception-safe: _renderScene leaks `_callDepth` (which keys the
+    // RenderContexts cache, so every subsequent frame allocates a brand-new
+    // context with fresh pass descriptors — unbounded growth), and leaves the
+    // lighting begin/finish pair unbalanced. Swallowing without repairing
+    // converts "one bad frame" into a slow leak behind a black screen, which
+    // is strictly worse than the freeze it replaced. Put the renderer back to
+    // a known state before the next frame runs.
+    try {
+      renderer.setRenderTarget(null);
+      renderer.setMRT?.(null);
+      renderer.autoClear = true;
+      renderer.transparent = true;
+      renderer.opaque = true;
+      renderer._callDepth = -1; // its constructor's value; _renderScene ++s on entry
+    } catch { /* the repair itself must never throw */ }
+    reportFatal('render failed', err);
+    // three consecutive failures is not a glitch — stop rendering rather than
+    // spinning a broken renderer, and leave the banner up to be photographed
+    if (++_renderFails >= 3) {
+      _renderStopped = true;
+      reportFatal('render stopped after 3 consecutive failures', err);
     }
   }
 }
-let _renderFailed = false;
 requestAnimationFrame(frame);
 
 // debug hooks
