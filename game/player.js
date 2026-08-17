@@ -69,6 +69,16 @@ export class Player extends FpsController {
     // both players see the same armor and die at the same moment.
     this._lastHp = this.agent.hp;
 
+    // --- knocked back: spend the shove the sim recorded on our agent ---
+    // sim X/Y maps to world X/Z by a pure translation (world.simToWorld only
+    // offsets Y by the deck band), so the direction carries across unchanged.
+    if (this.agent.shoveX || this.agent.shoveY) {
+      this.shoveX += this.agent.shoveX;
+      this.shoveZ += this.agent.shoveY;
+      this.agent.shoveX = 0; this.agent.shoveY = 0;
+      this.onShoved?.(Math.hypot(this.shoveX, this.shoveZ));
+    }
+
     // --- E: scavenge ammo from the armory rack or the armed dead ---
     if (this.keys.has('KeyE') && !this._eLatch) {
       this._eLatch = true;

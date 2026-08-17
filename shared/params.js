@@ -270,6 +270,16 @@ export const PARAMS = {
                     standSpeed: 5.5, chargeBonus: 3.5, jumpBonus: 7.0,
                     standUp: 2.5, jumpUp: 5.2, standSpin: 10, jumpSpin: 17,
                     standKick: 9, jumpKick: 15,
+                    // KNOCKBACK ON A LIVING TARGET (user: the flood's melee
+                    // "should shove you backwards some"). The numbers above
+                    // are RAGDOLL launch speeds — they only ever fired when a
+                    // swing KILLED, because hurtHuman used the impulse solely
+                    // to seed a corpse's death throw. Surviving a hit moved
+                    // you not at all. These are the living-body versions:
+                    // enough to break your stride and your aim, not enough to
+                    // fling you across the compartment.
+                    shoveMps: 3.6,        // an NPC on its feet
+                    shovePlayerMps: 4.4,  // you, who can feel it — a hard stagger
                   } },
     hostWeaponDps: 5,          // nominal (shaft pools / hive estimates)
     // the armed MINORITY of forms spray the host's weapon one-handed and

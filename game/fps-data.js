@@ -36,6 +36,10 @@ export const ODST = {
   jumpVel: 8.2,
   eyeHeight: 1.62,
   climbSpeed: 2.6,
+  // how fast a knockback bleeds off (see FpsController.shoveX). 7/s puts a
+  // 4.4 m/s stagger under walking pace in about a fifth of a second — you feel
+  // shoved and you recover; you are never sliding on ice.
+  shoveDecayPerSec: 7,
 };
 
 export const FRAG = {

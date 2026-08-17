@@ -516,6 +516,19 @@ export class Sim {
       if (dmg <= 0) return;
     } else if (a.isPlayer && dmg > 0) a.armorHitAt = this.t;
     a.hp -= dmg;
+    // A HIT YOU SURVIVE STILL MOVES YOU (user: the flood's melee "should shove
+    // you backwards some"). The impulse was computed on every swing and then
+    // used ONLY on the death branch below, so anything you walked away from
+    // was pure damage with no physicality at all. Recorded here as a velocity
+    // the mover spends: the player's controller reads it as knockback, an NPC
+    // gets pushed and re-clamped inside its room.
+    if (impact && a.hp > 0) {
+      const P = this.P.combat.combatForm.swing;
+      const mps = a.isPlayer ? P.shovePlayerMps : P.shoveMps;
+      a.shoveX = impact.dirX * mps;
+      a.shoveY = impact.dirY * mps;
+      a.shoveAt = this.t;
+    }
     if (a.hp <= 0) {
       if (impact) a.deathImpulse = impact;
       this.stats.humansDead++;
@@ -1009,6 +1022,23 @@ export class Sim {
   _advanceMovement(dt) {
     const g = this.graph;
     for (const a of this.agents) {
+      // KNOCKBACK, spent before anything else this tick. Applied here rather
+      // than at the hit so it decays over real time and goes through
+      // _clampToRoom — a body shoved at a bulkhead stops against it instead of
+      // being punched through the hull. The player is exempt: its position is
+      // owned by the physics capsule (see the `continue` below), so its shove
+      // is consumed by the controller instead.
+      if (a.shoveX || a.shoveY) {
+        if (!a.isPlayer && !a.dead) {
+          a.x += a.shoveX * dt;
+          a.y += a.shoveY * dt;
+          const room = g.node(a.pnode ?? a.node);
+          if (room) this._clampToRoom(a, room);
+        }
+        const d = Math.exp(-7 * dt);
+        a.shoveX *= d; a.shoveY *= d;
+        if (Math.abs(a.shoveX) < 0.02 && Math.abs(a.shoveY) < 0.02) { a.shoveX = 0; a.shoveY = 0; }
+      }
       a.hoverY = 0; // reset the leap arc each tick; _spatialSteer re-sets it
       // NOBODY IS FLYING A BODY THIS LOOP SKIPS. _spatialSteer is the only
       // thing that sets a.leaping, so every path out of this loop that never

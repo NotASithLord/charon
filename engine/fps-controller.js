@@ -27,6 +27,12 @@ export class FpsController {
     this.x = x; this.z = z;
     this.h = 0; // feet height above current deck floor
     this.vx = 0; this.vz = 0; this.vy = 0;
+    // KNOCKBACK, on its own channel. It cannot live in vx/vz: stepMove blends
+    // those toward the WALK INPUT every step (accel 14 → ~21% per frame), so a
+    // shove poked in there is gone in about 50 ms and reads as a stutter
+    // rather than a hit. This decays on its own clock and is added to the
+    // sweep, so being hit moves you even while you hold W into it.
+    this.shoveX = 0; this.shoveZ = 0;
     this.onGround = true;
     this.yaw = -Math.PI / 2; this.pitch = 0;
     this.keys = new Set();
@@ -108,14 +114,17 @@ export class FpsController {
 
     // horizontal: the character controller sweeps the capsule and slides it
     // along whatever it hits (walls, cover, bodies)
-    const wantX = this.vx * dt, wantZ = this.vz * dt;
+    const wantX = (this.vx + this.shoveX) * dt, wantZ = (this.vz + this.shoveZ) * dt;
     const moved = this.physics.movePlayer(wantX, wantZ, this.elevOf(this.deck) + this.h);
     this.x += moved.dx;
     this.z += moved.dz;
     // bleed the velocity we couldn't spend into whatever we hit, so we don't
-    // keep ramming a wall at full tilt
-    if (Math.abs(moved.dx) < Math.abs(wantX) - 1e-4) this.vx *= 0.2;
-    if (Math.abs(moved.dz) < Math.abs(wantZ) - 1e-4) this.vz *= 0.2;
+    // keep ramming a wall at full tilt — the shove bleeds too, so being
+    // knocked into a bulkhead stops you dead instead of pinning you to it
+    if (Math.abs(moved.dx) < Math.abs(wantX) - 1e-4) { this.vx *= 0.2; this.shoveX *= 0.2; }
+    if (Math.abs(moved.dz) < Math.abs(wantZ) - 1e-4) { this.vz *= 0.2; this.shoveZ *= 0.2; }
+    const sd = Math.exp(-(T.shoveDecayPerSec ?? 7) * dt);
+    this.shoveX *= sd; this.shoveZ *= sd;
 
     // vertical: feet rest on the ground surface (which may follow ramps —
     // the injected groundHeightAt decides)

@@ -19,6 +19,14 @@ const SAMPLES = {
   // MARINE BARKS: real voice lines, one take each. Deliberately NOT variants —
   // each is spent once per run (see the bark director in main.js).
   bark1: ['bark1.wav'], bark2: ['bark2.wav'], bark3: ['bark3.wav'], bark4: ['bark4.wav'],
+  // THE BODY BECOMING SOMETHING ELSE (user): played once per conversion, at
+  // the MIDDLE of the convulsion rather than its start — the thrash is already
+  // running by then, so the sound lands on the worst of it instead of
+  // announcing it. Four takes, picked at random (see play()'s _alts).
+  morph: ['morph1.wav', 'morph2.wav', 'morph3.wav', 'morph4.wav'],
+  // a combat form coming apart. Five takes so a firefight against a pack does
+  // not machine-gun the same wet crack.
+  gib: ['gib1.wav', 'gib2.wav', 'gib3.wav', 'gib4.wav', 'gib5.wav'],
 };
 // KILLED OUTRIGHT by the audit, with no real sample to stand in yet. Dropping
 // the buffer is the whole fix — play() no-ops on an unknown name — so every

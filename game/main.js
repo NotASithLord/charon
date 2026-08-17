@@ -1083,6 +1083,12 @@ let hasFlamer = false, heldIsFlamer = false;
 // rebuilt from scratch every frame, so it needs a timestamp to live on.
 const SWAP_HINT_MS = 8000;
 let swapHintAt = 0;
+// KNOCKED BACK: the shove already moves the capsule (FpsController.shoveX);
+// this is the part that makes it READ as a hit rather than a physics glitch —
+// the view lurches with the body. Scaled off the strength so a glancing swipe
+// is a nudge and a charging form's whip snaps the camera.
+player.onShoved = (mps) => { shake = Math.min(1.4, shake + mps * 0.16); };
+
 player.onAmmoTaken = (src) => {
   if (src === 'armory') { sim.armoryStock--; weapon.reserve += 120; frags = Math.min(FRAG.max, frags + 4); sim.log('combat', `you strip mags and a bandolier of frags from the rack (${sim.armoryStock} rifles left)`); }
   else { src.wasArmed = false; weapon.reserve += 60; sim.log('combat', 'you take the mags off the dead'); }
@@ -2827,6 +2833,10 @@ function drawTracker(now) {
 // other decks collapse into ONE soft distant rumble, and the flood/human
 // horror layer (chitter, carrier gurgle) does the storytelling.
 let chitterAt = 0, gurgleAt = 0;
+// one-shot ledgers: both cues fire on a CONDITION that stays true for seconds,
+// and the sweep re-reads it ~15x a second. Ids are never reused within a run,
+// so these only grow by one per body and need no eviction.
+const _morphed = new Set(), _gibbed = new Set();
 let _gunVoiced = null; // per-room gunfire stamp already voiced (edge trigger)
 function soundSweep(now) {
   const g = sim.graph;
@@ -2879,6 +2889,21 @@ function soundSweep(now) {
     const d = Math.hypot(wx - player.x, wz - player.z);
     if (a.faction === 3 && d < 18 && now - chitterAt > 1600 + Math.random() * 1200) { audio.play('chitter', { x: wx, z: wz }, 0.55); chitterAt = now; }
     if (a.faction === 5 && (!nearCarrier || d < nearCarrier.d)) nearCarrier = { wx, wz, d };
+    // THE CONVERSION, VOICED AT ITS MIDPOINT (user: "in the middle of the
+    // timeslot"). transformingUntil is the END of the thrash, so the middle is
+    // half a thrashSec back from it. Fired once per body — the sweep runs at
+    // ~15 Hz and the window is seconds wide, so it needs the id set to not
+    // retrigger every pass.
+    if (a.transformingUntil !== undefined && d < 30 && !_morphed.has(a.id)) {
+      const mid = a.transformingUntil - sim.P.combat.thrashSec * 0.5;
+      if (sim.t >= mid) { _morphed.add(a.id); audio.play('morph', { x: wx, z: wz }, 0.95); }
+    }
+    // a combat form coming apart. hurtFloodForm never sets `dead` on one — it
+    // leaves hp 0 / downed true — so the death to voice is the DOWNED edge.
+    if (a.faction === 4 && a.downed && !_gibbed.has(a.id)) {
+      _gibbed.add(a.id);
+      if (d < 34) audio.play('gib', { x: wx, z: wz }, 1.0);
+    }
   }
   // NO GROWLS, NO SHRIEKS (user: "remove shrieks and growls wholesale") —
   // the combat-form tracking that fed them went with them. The chitter, the
