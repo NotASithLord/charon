@@ -188,6 +188,12 @@
     position: absolute; left: 50%; top: 50%; width: 130px; height: 130px;
     margin: -65px 0 0 -65px; pointer-events: none; opacity: 0; border-radius: 50%;
   }
+  /* med pack used — a soft white-green wash from the screen edges, the
+     opposite voice of the red damage vignette */
+  #healflash {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0) 55%, rgba(150,235,180,0.35) 100%);
+  }
   #dmgdir::before {
     content: ""; position: absolute; left: 50%; top: -6px; margin-left: -22px;
     width: 44px; height: 16px; border-radius: 50% 50% 0 0;
@@ -372,6 +378,7 @@ npm run build:dwapp</pre></article>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>
   <div id="dmgdir"></div>
+  <div id="healflash"></div>
   <canvas id="tracker" width="150" height="150"></canvas>
   <div class="hud" id="networkHud" hidden><span id="networkState">P2P · 1 ONLINE</span><button id="gameVoice" type="button">MIC LIVE</button></div>
   <div id="frags">4 FRAG</div>

@@ -1116,6 +1116,65 @@ player.onFlamerTaken = () => {
   return true;
 };
 
+// MED PACKS (user: Halo CE style — "just a button to use on the spot,
+// restores to full health regardless of how low"). Applied through the local
+// sim in every case: on the authority that IS the truth; on a peer it's an
+// optimistic apply the authority's medkit packet + next snapshot confirm.
+let healFlash = 0;
+player.onMedkitUsed = () => {
+  const kit = player.medkitSource();
+  if (!kit) return false;
+  if (!sim.playerUseMedkit(player.agent)) return false;
+  if (!isSimAuthority()) gameSync?.medkit();
+  healFlash = 1;
+  return true;
+};
+
+// the packs themselves, out in the world: Halo CE's white case with the red
+// cross, small enough to sit on a crate lid, emissive enough to read in a
+// blacked-out compartment. One group per kit; visibility tracks kit.used.
+const medkitMeshes = [];
+{
+  const caseMat = new THREE.MeshStandardMaterial({ color: 0xe8e6df, roughness: 0.5, metalness: 0.1, emissive: 0x1a1a18, emissiveIntensity: 0.5 });
+  const crossMat = new THREE.MeshStandardMaterial({ color: 0xc1272d, roughness: 0.55, metalness: 0.05, emissive: 0x7a1518, emissiveIntensity: 0.7 });
+  const caseGeo = new THREE.BoxGeometry(0.34, 0.115, 0.24);
+  const barGeo = new THREE.BoxGeometry(0.19, 0.012, 0.055);
+  const barGeo2 = new THREE.BoxGeometry(0.055, 0.012, 0.19);
+  const stripeGeo = new THREE.BoxGeometry(0.342, 0.036, 0.242);
+  // a kit hashed into the same spot as a cover crate would be swallowed by
+  // the mesh — shove it just clear along the shortest exit. Deterministic
+  // (props are a pure seed hash), and written back to the KIT so the sim's
+  // use-radius agrees with where the player actually sees the box.
+  const clearOfProps = (kit) => {
+    for (const p of world.props) {
+      if (p.deck !== kit.deck) continue;
+      const dx = kit.x - p.x, dy = kit.y - p.y;
+      if (Math.abs(dx) >= p.hw + 0.2 || Math.abs(dy) >= p.hd + 0.2) continue;
+      const pushX = (p.hw + 0.25 - Math.abs(dx)) * (dx >= 0 ? 1 : -1);
+      const pushY = (p.hd + 0.25 - Math.abs(dy)) * (dy >= 0 ? 1 : -1);
+      if (Math.abs(pushX) <= Math.abs(pushY)) kit.x += pushX; else kit.y += pushY;
+    }
+  };
+  for (const kit of sim.medkits) {
+    clearOfProps(kit);
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(caseGeo, caseMat);
+    body.position.y = 0.0575;
+    const stripe = new THREE.Mesh(stripeGeo, crossMat); // red band around the middle
+    stripe.position.y = 0.0575;
+    const bar = new THREE.Mesh(barGeo, crossMat);
+    bar.position.y = 0.116;
+    const bar2 = new THREE.Mesh(barGeo2, crossMat);
+    bar2.position.y = 0.116;
+    g.add(body, stripe, bar, bar2);
+    const [wx, wz] = world.simToWorld(kit.x, kit.y, kit.deck);
+    g.position.set(wx, elevOf(kit.deck), wz);
+    g.rotation.y = (kit.id * 2654435761 % 360) * Math.PI / 180; // stable scatter yaw
+    scene.add(g);
+    medkitMeshes.push({ kit, mesh: g });
+  }
+}
+
 // MA5 viewmodel — the real ported first-strike asset (game/rifle-model.js),
 // at first-strike's exact CE reference placement (js/main.js gunTune),
 // translated for Three's -Z-forward camera convention (their engine is
@@ -3444,6 +3503,12 @@ function frame(now) {
     dd.style.opacity = dmgFlash.toFixed(2);
     dd.style.transform = `rotate(${(-dmgAngle * 180 / Math.PI).toFixed(1)}deg)`;
   }
+  if (healFlash > 0) {
+    healFlash = Math.max(0, healFlash - dtReal * 1.4);
+    el('healflash').style.opacity = healFlash.toFixed(2);
+  }
+  // med packs vanish when spent — on this client or, in co-op, on any other
+  for (const m of medkitMeshes) m.mesh.visible = !m.kit.used;
   shake = Math.max(0, shake - dtReal * 3);
 
   // sliding doors open for ANY movement near them (user rule) — mover
@@ -3557,6 +3622,9 @@ function frame(now) {
     setText('hint', fsrc === 'armory' ? 'E — take the flamethrower off the rack'
       : fsrc === 'refuel' ? `E — swap a fuel can (${sim.armoryFuelCans} left)`
         : 'E — take the flamethrower off the operator');
+    setStyle('hint', 'display', 'block');
+  } else if (!player.dead && player.medkitSource()) {
+    setText('hint', 'E — use the med pack');
     setStyle('hint', 'display', 'block');
   } else if (src) {
     setText('hint', src === 'armory'

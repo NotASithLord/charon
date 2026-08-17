@@ -306,6 +306,10 @@ export function createGameSync({
       sim.lastStand = !!packet.world.lastStand;
       if (Number.isFinite(packet.world.armoryStock)) sim.armoryStock = packet.world.armoryStock;
       sim.armoryLocked = !!packet.world.armoryLocked;
+      if (Array.isArray(packet.world.medkits) && packet.world.medkits.length <= 64) {
+        const used = new Set(packet.world.medkits.filter((id) => Number.isSafeInteger(id)));
+        for (const kit of sim.medkits) kit.used = used.has(kit.id);
+      }
       if (packet.world.stats && typeof packet.world.stats === 'object') {
         for (const key of Object.keys(sim.stats)) {
           if (Number.isFinite(packet.world.stats[key])) sim.stats[key] = packet.world.stats[key];
@@ -390,6 +394,12 @@ export function createGameSync({
       }
       if (!ok) return;
       hurtFloodForm(sim, target, Math.max(0, Math.min(80, unpack(packet.damage))), false, peerNumber(packet.from));
+    } else if (packet.kind === 'medkit') {
+      // a peer pressed E at a med pack. All the checks that matter live in
+      // playerUseMedkit itself: real live agent, actually hurt, an unspent
+      // kit within reach of where the authority believes they stand.
+      const sender = playerAgents.get(packet.from);
+      if (sender) sim.playerUseMedkit(sender);
     } else if (packet.kind === 'explosion') {
       const values = [packet.deck, packet.x, packet.y, packet.radius, packet.damage];
       if (!packedIntegers(values) || !Number.isInteger(packet.deck) || packet.deck < 1 || packet.deck > 5
@@ -412,6 +422,9 @@ export function createGameSync({
     peerLive(did) { return (latestSequence.get(did) ?? 0) > 0; },
     hitFlood(targetId, damage) {
       send('hit', { targetId, damage: pack(damage) });
+    },
+    medkit() {
+      send('medkit', {});
     },
     explosion(deck, x, y, radius, damage) {
       send('explosion', { deck, x: pack(x), y: pack(y), radius: pack(radius), damage: pack(damage) });
@@ -480,6 +493,9 @@ export function createGameSync({
               lastStand: sim.lastStand,
               armoryStock: sim.armoryStock,
               armoryLocked: sim.armoryLocked,
+              // spent med packs — full state, so a peer's optimistic local
+              // use is confirmed (or reverted) by the next full snapshot
+              medkits: sim.medkits.filter((kit) => kit.used).map((kit) => kit.id),
               stats: { ...sim.stats },
             } } : {}),
           });

@@ -202,6 +202,15 @@ export const PARAMS = {
     // is always out first.
     releaseLeadMarines: 4,
   },
+  // MED PACKS (user: "a classic halo edition ... two per player in the med
+  // bay, and 2 per player randomly scattered throughout the ship as part of
+  // the seed"). Used on the spot with E — never carried — and a use restores
+  // to FULL regardless of how low you were.
+  medkits: {
+    perPlayerMedbay: 2,
+    perPlayerScatter: 2,
+    useRadiusM: 2.0,        // same reach as ammo/flamer scavenging
+  },
   belief: {
     decayRatePerSec: 0.1,   // MASTER DIAL (lambda) — smart vs unfair
     predictionQuality: 0.7, // MASTER DIAL (q) — how well it guesses your route

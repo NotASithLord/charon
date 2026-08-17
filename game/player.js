@@ -85,7 +85,7 @@ export class Player extends FpsController {
       // the flamethrower gets first refusal on the press — the game layer owns
       // the "do I already have one / is the tank full" question, so it answers
       // whether it consumed the key rather than us guessing
-      if (!this.onFlamerTaken?.()) {
+      if (!this.onFlamerTaken?.() && !this.onMedkitUsed?.()) {
         const src = this.ammoSource();
         if (src && this.onAmmoTaken) this.onAmmoTaken(src);
       }
@@ -316,6 +316,14 @@ export class Player extends FpsController {
       if (dx * dx + dy * dy < 2.2 * 2.2) return c;
     }
     return null;
+  }
+
+  // MED PACKS (user): the unused kit in reach — but only offered when a use
+  // would actually do something. At full health the pack just sits there,
+  // exactly like Halo CE refusing to spend one on a topped-up bar.
+  medkitSource() {
+    if (this.dead || this.agent.hp >= this.agent.maxHp) return null;
+    return this.sim.medkitNear(this.agent);
   }
 
   // THE FLAMETHROWER, separately (user). Kept apart from ammoSource so the two

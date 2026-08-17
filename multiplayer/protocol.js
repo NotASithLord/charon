@@ -1,15 +1,17 @@
+// 5: med packs — a peer's use travels as a 'medkit' packet the authority
+// validates, and spent-kit ids ride the full snapshot's world section.
 // 4: the row carries player armor (moved into the sim to fix a co-op death
 // desync — a client used to heal its own agent past the host's damage).
 // 3: the snapshot row carries the leap arc (hoverY + leaping). The row is a
 // positional array validated on its LENGTH, so a v2 peer would reject every
 // v3 row wholesale — the version is what keeps the two builds from meeting in
 // the same room at all instead of staring at frozen NPCs.
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const MAX_PLAYERS = 4;
 export const QUICKPLAY_ROOM = `charon:quickplay:v${PROTOCOL_VERSION}`;
 const ROOM_PREFIX = `charon:v${PROTOCOL_VERSION}:`;
 const SAFE_CODE = /^[a-z0-9][a-z0-9-]{5,47}$/;
-const GAME_KINDS = new Set(['state', 'hit', 'explosion', 'shot', 'snapshot']);
+const GAME_KINDS = new Set(['state', 'hit', 'explosion', 'shot', 'snapshot', 'medkit']);
 
 export function createInviteCode(random = globalThis.crypto) {
   if (!random?.getRandomValues) throw new Error('secure random values are unavailable');

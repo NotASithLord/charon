@@ -136,6 +136,45 @@ export class Sim {
       }
     }
 
+    // MED PACK POOL (user: Halo CE med packs — 2 per player racked in the
+    // medbay, 2 per player scattered through the ship "as part of the seed").
+    // Placement comes off a DEDICATED RNG stream keyed off the seed, so the
+    // pool is seed-stable without moving a single draw of the main stream —
+    // the headless replay (which never attaches a player) hashes identically.
+    // Kits are only ISSUED when a player attaches: slot i of each pool always
+    // becomes the same kit with the same id, so co-op clients that attach the
+    // same players in any order end up with the same set.
+    {
+      const mrng = new RNG(this.seed + ':medkits');
+      const inRoom = (n) => [
+        n.x + mrng.range(-Math.max(0.4, n.w / 2 - 1.0), Math.max(0.4, n.w / 2 - 1.0)),
+        n.y + mrng.range(-Math.max(0.4, n.d / 2 - 1.0), Math.max(0.4, n.d / 2 - 1.0)),
+      ];
+      const medbay = graph.node(graph.byId.get('medbay'));
+      this._medkitPoolMedbay = [];
+      for (let i = 0; i < 8; i++) {
+        const [x, y] = inRoom(medbay);
+        this._medkitPoolMedbay.push({ node: medbay.idx, deck: medbay.deck, x, y });
+      }
+      // scatter: proper rooms only (no corridors/shafts), never the medbay
+      // (covered above) and never the breach — a pack spawned inside the
+      // event fire would only ever be scenery
+      const rooms = [];
+      for (let i = 0; i < graph.n; i++) {
+        const n = graph.node(i);
+        if (n.type !== 'room' || n.id === 'medbay' || i === graph.breachNode) continue;
+        rooms.push(n);
+      }
+      mrng.shuffle(rooms);
+      this._medkitPoolScatter = [];
+      for (let i = 0; i < Math.min(8, rooms.length); i++) {
+        const [x, y] = inRoom(rooms[i]);
+        this._medkitPoolScatter.push({ node: rooms[i].idx, deck: rooms[i].deck, x, y });
+      }
+    }
+    this.medkits = [];
+    this._medkitPlayers = 0;
+
     this.hive = new Hive(this);
     assignFirstSweep(this);
     this._refreshOccupancy();
@@ -228,10 +267,52 @@ export class Sim {
     a.isPlayer = true;
     a.hasRadio = true;
     this.spawn(a);
+    this._issueMedkits();
     this.log('radio', opts.odst
       ? 'an ODST hits the deck, MA5 hot (you)'
       : 'a lone survivor is moving through the ship (you)');
     return a;
+  }
+
+  // one boarder's med pack allotment, drawn from the seed-stable pools. Ids
+  // are the SLOT index (100+ medbay, 200+ scatter), not the issue order, so
+  // co-op clients agree on which kit is which no matter who attached first.
+  _issueMedkits() {
+    const P = this.P.medkits;
+    const idx = this._medkitPlayers++;
+    for (let i = 0; i < P.perPlayerMedbay; i++) {
+      const slot = idx * P.perPlayerMedbay + i;
+      const spot = this._medkitPoolMedbay[slot];
+      if (spot) this.medkits.push({ id: 100 + slot, ...spot, used: false });
+    }
+    for (let i = 0; i < P.perPlayerScatter; i++) {
+      const slot = idx * P.perPlayerScatter + i;
+      const spot = this._medkitPoolScatter[slot];
+      if (spot) this.medkits.push({ id: 200 + slot, ...spot, used: false });
+    }
+  }
+
+  // the unused kit within arm's reach of this agent, or null
+  medkitNear(a) {
+    const R = this.P.medkits.useRadiusM;
+    for (const k of this.medkits) {
+      if (k.used || k.deck !== a.deck) continue;
+      if (Math.hypot(k.x - a.x, k.y - a.y) <= R) return k;
+    }
+    return null;
+  }
+
+  // E at a med pack (user: "you cant pick them up and carry, just a button to
+  // use on the spot, restores to full health regardless of how low"). Runs on
+  // the sim authority; peers reach it through gameSync's medkit event.
+  playerUseMedkit(a) {
+    if (!a || a.dead || a.hp <= 0 || a.hp >= a.maxHp) return false;
+    const k = this.medkitNear(a);
+    if (!k) return false;
+    k.used = true;
+    a.hp = a.maxHp;
+    this.log('combat', 'you tear open a med kit — vitals back to green (you)', k.node, k.x, k.y);
+    return true;
   }
 
   // the ODST's squad (game rule): marines who form on the player and follow
