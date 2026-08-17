@@ -1969,7 +1969,7 @@ export class Agents3D {
         // hold it where it fell — a convulsion must not migrate
         sys.tether(id, rag.originX, rag.originZ, 0.4,
           this.world.groundHeightAt(deck, wx, wz), 0.22);
-        if (tn >= ti.last + 230 + (id % 5) * 25) {
+        if (tn >= ti.last + 185 + (id % 5) * 25) {
           ti.last = tn;
           // ROLLING IN AGONY, NOT CARTWHEELING (user). reimpulse is ADDITIVE,
           // so the old rising `up` compounded into flight and the old linear
@@ -1977,7 +1977,7 @@ export class Agents3D {
           // energy on the roll and the limbs and none on translation; the ramp
           // still builds toward the moment it rises.
           const ramp = Math.min(1, (tn - ti.t0) / 2800);
-          sys.writhe(id, 0.35 + 0.65 * ramp);
+          sys.writhe(id, 0.45 + 0.55 * ramp);
         }
       }
     }

@@ -2837,6 +2837,9 @@ let chitterAt = 0, gurgleAt = 0;
 // and the sweep re-reads it ~15x a second. Ids are never reused within a run,
 // so these only grow by one per body and need no eviction.
 const _morphed = new Set(), _gibbed = new Set();
+let aggroGlobalAt = 0;
+const _aggroAt = new Map();     // combat form id -> when its lock-on last voiced
+const _carrierPos = new Map();  // carrier id -> sim position last sweep (movement test)
 let _gunVoiced = null; // per-room gunfire stamp already voiced (edge trigger)
 function soundSweep(now) {
   const g = sim.graph;
@@ -2896,7 +2899,33 @@ function soundSweep(now) {
     // retrigger every pass.
     if (a.transformingUntil !== undefined && d < 30 && !_morphed.has(a.id)) {
       const mid = a.transformingUntil - sim.P.combat.thrashSec * 0.5;
-      if (sim.t >= mid) { _morphed.add(a.id); audio.play('morph', { x: wx, z: wz }, 0.95); }
+      if (sim.t >= mid) { _morphed.add(a.id); audio.play('reanim', { x: wx, z: wz }, 0.95); }
+    }
+    // THE LOCK-ON (user: "use more frequently for combat forms who lock on
+    // and start moving to attack"): voiced on the sprint. The sim raises
+    // `charging` the moment a form starts its run at prey and drops it at
+    // melee range, so it flickers in a scuffle — a per-form recool keeps one
+    // form from re-voicing its own brawl, and a short global gap keeps a
+    // pack's simultaneous lock-on from stacking into a single wall of sound
+    // (staggered snarls read as MORE of them, not louder). A chase longer
+    // than the recool re-voices — it is still coming.
+    if (a.faction === 4 && a.charging && !a.downed && d < 30) {
+      const last = _aggroAt.get(a.id) ?? -1e9;
+      if (now - last > 9000 && now - aggroGlobalAt > 650) {
+        _aggroAt.set(a.id, now); aggroGlobalAt = now;
+        audio.play('aggro', { x: wx, z: wz }, 0.9);
+      }
+    }
+    // CARRIER MOVEMENT (user): the bulk is audible when it WALKS. Position
+    // delta between sweeps is the whole movement test — the sim's move/task
+    // fields churn too much shape to lean on. Keyed per carrier so each body
+    // squelches on its own clock instead of the pack sharing one throttle.
+    if (a.faction === 5) {
+      const pv = _carrierPos.get(a.id);
+      _carrierPos.set(a.id, { x: a.x, y: a.y });
+      if (pv && d < 22 && Math.hypot(a.x - pv.x, a.y - pv.y) > 0.02) {
+        audio.play('carrier', { x: wx, z: wz }, 0.85, `car${a.id}`, 2400);
+      }
     }
     // a combat form coming apart. hurtFloodForm never sets `dead` on one — it
     // leaves hp 0 / downed true — so the death to voice is the DOWNED edge.
@@ -3023,6 +3052,48 @@ function updateBarks(now) {
   if (!src) { barkState.unspent.push(key); return; }              // out of earshot / not loaded
   barkState.lastAt = now;
   barkState.active = { src, id: pick.m.id, endsAt: now + (buf ? buf.duration * 1000 : 3000) };
+}
+
+// --- THE JUMP SCARE ---------------------------------------------------------
+// (user: "a fun jump scare one only used very rarely and sparingly,
+// specifically when you the player are in a room with flood pouring in and
+// are outnumbered with any marines 2 - 1, and even then not always" — "and at
+// most once a game".)
+//
+// Eligibility is EDGE-TRIGGERED: the moment the player's room tips into
+// "pouring in + outnumbered 2:1", ONE die is rolled. Fail, and that assault
+// stays silent for good — the condition must fully clear and rebuild before
+// another roll. Pass, and the sting fires and the once-per-run latch closes
+// the book. "Pouring in" means the live flood headcount in the room grew by
+// 2+ inside the last six seconds — a pack you walked in on is an ambush of
+// your own making, not an inrush, and doesn't qualify.
+const scareState = { spent: false, eligible: false, checkAt: 0, hist: [] };
+function updateScare(now) {
+  if (scareState.spent || now < scareState.checkAt) return;
+  scareState.checkAt = now + 900;
+  const pa = player.agent;
+  if (pa.dead || pa.hp <= 0) return;
+  const room = pa.pnode ?? pa.node;
+  let flood = 0, humans = 1; // you count
+  for (const a of sim.agents) {
+    if (a.dead || a.hp <= 0 || (a.pnode ?? a.node) !== room) continue;
+    if (a.move?.hidden) continue; // in the ducts is not in the room
+    if (a.faction === 3 || a.faction === 4 || a.faction === 5) flood++;
+    else if (a.faction === 2 && a.id !== pa.id) humans++; // "with any marines"
+  }
+  // headcount history for THIS room only — changing rooms restarts the clock,
+  // so sprinting INTO a hot room can't read as the room filling up around you
+  const h = scareState.hist;
+  if (h.length && h[h.length - 1].room !== room) h.length = 0;
+  h.push({ t: now, room, flood });
+  while (h.length && now - h[0].t > 6000) h.shift();
+  const pouring = h.length >= 2 && flood - h[0].flood >= 2;
+  const eligible = pouring && flood >= humans * 2;
+  if (eligible && !scareState.eligible && Math.random() < 0.4) {
+    scareState.spent = true;
+    audio.play('scare', null, 1.0); // in your head, not in the room — a sting
+  }
+  scareState.eligible = eligible;
 }
 
 // --- main loop ---
@@ -3305,11 +3376,11 @@ function frame(now) {
     // spill apex out past the muzzle — see the note where it is built
     torchSpill.position.set(tp.x + tdir.x * 0.75, tp.y - 0.1 + tdir.y * 0.75, tp.z + tdir.z * 0.75);
     torchTarget.position.set(tp.x + tdir.x * 10, tp.y + tdir.y * 10, tp.z + tdir.z * 10);
-    // In darkness the close, off-axis splash catches the visor while the gun
-    // crosses the eye line. It is deliberately tied to the beam motion and
-    // darkness: a lit-room reload never produces a generic white screen flash.
-    const glare = (inDark ? 0.68 : inFog ? 0.24 : 0) * reloadFlashJank * reloadFlashJank;
-    setStyle('reloadGlare', 'opacity', glare.toFixed(3));
+    // NO GLARE OVERLAY (user: "get rid of the glare effect on the screen when
+    // you reload entirely, it should just be mostly darkness"). The horror of
+    // a dark-room reload is carried by the beam swing alone — the rail-mounted
+    // lamp genuinely faces away from where you were looking, and the room goes
+    // black on its own. The #reloadGlare element is gone from index.html too.
   }
   // fog wall: global exponential-ish fog closes in inside a spore room
   const fogTarget = inFog ? sim.P.darkness.fogViewM + 3 : inDark ? 34 : 60;
@@ -3322,6 +3393,7 @@ function frame(now) {
   world.setActiveVolume(povDeck, povX);
   world.showRoomSign(povDeck, povX, povZ);
   updateBarks(now);
+  updateScare(now);
   lightPool.frame(); // all dynamic sources re-declare below
   syncBurnFires();
   fire.update(dtReal, povX, povZ, elevOf(povDeck));

@@ -317,22 +317,33 @@ export class RagdollSystem {
     const k = Math.max(0, Math.min(1, intensity));
     const rag = this._byId.get(id);
     if (!rag) return false;
+    // SHORT-DISTANCE SHUDDER (user: "slightly more short distance limb
+    // thrashing and convulsing. We over corrected the other way too much").
+    // The zero-translation profile read as rolling in molasses. Real travel is
+    // back — but the launch jitter hashes on the ID, so a repeated additive
+    // kick with jitter shoves the SAME way every beat and the body slides.
+    // Instead each beat pushes along a direction that walks the golden angle,
+    // so successive shoves point everywhere and net to ~zero: a body jerking
+    // an arm's width side to side, with the tether as the hard fence.
+    const beat = rag.wbeat = (rag.wbeat ?? 0) + 1;
+    const ang = id * 2.399 + beat * 2.618;
     this.reimpulse(id, {
-      // a direction for the roll axis to be perpendicular to; no travel along it
-      dirX: Math.cos(id * 2.399 + k * 6.283), dirZ: Math.sin(id * 2.399 + k * 6.283),
-      speed: 0,          // no push across the deck
-      up: 0,             // no lift: the deck keeps it
+      dirX: Math.cos(ang), dirZ: Math.sin(ang),
+      speed: 0.5 + 0.6 * k,  // a jerk, not a slide — decays before the next beat
+      up: 0,                 // no lift: the deck keeps it
       jitter: 0, jitterUp: 0,
-      spin: 1.1 + 1.6 * k,   // a roll, not a cartwheel
-      kick: 9 + 9 * k,       // the limbs carry the agony
+      spin: 1.3 + 1.8 * k,   // a roll, not a cartwheel
+      kick: 12 + 12 * k,     // the limbs carry the agony
     });
     // A CONVULSION REPEATS, SO IT MUST NOT COMPOUND. reimpulse is additive by
     // design (that is what makes a grenade re-fling feel like one), but a body
     // kicked every quarter second would otherwise ratchet its roll into a
     // cartwheel and — via the floor depenetration lifting a spinning rig — climb
     // off the deck. Cap the roll and never allow upward velocity: gravity, not
-    // the convulsion, decides the vertical.
-    clampVec(rag.omega, 1.8 + 2.0 * k);
+    // the convulsion, decides the vertical. The linear speed is capped too, so
+    // a beat landing on a still-moving body cannot stack into a launch.
+    clampVec(rag.omega, 2.0 + 2.2 * k);
+    clampVec(rag.vel, 1.4);
     if (rag.vel[1] > 0) rag.vel[1] = 0;
     return true;
   }

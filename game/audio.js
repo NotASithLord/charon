@@ -22,11 +22,26 @@ const SAMPLES = {
   // THE BODY BECOMING SOMETHING ELSE (user): played once per conversion, at
   // the MIDDLE of the convulsion rather than its start — the thrash is already
   // running by then, so the sound lands on the worst of it instead of
-  // announcing it. Four takes, picked at random (see play()'s _alts).
-  morph: ['morph1.wav', 'morph2.wav', 'morph3.wav', 'morph4.wav'],
+  // announcing it. Five takes, picked at random (see play()'s _alts).
+  // (These replaced the first morph set — "use these for human reanimation
+  // actually" — same cue, better recordings.)
+  reanim: ['reanim1.wav', 'reanim2.wav', 'reanim3.wav', 'reanim4.wav', 'reanim5.wav'],
   // a combat form coming apart. Five takes so a firefight against a pack does
   // not machine-gun the same wet crack.
   gib: ['gib1.wav', 'gib2.wav', 'gib3.wav', 'gib4.wav', 'gib5.wav'],
+  // THE LOCK-ON (user: "use more frequently for combat forms who lock on and
+  // start moving to attack"): a combat form voices the moment it starts its
+  // sprint at prey. Five takes; a frequent cue, throttled in the sweep, not here.
+  aggro: ['aggro1.wav', 'aggro2.wav', 'aggro3.wav', 'aggro4.wav', 'aggro5.wav'],
+  // THE JUMP SCARE (user): one take, "only used very rarely and sparingly" —
+  // when the player's own room has flood pouring in and the bodies in it are
+  // outnumbered 2:1 — "and even then not always", and AT MOST ONCE A GAME.
+  // The once-per-run latch and the dice both live in main.js's scare director.
+  scare: ['scare.wav'],
+  // CARRIER MOVEMENT (user): the bloated form on the move — wet, heavy bulk.
+  // Five takes, voiced per carrier while it is actually walking, alongside the
+  // stationary gurgle.
+  carrier: ['carrier1.wav', 'carrier2.wav', 'carrier3.wav', 'carrier4.wav', 'carrier5.wav'],
 };
 // KILLED OUTRIGHT by the audit, with no real sample to stand in yet. Dropping
 // the buffer is the whole fix — play() no-ops on an unknown name — so every

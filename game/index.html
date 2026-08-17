@@ -182,13 +182,6 @@
   #hitmarker::before, #hitmarker::after {
     content: ""; position: absolute; background: #ff5348;
   }
-  #reloadGlare {
-    position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0;
-    background:
-      radial-gradient(circle at 58% 42%, rgba(235,246,255,0.95) 0 4%, rgba(174,211,242,0.46) 15%, transparent 48%),
-      linear-gradient(115deg, transparent 20%, rgba(196,225,250,0.22) 48%, transparent 72%);
-    mix-blend-mode: screen;
-  }
   #hitmarker::before { left: 10px; top: 0; width: 2px; height: 22px; }
   #hitmarker::after { left: 0; top: 10px; width: 22px; height: 2px; }
   #dmgdir {
@@ -378,7 +371,6 @@ npm run build:dwapp</pre></article>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>
-  <div id="reloadGlare" aria-hidden="true"></div>
   <div id="dmgdir"></div>
   <canvas id="tracker" width="150" height="150"></canvas>
   <div class="hud" id="networkHud" hidden><span id="networkState">P2P · 1 ONLINE</span><button id="gameVoice" type="button">MIC LIVE</button></div>
