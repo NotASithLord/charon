@@ -1606,6 +1606,15 @@ export class Sim {
               if (d < pd) { pd = d; pn2 = n; }
             }
           }
+          // nothing sensed but rounds are landing: the SHOOTER's position is
+          // known the way a muzzle flash is known — even from a corridor
+          // segment outside this room's adjacency (the flush spine chain
+          // reads as one volume to the player; see floodExec's twin note).
+          // Same-deck only: the physical charge is a run, not a séance.
+          if (pn2 < 0 && shotAt) {
+            const src = this.byId.get(a.lastHurtBy);
+            if (src && !src.dead && src.hp > 0 && src.deck === a.deck) pn2 = src.pnode ?? src.node;
+          }
           // reach it through an unlocked doorway. NOT through the vents any
           // more (user rule: the in-wall ducting is infection-only) — a
           // sensed body behind a locked hatch stays out of a combat form's

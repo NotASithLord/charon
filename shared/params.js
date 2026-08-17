@@ -286,9 +286,12 @@ export const PARAMS = {
     // wildly (lore) — suppressive noise more than marksmanship
     hostGun: { rof: 2, dmg: 5, accNear: 0.35, accFar: 0.15 },
     carrierHp: 40,
-    infectionGrabSec: 6,       // armed crew/marines: a LIVE host turns slightly
-                               // FASTER than a corpse (user rule) — the flesh cooperates
-    civilianGrabSec: 7,        // burrowing in takes real seconds now (user note)
+    // THE LATCH KILLS IN 3 (user: "when an infection form latches onto an
+    // alive human, it kills them within 3 seconds and immediately starts the
+    // same process") — same clock for everyone: armor decides whether the pod
+    // REACHES you, not how long the spike takes once it is in.
+    infectionGrabSec: 3,       // armed crew/marines
+    civilianGrabSec: 3,        // civilians
     // HALO-3 CONVERSION (user): the turn is three visible phases, not one
     // timer. The pod must be RIGHT ON TOP of the body (seatRangeM) before
     // anything starts; then it BURROWS in — pod visible, digging, still

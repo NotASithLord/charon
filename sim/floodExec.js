@@ -218,14 +218,32 @@ export function updateFloodTick(sim, dt) {
           || (a.task.kind === TASK.GUARD && a.task.muster !== undefined)))
         || (a.task.kind === TASK.ATTACK && a.task.node === a.node));
       if (!held && preyHere) hive.assign(a, { kind: TASK.ATTACK, node: pn });
+      else if (!held && (!a.task || (a.task.kind === TASK.GUARD && a.task.muster === undefined && !a.task.seed))
+        && sim.floodSenses(pn).some((n) => n !== pn && sim.occupants(n).some((h) => h.hp > 0 && !h.dead &&
+          (h.faction === FACTION.CIVILIAN || h.faction === FACTION.ARMED || h.faction === FACTION.MARINE)))) {
+        // SEEN THROUGH THE OPEN DOOR (user report: forms in a room with the
+        // door open ignore a player standing plainly in the corridor). An
+        // IDLE form or a loitering garrison that can sense prey next door
+        // goes onto the attack posture — ATTACK on its OWN room, so the
+        // press logic below owns the actual push: it holds at the doorway
+        // until the pack outnumbers the defenders ~2:1, exactly like an
+        // assault that arrived to an empty objective. Errand-runners (MOVE/
+        // SCOUT on hive business) and staged ambushes stay on script.
+        hive.assign(a, { kind: TASK.ATTACK, node: pn });
+      }
       else if (!held && shotAt) {
-        // shot from somewhere it can sense (through a doorway, down a ladder
-        // well, across the stairwell) — go and take the shooter. floodSenses
-        // is the precomputed adjacency, so this costs one lookup on a form
-        // that is actively being hit, not a scan.
+        // shot from ANYWHERE — go and take the shooter. This used to gate on
+        // floodSenses, but the main corridor is a chain of flush segments
+        // that LOOK like one continuous volume: a player two segments down
+        // it, firing through an open door, was outside the room's adjacency
+        // and the form soaked hits without ever looking up (user report:
+        // "they dont see you or respond to you even being shot at, until
+        // you cross the threshold"). A landed round IS line of sight — the
+        // muzzle flash tells the form exactly where you are, adjacency be
+        // damned. safeAssaultPath still owns whether the route is sane.
         const src = sim.byId.get(a.lastHurtBy);
         const sn = src && !src.dead && src.hp > 0 ? (src.pnode ?? src.node) : -1;
-        if (sn >= 0 && sn !== pn && sim.floodSenses(pn).includes(sn)) {
+        if (sn >= 0 && sn !== pn) {
           hive.assign(a, { kind: TASK.ATTACK, node: sn });
         }
       }
@@ -602,6 +620,13 @@ function convertHuman(sim, form, target) {
   if (target.faction === FACTION.MARINE) sim.hive.noteMarineKill();
   const cf = spawnCombatForm(sim, target.node, target);
   cf.hostArmed = target.faction === FACTION.ARMED || target.faction === FACTION.MARINE;
+  // "IMMEDIATELY STARTS THE SAME PROCESS" (user): a live host does not skip
+  // the convulsion — the kill and the corpse-take are one continuous horror.
+  // Latch 3 s, dead, and the body drops straight into the same rooted thrash
+  // the burrow pipeline uses (soaks fire at full HP, throws nothing) before
+  // it stands. Same flag, so the renderer's ragdoll writhe and the reanim
+  // sound cue pick it up with zero extra plumbing.
+  cf.transformingUntil = sim.t + sim.P.combat.thrashSec;
   if (target.isPlayer) {
     // the player lives on inside the thing that took them: spectate-only POV
     // (game rule), and a player form NEVER roots into a carrier
@@ -611,7 +636,7 @@ function convertHuman(sim, form, target) {
   sim.removeAgent(form); // 1 infection form spent on a living host (§6.6)
   sim.stats.conversions++; sim.stats.conversionsRound++;
   sim.stats.humansConverted++;
-  sim.log('convert', `${factionName(target.faction)} taken in ${sim.graph.node(target.node).name} — a new combat form stands up`, target.node, target.x, target.y);
+  sim.log('convert', `${factionName(target.faction)} taken in ${sim.graph.node(target.node).name} — the body begins to convulse`, target.node, target.x, target.y);
 }
 
 function factionName(f) {
