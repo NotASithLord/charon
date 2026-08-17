@@ -2355,7 +2355,10 @@ function traceShot(offAng = 0, offRad = 0, maxDist = 100, dmg = MA5.damage) {
   let best = null, bestT = Math.min(maxDist, wallT);
   for (const a of shotCandidates()) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
-    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
+    // + hoverY: a leaping body's hit sphere rides the arc WITH the body (user
+    // report: "their hitbox doesnt seem to track them through the air" — the
+    // renderer drew it at elev + hoverY while the bullet swung at the deck)
+    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9) + (a.hoverY || 0);
     _hit.set(wx, cy, wz).sub(origin);
     const t = _hit.dot(_dir);
     if (t < 0.05 || t > bestT) continue;
@@ -2426,7 +2429,9 @@ function meleeStrike() {
   let best = null, bestD = Infinity;
   for (const a of shotCandidates()) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
-    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
+    // + hoverY, same as the bullet: a pouncing pod mid-arc is exactly the
+    // thing you butt-stroke out of the air
+    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9) + (a.hoverY || 0);
     const d = meleeArcDistance(origin.x, origin.z, feetY, fx, fz,
       wx, cy, wz, bodyRadius(a), MA5.meleeRange);
     if (d < 0 || d >= bestD) continue;
@@ -2505,7 +2510,7 @@ function flameTick(dt) {
   let anyHit = false;
   for (const a of shotCandidates()) {
     const [wx, wz] = world.simToWorld(a.x, a.y, a.deck);
-    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9);
+    const cy = elevOf(a.deck) + (a.faction === 3 ? 0.35 : a.downed ? 0.35 : 0.9) + (a.hoverY || 0);
     _fto.set(wx, cy, wz).sub(origin);
     const d = _fto.length();
     if (d < 0.2 || d > reach) continue;

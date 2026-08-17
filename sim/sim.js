@@ -1693,7 +1693,9 @@ export class Sim {
     //               him in an arc, locking the arc into the place they were
     //               standing"). Short, low and fast; deliberately NOT gated on
     //               headroom — see combat.pounce.clearM for why.
-    const LEAP_MIN = 5, PEAK_FRAC = 0.25;
+    // PEAK_FRAC was 0.25 — the user asked the open-area combat-form arc down
+    // "by like 20%": a flatter, faster-reading lunge, same committed shape
+    const LEAP_MIN = 5, PEAK_FRAC = 0.20;
     const C = P.combat;
     const clearH = clearHeightOf(room);
     const canLeap = a.faction === FACTION.COMBAT && a.charging && clearH > CLEAR_H + 0.5;
@@ -1705,7 +1707,11 @@ export class Sim {
       && !target.dead && target.hp > 0 && !target.downed && target.faction !== FACTION.CORPSE;
     const gap = Math.hypot(target.x - a.x, target.y - a.y);
     if (!a.leaping && canLeap && gap > LEAP_MIN) {
-      this._commitLeap(a, target, room, mps, Math.min(gap * PEAK_FRAC, clearH - 2.2), 0.35);
+      // ceiling cap scaled by the same 0.8 as PEAK_FRAC — in a tall hold
+      // (hangar) the CAP is what governs, so without this the "-20%" did
+      // nothing exactly where the user was looking (measured: max apex
+      // 5.70 m before and after the PEAK_FRAC change alone; 4.56 m now)
+      this._commitLeap(a, target, room, mps, Math.min(gap * PEAK_FRAC, (clearH - 2.2) * 0.8), 0.35);
     } else if (!a.leaping && canPounce && gap > C.grabRangeM && gap <= C.pounce.rangeM) {
       // apex CLAMPED under the ceiling instead of the hop being gated on it
       this._commitLeap(a, target, room, mps, Math.min(C.pounce.peakM, clearH - C.pounce.clearM), C.pounce.landM);
