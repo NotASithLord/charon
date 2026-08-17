@@ -196,6 +196,10 @@ export class Sim {
     return out;
   }
   floodStrengthAt(node) { return this._floodAt[node]; }
+  // live bodies standing in this room, counted by PHYSICAL position. Already
+  // maintained for the influence pass; exposed because the hive needs it to
+  // refuse to root a carrier in an occupied room.
+  humansAt(node) { return this._humanAt[node]; }
   panickedAt(node) { return this._panicked[node] === 1; }
   heardGunfire(node) {
     return this.hear3[node].some((n) => this.tickCount - this.gunfireTick[n] < 30);

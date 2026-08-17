@@ -1652,6 +1652,23 @@ export class Hive {
   }
 
   assign(form, task) {
+    // CLEAR THE ROOM BEFORE YOU ROOT (user: "before they are carriers, the
+    // combat forms should by default kill everyone in the room at the very
+    // least to prevent them from running, before they turn into carriers").
+    //
+    // Every transform site gated on localThreat, which is a BELIEF about guns:
+    // it counts marines heavily and unarmed crew at 0.4x of a decayed estimate,
+    // so a room holding nothing but civilians scored under the 0.5/0.6 bar and
+    // a form rooted with people still standing in it. Measured over 25 min:
+    // 4-8% of transforms started in an occupied room (worst: Medbay, 4 alive).
+    //
+    // Gating HERE rather than at the six call sites because assign() is the
+    // one funnel they all pass through, including the desperation path — a
+    // last-ditch form rooting beside a live human is the worst case of all.
+    // The form is turned onto the room instead: kill first, root after.
+    if (task.kind === TASK.TRANSFORM && this.sim.humansAt(form.pnode ?? form.node) > 0) {
+      task = { kind: TASK.ATTACK, node: form.pnode ?? form.node };
+    }
     // COMMITTED BURROWER (user rule: once a form starts burrowing a body it
     // CANNOT be pulled off). A form seated and burrowing a corpse/downed form
     // (or a combat form rooting into a carrier) ignores every new order until
