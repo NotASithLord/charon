@@ -6,7 +6,7 @@
 import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import * as TSL from '../engine/vendor/three.tsl.module.js';
 import { FACTION, FLAG, CLIP } from '../shared/agentBuffer.js';
-import { elevOf } from './world.js';
+import { elevOf, clearHeightOf } from './world.js';
 import { carryGeometry, flamerGeometry, FLAMER_MUZZLE } from './rifle-model.js';
 import { characterParts } from './characters.js';
 import { buildCarrier, CarrierAnimator, SACK_BLOAT_M } from './carrier-model.js';
@@ -1082,7 +1082,17 @@ export class Agents3D {
             // only a real OPENING gets the climb-out rise — a stairwell-kiosk
             // pad arrival steps out at floor level (user: marines sprang out
             // of solid deck at the stair pads)
-            if (m.kind !== 'pad') this._emergeAt.set(id, performance.now());
+            //
+            // WHICH WAY DID IT COME? (user: flood arriving from the deck above
+            // "still has them coming out from the bottom of the hole".) The
+            // crawl-out was hard-coded to rise out of the floor, so a body
+            // descending a ladder played the climbing-UP animation. elevOf is
+            // (5 - deck) * DECK_H, so a LOWER deck number is HIGHER in the
+            // ship: arriving on deck D from deck F < D means it came down
+            // through the ceiling and has to descend, not surface.
+            if (m.kind !== 'pad') {
+              this._emergeAt.set(id, { t: performance.now(), down: rp ? rp.deck < deck : false });
+            }
           }
         }
         rp = { x: sx, y: sy, deck, hoverY: buf.hoverY[i] || 0 };
@@ -1324,11 +1334,16 @@ export class Agents3D {
       {
         const em = this._emergeAt.get(id);
         if (em !== undefined) {
-          const p = (performance.now() - em) / 700;
+          // a descent covers more ground than a climb-out and should not look
+          // like a plummet, so it gets its own span and a longer window
+          const span = em.down ? Math.min(2.6, clearHeightOf(sim.graph.node(buf.nodeId[i])) - 0.4) : 1.35;
+          const p = (performance.now() - em.t) / (em.down ? 900 : 700);
           if (p >= 1) this._emergeAt.delete(id);
           else {
             const es = p * p * (3 - 2 * p);
-            elev -= (1 - es) * 1.35;
+            // down: start at the ceiling opening and come through it.
+            // up: start sunk under the deck, where the floor slab hides it.
+            elev += (1 - es) * span * (em.down ? 1 : -1);
           }
         }
       }
