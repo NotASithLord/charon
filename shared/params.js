@@ -35,7 +35,7 @@ export const PARAMS = {
   bodies: {
     eventCorpses: 69,         // portal-event dead scattered evenly through the ship
                               // (user note: +15% more bodies, evenly spread)
-    breachCorpses: 10,        // fresh dead at the breach (±50% roll on placement)
+    breachMin: 5, breachMax: 7, // fresh dead at the breach, uniform per run (user tuning)
     // the vast majority of the dead were NOT carrying weapons (user rule):
     // a form raised from them fights with claws alone — sprint, leap, swipe
     armedFraction: 0.08,

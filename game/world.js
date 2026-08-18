@@ -1569,7 +1569,9 @@ export class World {
       const rec = {
         edge: e, deck: d.deck, x: dx, z: dz, phi, elev,
         bad, slots: bad ? [badSlot++, badSlot++] : [okSlot++, okSlot++],
-        lampSlots, open01: 0,
+        // a sealed door BOOTS ajar (no boot-time hiss chorus from 16 sealed
+        // doors all grinding open on frame one)
+        lampSlots, open01: e.locked ? (DOORS.ajar01 ?? 0.22) : 0,
         // deterministic buckle for the jammed doors (user: broken doors
         // being just red is unrealistic) — a slight ajar gap and tilt
         buckle: bad ? {
@@ -1611,10 +1613,12 @@ export class World {
 
   _setLamp(d) {
     const c = (this._dc ??= new THREE.Color());
-    // muted status colors (user: the bright red sealed doors were too
-    // obvious — the buckle/scorch and a dim ember lamp carry it now)
+    // status colors, second pass (user: even the dim red ember "takes away
+    // from the realism and is unnecessary"): a sealed door's track is DEAD —
+    // its lamp is simply off, and the tell is physical: the panels sit ajar
+    // (updateDoors) with a gap you can see and shoot through.
     if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber gutter
-    else if (d.edge.locked) c.setHex(0x7d1d12);       // sealed: dim ember
+    else if (d.edge.locked) c.setHex(0x000000);       // sealed: lamp dead
     else c.setHex(0x38d06a);                          // powered track: green
     for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
   }
@@ -1820,8 +1824,16 @@ export class World {
         for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
         this.doorLamps.instanceColor.needsUpdate = true;
       }
+      // SEALED DOORS SIT AJAR (user): the broken track leaves a hand-width
+      // slot — you can see the far room through it and shoot through it (the
+      // shot raycast tests the panel instances where they actually are, so
+      // the gap is genuinely open to fire both ways), but the slot is far
+      // narrower than a body: sim pathing still refuses the edge, the player
+      // capsule cannot fit, and isWalkable is unchanged.
       let want = 0;
-      if (!d.edge.locked) {
+      if (d.edge.locked) {
+        want = DOORS.ajar01 ?? 0.22;
+      } else {
         const list = byDeck[d.deck] ?? [];
         for (let i = 0; i < list.length; i++) {
           const m = list[i];

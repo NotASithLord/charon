@@ -37,7 +37,10 @@ function swarmOverrides() {
     },
     bodies: {
       eventCorpses: num('inBodies', 0, 400, 150),
-      breachCorpses: num('inBreachBodies', 0, 40, 10),
+      // the harness input pins the breach larder EXACTLY (min = max = input),
+      // overriding the game's uniform breachMin..breachMax roll
+      breachMin: num('inBreachBodies', 0, 40, 6),
+      breachMax: num('inBreachBodies', 0, 40, 6),
     },
   };
 }

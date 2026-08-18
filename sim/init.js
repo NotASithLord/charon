@@ -471,9 +471,11 @@ export function initRun(seed, rng, P) {
     scatterInRoom(a, graph.node(breach), rng);
     flood.push(a);
   }
-  // the crash site's fresh dead are random too (user note): ~50%-160% of the
-  // configured baseline, so the opening larder varies run to run
-  const freshDead = Math.max(2, Math.round(P.bodies.breachCorpses * rng.range(0.5, 1.6)));
+  // the crash site's fresh dead: uniform 5-7 (user tuning, A/B-tested against
+  // the old 5-16 roll: a smaller larder slows the opening snowball and runs
+  // longer, grindier games — median +88s over 10 seeds — while a BIG larder
+  // masses the flood in one sweepable room, which is a containment gift).
+  const freshDead = P.bodies.breachMin + Math.floor(rng.range(0, P.bodies.breachMax - P.bodies.breachMin + 1));
   for (let i = 0; i < freshDead; i++) {
     const c = makeAgent(FACTION.CORPSE, breach, graph);
     c.state = STATE.DEAD; c.hp = 0; c.damage = 0;
