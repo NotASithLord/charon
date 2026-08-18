@@ -226,6 +226,89 @@ export class Sim {
   // the flood's life-sense reach (self + every adjacent room, lock or no lock).
   // Targeting/belief code uses this; the crew keep visibleNodes.
   floodSenses(node) { return this.senseCache[node]; }
+
+  // GEOMETRIC LINE OF SIGHT (per-room combat retirement — user: "NPCs should
+  // be operating on line of sight"). A 2D segment walk from room to room:
+  // sight passes only where the segment crosses a doorway's opening span.
+  // Openings are precomputed on the graph (edge.losOpen); the half-width is
+  // decided here — the full doorway when the door is unlocked (it slides for
+  // anyone approaching, and a covered doorway is effectively open), the
+  // sealed door's AJAR SLOT when locked (the render leaves broken doors
+  // resting a hand-width apart, so a perfectly-lined shot passes and a
+  // glancing one hits panel). Deterministic, pure math, render-free.
+  //   DOOR_HALF mirrors game/world.js DOOR_W (1.7) / 2.
+  //   SLOT_HALF mirrors the ajar gap: DOORS.ajar01 (0.22) * panel travel.
+  losClear(x1, y1, r1, x2, y2, r2) {
+    if (r1 === r2) return true;
+    const g = this.graph;
+    const n1 = g.node(r1), n2 = g.node(r2);
+    if (n1.deck !== n2.deck) {
+      // the grand stairwell is one open two-storey volume — its pair keeps
+      // the sightline it has always had
+      for (const sw of g.stairwells) {
+        if ((r1 === sw.upper && r2 === sw.lower) || (r1 === sw.lower && r2 === sw.upper)) return true;
+      }
+      return false;
+    }
+    const dx = x2 - x1, dy = y2 - y1;
+    let cur = r1, prevT = 1e-9;
+    for (let hop = 0; hop < 8; hop++) {
+      let bestTo = -1, bestT = Infinity;
+      for (const { to, link } of g.adj.std[cur]) {
+        const o = link.losOpen;
+        if (!o) continue;
+        let t, cross;
+        if (o.axis === 'x') {          // wall at x = o.at, opening spans y
+          if (Math.abs(dx) < 1e-9) continue;
+          t = (o.at - x1) / dx;
+          cross = y1 + dy * t;
+        } else {                       // wall at y = o.at, opening spans x
+          if (Math.abs(dy) < 1e-9) continue;
+          t = (o.at - y1) / dy;
+          cross = x1 + dx * t;
+        }
+        if (t <= prevT || t > 1 + 1e-9) continue;
+        const half = link.locked ? 0.15 : 0.85;
+        if (Math.abs(cross - o.c) > half) continue;
+        if (t < bestT) { bestT = t; bestTo = to; }
+      }
+      if (bestTo === -1) return false;
+      if (bestTo === r2) return true;
+      prevT = bestT;
+      cur = bestTo;
+    }
+    return false;
+  }
+
+  // LOS-filtered visible flood threat around a human: the weighted strength
+  // of every active form it can actually SEE, candidates drawn from its own
+  // room plus std-adjacent rooms (lock-agnostic — a sealed door's ajar slot
+  // can still reveal), capped at sight distance. Replaces the old
+  // room-membership sum (visCache) for perception.
+  losFloodThreat(h, rangeM = 26) {
+    const pn = h.pnode ?? h.node;
+    const r2cap = rangeM * rangeM;
+    let sum = 0;
+    const scan = (room, capped) => {
+      for (const o of this._occ[room]) {
+        if (o.hp <= 0 || o.dead) continue;
+        const w = W_FLOOD[o.faction];
+        if (!w || (o.faction !== FACTION.CARRIER && !isActiveFloodForm(o))) continue;
+        if (o.move?.hidden) continue; // inside the structure — invisible
+        if (capped) {
+          const ddx = o.x - h.x, ddy = o.y - h.y;
+          if (ddx * ddx + ddy * ddy > r2cap) continue;
+          if (!this.losClear(h.x, h.y, pn, o.x, o.y, room)) continue;
+        }
+        sum += w;
+      }
+    };
+    // own room: uncapped, no LOS test — a form sharing your compartment is a
+    // felt presence whatever the light (parity with the old room-sum)
+    scan(pn, false);
+    for (const { to } of this.graph.adj.std[pn]) scan(to, true); // losClear rejects cross-deck except the stairwell pair
+    return sum;
+  }
   nodesNear(node, hops) { return hops <= 1 ? this.near1[node] : this.graph.nodesWithin(node, hops, ['std'], (l) => !l.locked); }
 
   occupants(node) { return this._occ[node]; }

@@ -258,6 +258,23 @@ export class ShipGraph {
     };
     for (const l of this.edges) measure(l);
     for (const l of this.shafts) measure(l);
+    // LOS OPENINGS (per-room combat retirement): every same-deck doored edge
+    // records the wall it pierces as a line (axis + coordinate) and the
+    // opening's centre along that wall. sim.losClear() walks a sight segment
+    // room to room through these; the opening half-width is decided at query
+    // time (full doorway when unlocked, the sealed door's ajar slot when not).
+    for (const l of this.edges) {
+      if (!l.door) { l.losOpen = null; continue; }
+      const A = this.nodes[l.a], B = this.nodes[l.b];
+      if (A.deck !== B.deck) { l.losOpen = null; continue; }
+      const xOv = Math.min(A.x + A.w / 2, B.x + B.w / 2) - Math.max(A.x - A.w / 2, B.x - B.w / 2);
+      const yOv = Math.min(A.y + A.d / 2, B.y + B.d / 2) - Math.max(A.y - A.d / 2, B.y - B.d / 2);
+      // rooms overlapping in x are stacked in y: the shared wall is HORIZONTAL
+      // (y = const) and the opening spans x — and vice versa
+      l.losOpen = xOv >= yOv
+        ? { axis: 'y', at: l.door.y, c: l.door.x }
+        : { axis: 'x', at: l.door.x, c: l.door.y };
+    }
     // mean std-edge length: the hive's ETA guesses are hop-based
     this.avgStdLenM = this.edges.reduce((s, l) => s + l.horizM + l.vertM, 0) / this.edges.length;
     this._placeGrates();

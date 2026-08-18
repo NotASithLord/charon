@@ -98,6 +98,7 @@ export function makeAgent(kind, node, graph) {
     transformingUntil: undefined, // combat form born from a corpse: rooted + thrashing until this sim second
     _fleeLogAt: undefined, doorBalks: undefined, doorHold: undefined,
     _workNodes: undefined, inShaftAmbush: undefined,
+    _losSight: 0, _losAdj: false, // combat.js cross-door candidate scratch (LOS engagement)
   };
 }
 

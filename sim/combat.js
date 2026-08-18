@@ -163,8 +163,27 @@ export function resolveCombat(sim, dt) {
     const downedForms = group.filter((a) => a.faction === FACTION.COMBAT && a.downed && !a.dead && a.damage < 95);
     const anyFlood = combatForms.length + infForms.length + carriers.length > 0;
     if (!shooters.length && !anyFlood) continue;
+    // THROUGH-THE-DOORWAY POOLS (per-room combat retirement): what stands in
+    // std-adjacent rooms, for both sides' ranged fire. LOS is tested per
+    // shooter/per form at fire time — these are only candidate lists.
+    const adjFlood = [];
+    const adjHumans = [];
+    if (shooters.length || combatForms.length) {
+      for (const { to } of sim.graph.adj.std[node]) {
+        const sightTo = sightRangeAt(sim, to);
+        for (const o of sim._occ[to]) {
+          if (o.hp <= 0 || o.dead || o.move?.hidden) continue;
+          if ((o.faction === FACTION.COMBAT && !o.downed)
+            || o.faction === FACTION.INFECTION || o.faction === FACTION.CARRIER) {
+            o._losSight = sightTo; adjFlood.push(o);
+          } else if (o.faction === FACTION.MARINE || o.faction === FACTION.ARMED || o.faction === FACTION.CIVILIAN) {
+            adjHumans.push(o);
+          }
+        }
+      }
+    }
 
-    if (shooters.length && anyFlood) {
+    if (shooters.length && (anyFlood || adjFlood.length)) {
       // gunfire only rings when someone actually FIRES — with sight limits
       // and reaction delays, a form sharing a dark room no longer makes the
       // room sound like a range the instant it steps in
@@ -225,6 +244,7 @@ export function resolveCombat(sim, dt) {
       const FF = P.combat.ff;
       const mates = group.filter((a) => a.hp > 0 && !a.dead &&
         (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
+      if (adjHumans.length) mates.push(...adjHumans); // a cross-door lane can have friendlies past the door
       for (const s of shooters) {
         if (s === flamer) continue;
         if (sim.t < (s.nextShotAt ?? 0)) continue;
@@ -236,6 +256,17 @@ export function resolveCombat(sim, dt) {
           const bias = t.faction === FACTION.CARRIER ? 1000 : t.faction === FACTION.INFECTION ? 500 : 0;
           const d = rd + bias;
           if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; bestRange = rd; }
+        }
+        for (const t of adjFlood) {
+          if (t.hp <= 0 || t.dead) continue;
+          const rd = Math.hypot(t.x - s.x, t.y - s.y);
+          if (rd > t._losSight) continue; // the target's room's light gates it
+          const bias = (t.faction === FACTION.CARRIER ? 1000 : t.faction === FACTION.INFECTION ? 500 : 0) + 60;
+          const d = rd + bias; // +60: same-room threats always take priority
+          if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) {
+            if (!sim.losClear(s.x, s.y, s.pnode ?? s.node, t.x, t.y, t.pnode ?? t.node)) continue;
+            bestD = d; best = t; bestRange = rd;
+          }
         }
         if (!best) continue; // sight ranges differ per shooter position — keep checking the rest
         // STAGGERED REACTION (user: every marine opened up the same instant,
@@ -421,12 +452,19 @@ export function resolveCombat(sim, dt) {
     if (combatForms.length) {
       const victims = group.filter((a) => a.hp > 0 && !a.dead &&
         (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED || a.faction === FACTION.CIVILIAN));
+      // ...plus whoever stands in the adjacent rooms: a hosted weapon fires
+      // through the same openings the marines do ("or be shot through it"),
+      // and a swipe at a body in the doorway is range-gated anyway. Marked so
+      // the per-form scan below pays the LOS test only for cross-room prey.
+      for (const h of adjHumans) { h._losAdj = true; victims.push(h); }
+      for (const h of group) if (h._losAdj) h._losAdj = false; // never stale for own-room bodies
       if (victims.length) {
         let fired = false;
         for (const f of [...combatForms].sort((a, b) => a.id - b.id)) {
           let best = null, bestScore = Infinity;
           for (const v of victims) {
             if (v.hp <= 0 || v.dead) continue;
+            if (v._losAdj && !sim.losClear(f.x, f.y, node, v.x, v.y, v.pnode ?? v.node)) continue;
             const d = Math.hypot(v.x - f.x, v.y - f.y);
             // getting shot is a stimulus: whoever hurt this form recently
             // jumps the queue — no more mauling one victim while its

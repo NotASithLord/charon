@@ -42,11 +42,12 @@ export function updateHumansTick(sim, dt) {
 }
 
 function floodThreatVisible(sim, a) {
-  // weighted active flood strength across LOS nodes (§5.1), anchored on the
-  // room the human is PHYSICALLY in (user note: real space logic)
-  let s = 0;
-  for (const n of sim.visibleNodes(a.pnode ?? a.node)) s += sim.floodStrengthAt(n);
-  return s;
+  // LINE OF SIGHT, not room membership (user: the per-room model was a dated
+  // early-dev thing): the threat a human reacts to is the flood it can SEE —
+  // its own compartment plus whatever shows through real openings (open
+  // doorways, the sealed doors' ajar slots, the grand stairwell's open
+  // volume). sim.losClear walks the actual geometry.
+  return sim.losFloodThreat(a);
 }
 
 function hearsTrouble(sim, a) {
@@ -341,7 +342,7 @@ function updateMarineTick(sim, a, dt) {
   // CIC (user note). It fights anything that reaches it but never sweeps,
   // answers calls, or takes orders — a fixed strongpoint.
   if (a.garrison) {
-    a.state = sim.floodStrengthAt(a.pnode ?? a.node) > 0 ? STATE.FIGHT : STATE.IDLE;
+    a.state = (sim.floodStrengthAt(a.pnode ?? a.node) > 0 || sim.losFloodThreat(a) > 0) ? STATE.FIGHT : STATE.IDLE;
     a.path = []; a.move = null;
     if (a.state === STATE.FIGHT && a.hasRadio && sim.tickCount % 60 === 0) sim.emitCall(a);
     return;
@@ -351,7 +352,7 @@ function updateMarineTick(sim, a, dt) {
   // they hold the room — posted at the racks, killing anything that crawls
   // in through the ducts, taking no orders and answering no calls.
   if (a.odst && sim.armoryLocked) {
-    a.state = sim.floodStrengthAt(a.pnode ?? a.node) > 0 ? STATE.FIGHT : STATE.IDLE;
+    a.state = (sim.floodStrengthAt(a.pnode ?? a.node) > 0 || sim.losFloodThreat(a) > 0) ? STATE.FIGHT : STATE.IDLE;
     a.path = []; a.move = null;
     return;
   }
@@ -362,7 +363,7 @@ function updateMarineTick(sim, a, dt) {
   const threat = floodThreatVisible(sim, a);
   maybeThrowFrag(sim, a, dt);
   const pn = a.pnode ?? a.node;
-  if (sim.floodStrengthAt(pn) > 0) {
+  if (sim.floodStrengthAt(pn) > 0 || threat > 0) {
     // stand and fight ON CONTACT, where you physically are — a marine does
     // not keep walking to the middle of the hangar with a form on the deck
     a.state = STATE.FIGHT; a.path = []; a.move = null;
