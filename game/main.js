@@ -3131,12 +3131,28 @@ function updateBarks(now) {
 // the book. "Pouring in" means the live flood headcount in the room grew by
 // 2+ inside the last six seconds — a pack you walked in on is an ambush of
 // your own making, not an inrush, and doesn't qualify.
-const scareState = { spent: false, eligible: false, checkAt: 0, hist: [] };
+// ...and (user, second condition): the sting is a LATE-GAME sound — at least
+// 70% of the ship's marines must already be dead. Early assaults, however
+// dire your own room looks, stay silent: the scream belongs to a ship that
+// has already lost its fighting strength. Initial count captured at boot
+// (all marines exist at t0; none are ever minted later), garrison and ODSTs
+// included — "the marines" means every rifle the ship started with.
+const scareState = {
+  spent: false, eligible: false, checkAt: 0, hist: [],
+  // captured at module eval — the sim exists and no tick has run, so every
+  // marine the ship will ever have is alive right now (none are minted later)
+  marines0: sim.agents.filter((a) => a.faction === 2 && !a.isPlayer && !a.fromPlayer).length,
+};
 function updateScare(now) {
   if (scareState.spent || now < scareState.checkAt) return;
   scareState.checkAt = now + 900;
   const pa = player.agent;
   if (pa.dead || pa.hp <= 0) return;
+  let marinesAlive = 0;
+  for (const a of sim.agents) {
+    if (a.faction === 2 && !a.dead && a.hp > 0 && !a.isPlayer && !a.fromPlayer) marinesAlive++;
+  }
+  if (marinesAlive > scareState.marines0 * 0.3) return; // fewer than 70% dead — not eligible yet
   const room = pa.pnode ?? pa.node;
   let flood = 0, humans = 1; // you count
   for (const a of sim.agents) {
