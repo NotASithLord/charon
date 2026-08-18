@@ -230,8 +230,10 @@ export class MarineMap {
       ctx.fillStyle = down ? '#7a5a2c' : '#38445a';
       ctx.fillText(`DECK ${d} — ${['COMMAND', 'HABITATION', 'OPERATIONS', 'ENGINEERING', 'FLIGHT'][d - 1]}`, 3, band.y0 + this._lw(13));
       if (down) {
+        // no countdown (user: a timer on a lost link makes no sense) — the
+        // uncertainty IS the message; the retry clock still runs underneath
         ctx.fillStyle = '#e09a4a';
-        ctx.fillText(`◆ LINK LOST — ${fmtTime(this.linkFor(d))}`, g.width - this._lw(150), band.y0 + this._lw(13));
+        ctx.fillText('◆ LINK LOST — RETRYING', g.width - this._lw(150), band.y0 + this._lw(13));
       }
     }
     ctx.fillStyle = '#232b38';

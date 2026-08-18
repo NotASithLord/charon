@@ -459,7 +459,7 @@ function updateMarineTick(sim, a, dt) {
         }
         // walking in, look where you're going; on station, cover your arc
         a.heading = d > 0.8 ? Math.atan2(dy, dx) : a.postFace;
-        a.animTime += dt;
+        a.animTime += sim._gaitDt(a, dt, a.followSpeed);
         a.closeFollow = true; // _advanceMovement won't park-drift it off station
       }
     }

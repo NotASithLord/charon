@@ -1238,7 +1238,8 @@ export class Sim {
           const hw = Math.max(0.4, room.w / 2 - 0.4), hd = Math.max(0.4, room.d / 2 - 0.4);
           a.x = Math.max(room.x - hw, Math.min(room.x + hw, a.x));
           a.y = Math.max(room.y - hd, Math.min(room.y + hd, a.y));
-          a.animTime += dt;
+          a.followSpeed = mps; // frantic circles are legged, not a glide
+          a.animTime += this._gaitDt(a, dt, mps);
           // and never stops screaming
           if ((this.tickCount + a.id) % 15 === 0) this.screamTick[a.node] = this.tickCount;
         }
@@ -1263,7 +1264,7 @@ export class Sim {
           // marines/armed in a firefight fan out onto a line facing the room's
           // Flood instead of clumping at the doorway they came in through
           else if (a.state === STATE.FIGHT && (a.faction === FACTION.MARINE || a.faction === FACTION.ARMED)) this._firingDrift(a, dt);
-          else a.animTime += dt;
+          else { a.followSpeed = 0; a.animTime += dt; } // holding still — never stuck mid-stride
           continue;
         }
       }
@@ -1467,7 +1468,8 @@ export class Sim {
           // the room it's currently standing in (user report: hallway clip)
           this._clampToRoom(a, this.graph.node(a.node));
         }
-        a.animTime += dt;
+        const sm = this._speedMult(a);
+        a.animTime += this._gaitDt(a, dt, this.P.movement.baseMps * sm, sm > 1.2);
         if (a.move.t >= 1) {
           if (a.move.link.occupiedBy === a.id) a.move.link.occupiedBy = undefined; // ladder is free
           a.node = a.move.to;
@@ -2225,8 +2227,25 @@ export class Sim {
       a.x += (dx / d) * step;
       a.y += (dy / d) * step;
       a.followSpeed = step / dt; // render picks walk/jog clip from real speed
+      // a body covering real ground FACES where it is going (user: NPCs
+      // sliding sideways/backwards to their slot while looking elsewhere)
+      if (d > 0.3) a.heading = Math.atan2(dy, dx);
     } else a.followSpeed = 0;
-    a.animTime += dt;
+    a.animTime += this._gaitDt(a, dt, a.followSpeed);
+  }
+
+  // GAIT-NORMALIZED TIME (user: bodies floating/skating across the floor):
+  // the render's leg cycle runs at a fixed rate per clip, covering 1.40 m/s
+  // in a walk and 2.11 m/s in a run (agents3d LEG_AMP). A human moving at any
+  // other speed advances its cycle proportionally, so the feet always cover
+  // the ground the body actually travels. Standing bodies breathe in real
+  // time. Humans only: flood rigs read fine at their tuned rates (pods
+  // writhe on a clock, and a charge is deliberately more lunge than stride).
+  _gaitDt(a, dt, v, run = v > 3.2) { // default split matches _clipFor's followSpeed branch
+    if (a.faction !== FACTION.CIVILIAN && a.faction !== FACTION.ARMED && a.faction !== FACTION.MARINE) return dt;
+    if (v <= 0.4) return dt;
+    const matched = run ? 2.11 : 1.40;
+    return dt * Math.min(2.6, Math.max(0.75, v / matched));
   }
 
   // STABLE SLOTS (user note: jerky movement): each body's parking spot is
@@ -2348,7 +2367,7 @@ export class Sim {
   _firingDrift(a, dt) {
     const room = this.graph.node(a.pnode ?? a.node);
     const slot = this._firingSlot(a, room);
-    if (!slot) { a.animTime += dt; return; }
+    if (!slot) { a.followSpeed = 0; a.animTime += dt; return; }
     // same human-speed cap as _parkDrift (user: shooters "flying" to their
     // stance across big rooms) — a combat shuffle, quick but legged
     const dx = slot[0] - a.x, dy = slot[1] - a.y;
@@ -2364,7 +2383,7 @@ export class Sim {
     } else a.followSpeed = 0;
     this._clampToRoom(a, room);
     a.heading = Math.atan2(slot[3], slot[2]); // face the threat
-    a.animTime += dt;
+    a.animTime += this._gaitDt(a, dt, a.followSpeed);
   }
 
   // FIRE IS REAL (user rule): standing in a fire hurts — humans and flood
@@ -2597,12 +2616,14 @@ export class Sim {
     // combat form's branch above already returns RUN while leaping for the
     // same reason; the pod's arc gets the same treatment.
     if (a.faction === FACTION.INFECTION) return a.move || a.leaping ? CLIP.RUN : CLIP.WRITHE;
-    // close-follow escorts move in real space with NO a.move — they were
-    // rendering IDLE while sliding (user: no walking animation). Their real
-    // speed this tick picks the cycle.
-    if (a.closeFollow) return (a.followSpeed ?? 0) > 3.2 ? CLIP.RUN : (a.followSpeed ?? 0) > 0.4 ? CLIP.WALK : CLIP.IDLE;
     if (a.move) return this._speedMult(a) > 1.2 ? CLIP.RUN : CLIP.WALK;
-    return CLIP.IDLE;
+    // EVERY legged slide picks its cycle from real speed (user: humans
+    // floating around with no walking animation). closeFollow escorts,
+    // park/firing drift, and the pinned-host circle all move in real space
+    // with NO a.move — each writes followSpeed, and each zeroes it when it
+    // settles, so a standing body cannot get stuck mid-stride.
+    const fs = a.followSpeed ?? 0;
+    return fs > 3.2 ? CLIP.RUN : fs > 0.4 ? CLIP.WALK : CLIP.IDLE;
   }
 
   getStats() {

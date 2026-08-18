@@ -101,12 +101,13 @@ export const PARAMS = {
   // from that deck at all — no contacts, no marine positions, no room status.
   //
   // The duty cycle is the mean up-dwell over the mean cycle: 75 / (75 + 50) =
-  // 60%. Dwells are LONG on purpose — the brief is explicitly "not temp
-  // flickering", so an outage has to outlast the walk to the next room and be
-  // something you plan around rather than wait out.
+  // Outages are FREQUENT BLIPS (user: less continuous outage, more frequent
+  // shorter ones) — a relay hiccups every half minute or so and comes back
+  // before you can plan around it; the map shows no countdown, so each drop
+  // reads as genuine uncertainty rather than a timer to wait out.
   tacnet: {
-    linkUpMinSec: 45, linkUpMaxSec: 105,    // mean 75
-    linkDownMinSec: 25, linkDownMaxSec: 75, // mean 50
+    linkUpMinSec: 20, linkUpMaxSec: 50,     // mean 35
+    linkDownMinSec: 6, linkDownMaxSec: 18,  // mean 12
   },
   // lockedFraction: per-run graph mutation (visible variety run to run).
   // shiftEverySec: the damaged ship keeps shifting — every ~2 min (jittered)
@@ -422,7 +423,9 @@ export const PARAMS = {
     workMoveChancePerSec: 0.03,// a work trip every ~30s, not constant lapping; halved once the outbreak is known
   },
   speed: { // multipliers on movement.baseMps (relative ratios are user-set)
-    civilian: 1.0, civilianFlee: 1.5, armed: 1.0, marine: 1.0,
+    // a scared human RUNS (user: they fled at a jog) — 4.2 m/s, a real
+    // panicked sprint. The lunge (~6.6) and charge (~6.3) still beat it.
+    civilian: 1.0, civilianFlee: 3.0, armed: 1.0, marine: 1.0,
     // pods SKITTER (user note: they were too slow) — quicker than a walking
     // human even off the lunge, matching how the games read
     infection: 1.35, combatForm: 1.25,
