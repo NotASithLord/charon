@@ -3,16 +3,43 @@ import {
   MAX_PLAYERS,
   PROTOCOL_VERSION,
   createInviteCode,
+  createPublicLobbyId,
   inviteProof,
+  isPublicLobbyId,
   matchRoom,
   normalizeInviteCode,
   privateRoom,
   quickplayRoom,
   rankHosts,
   seedForScope,
+  selectOpenLobby,
   shortPeer,
   verifyInviteProof,
 } from '../multiplayer/protocol.js';
+import {
+  acceptsPendingJoin,
+  createPendingJoin,
+  normalizeLobbyMembers,
+  proposalDisposition,
+  sameMatchPayload,
+  shouldYieldPublicSingleton,
+  validLobbyRevision,
+  validateLobbyAbort,
+  validateMatchProposal,
+} from '../multiplayer/lobby-state.js';
+import {
+  consensusMaintenancePackets,
+  createLobbyConsensus,
+  reduceLobbyConsensus,
+} from '../multiplayer/lobby-consensus.js';
+import {
+  allAcknowledged,
+  allCommitReceipts,
+  allGoReceipts,
+  createLaunchBarrier,
+  launchControl,
+  reduceLaunchBarrier,
+} from '../multiplayer/match-launch.js';
 
 const byId = (id) => document.getElementById(id);
 const launcher = byId('launcher');
@@ -20,21 +47,37 @@ const pages = [...document.querySelectorAll('[data-launch-page]')];
 const lobbyNames = new Map();
 let session = null;
 let lobbyMode = null;
+let lobbyVisibility = 'public';
+let lobbyId = '';
+let lobbyHostDid = '';
+let lobbyTerm = 0;
+let lobbyRevision = 0;
+let matchAttempt = 0;
 let inviteCode = '';
 let launchStarted = false;
-let quickTimer = null;
 let voiceActive = false;
 let voiceMuted = false;
 let voicePlaybackBlocked = false;
 let voicePending = false;
 let joinGeneration = 0;
 let lobbyOff = [];
-const readyPeers = new Set();
-const readyEchoed = new Set();
+const lobbyMembers = new Set();
+const openLobbies = new Map();
+const closedLobbyRevisions = new Map();
 const hostScores = new Map();
 let ownCapacity = { score: 0, outMbps: 0, rttMs: 0 };
 let pendingMatch = null;
+let pendingJoin = null;
+let agentJoinOperation = null;
+let agentStartOperation = null;
+let joinController = null;
 let committing = false;
+let lobbyConsensus = createLobbyConsensus();
+let lobbyMaintenanceTimer = 0;
+let singletonSettleTimer = 0;
+let lobbyMaintenanceBusy = false;
+
+const lobbyRevisionKey = (id, host) => `${String(id)}\u0000${String(host)}`;
 
 function savedName() {
   try { return localStorage.getItem('charon-player-name') || ''; }
@@ -84,8 +127,19 @@ function updateVoice(status = {}) {
   byId('voice-toggle').textContent = !voiceActive ? 'ENABLE' : voicePlaybackBlocked ? 'ENABLE AUDIO' : voiceMuted ? 'UNMUTE' : 'MUTE';
 }
 
+function configureSessionCapabilities() {
+  const available = !!session?.supportsVoice;
+  const row = document.querySelector('.voice-row');
+  if (row) row.hidden = !available;
+  byId('voice-toggle').disabled = !available;
+  if (!available) {
+    updateVoice({ active: false, muted: false });
+    byId('voice-state').textContent = 'unavailable in this Peerd bridge';
+  }
+}
+
 async function toggleVoice() {
-  if (!session || voicePending) return;
+  if (!session || !session.supportsVoice || voicePending) return;
   voicePending = true;
   byId('voice-toggle').disabled = true;
   try {
@@ -113,23 +167,22 @@ function playerName() {
 
 function currentGroup() {
   if (!session) return [];
-  // Gossip may replay a signed READY from a peer whose rendezvous socket has
-  // already vanished. Matchmaking counts only identities still present in the
-  // live room mesh, so a ghost can never launch or occupy a fireteam slot.
-  const online = new Set(session.roster().map((peer) => peer.did));
-  const all = [...new Set([session.did, ...readyPeers])].filter((did) => online.has(did)).sort();
-  if (lobbyMode !== 'quick') return all.slice(0, MAX_PLAYERS);
-  const ownIndex = all.indexOf(session.did);
-  const groupStart = Math.max(0, Math.floor(ownIndex / MAX_PLAYERS) * MAX_PLAYERS);
-  return all.slice(groupStart, groupStart + MAX_PLAYERS);
+  // Gossip can replay a signed lobby packet after its author leaves. A lobby's
+  // effective roster is always intersected with authenticated room presence.
+  const online = new Set([session.did, ...session.roster().map((peer) => peer.did)]);
+  return [...lobbyMembers].filter((did) => online.has(did)).sort().slice(0, MAX_PLAYERS);
 }
 
 function hostOrder(members = currentGroup()) {
   return rankHosts(members, hostScores);
 }
 
-function isHost() {
-  return hostOrder()[0] === session?.did;
+function isLobbyOwner() {
+  return !!session && lobbyHostDid === session.did;
+}
+
+function isCommittedLobbyPeer(did) {
+  return lobbyMembers.has(did) || !!lobbyConsensus.recovery?.eligible.includes(did);
 }
 
 function renderRoster() {
@@ -150,14 +203,17 @@ function renderRoster() {
       : (lobbyNames.get(did) || session.roster().find((peer) => peer.did === did)?.name || shortPeer(did));
     const role = document.createElement('span');
     role.className = 'roster-role';
-    role.textContent = did === hostOrder(groupIds)[0] ? 'authority' : 'ready';
+    const roles = [];
+    if (did === lobbyHostDid) roles.push('owner');
+    if (did === hostOrder(groupIds)[0]) roles.push('authority');
+    role.textContent = roles.join(' · ') || 'ready';
     row.append(dot, identity, role);
     roster.appendChild(row);
   }
   const count = currentGroup().length;
   byId('lobby-count').textContent = `${count} / ${MAX_PLAYERS}`;
-  byId('lobby-start').hidden = !isHost() || lobbyMode === 'quick';
-  byId('lobby-start').disabled = count < 1;
+  byId('lobby-start').hidden = !isLobbyOwner();
+  byId('lobby-start').disabled = count < 2 || !!lobbyConsensus.admission;
   byId('lobby-status').dataset.tone = 'ok';
   if (pendingMatch) {
     byId('lobby-status').textContent = committing
@@ -165,77 +221,423 @@ function renderRoster() {
       : `Confirming fireteam · ${pendingMatch.acknowledgements.size} / ${pendingMatch.payload.members.length}`;
     return;
   }
-  if (lobbyMode === 'quick') {
-    byId('lobby-status').textContent = count >= 2
-      ? 'Fireteam found. Launching in a moment…'
-      : 'Searching the public queue for another survivor…';
-    scheduleQuickStart();
+  if (!lobbyId) {
+    byId('lobby-status').textContent = lobbyMode === 'quick'
+      ? 'Looking for an open public lobby…'
+      : 'Looking for the private lobby host…';
+  } else if (isLobbyOwner()) {
+    byId('lobby-status').textContent = lobbyConsensus.admission
+      ? 'Finalizing the newest survivor’s lobby admission…'
+      : count >= 2
+      ? 'A player joined. Deploy now, or wait for more survivors.'
+      : lobbyVisibility === 'public'
+        ? 'Public lobby open. Waiting for another survivor…'
+        : 'Private lobby open. Share the invite code with your fireteam.';
   } else {
-    byId('lobby-status').textContent = isHost()
-      ? 'Room secured. Share the code, then deploy when your fireteam is ready.'
-      : 'Connected. Waiting for the host to deploy the fireteam.';
+    byId('lobby-status').textContent = 'Lobby joined. Waiting for the owner to deploy, or for more survivors.';
   }
 }
 
 async function broadcastLobby(kind, extra = {}) {
   if (!session) return;
-  const proof = lobbyMode === 'quick' ? null : await inviteProof(inviteCode, session.did);
+  const proof = lobbyVisibility === 'public' ? null : await inviteProof(inviteCode, session.did);
+  const durable = new Set([
+    'accept', 'confirm', 'roster', 'roster-commit', 'takeover', 'member-sync',
+    'join-cancel', 'admission-ack', 'admission-final',
+    'proposal', 'ack', 'commit', 'commit-receipt', 'go', 'go-receipt',
+    'launch', 'decision-takeover', 'abort',
+  ]).has(kind);
   await session.publish('lobby', {
     v: PROTOCOL_VERSION,
     kind,
     from: session.did,
     name: session.name,
     ...(proof ? { inviteProof: proof } : {}),
+    ...(lobbyId ? { lobbyId } : {}),
     ...extra,
+  }, { retain: durable });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function installLobbyConsensus(next) {
+  lobbyConsensus = next;
+  lobbyId = next.lobbyId;
+  lobbyHostDid = next.owner;
+  lobbyTerm = next.term;
+  lobbyRevision = next.revision;
+  lobbyVisibility = next.visibility;
+  lobbyMembers.clear();
+  for (const did of next.members) lobbyMembers.add(did);
+}
+
+async function dispatchLobbyConsensus(event, now = Date.now()) {
+  const reduced = reduceLobbyConsensus(lobbyConsensus, event, now);
+  installLobbyConsensus(reduced.state);
+  for (const effect of reduced.effects) {
+    await broadcastLobby(effect.kind, effect.payload).catch(() => {});
+  }
+  renderRoster();
+  return reduced;
+}
+
+async function dispatchLaunchBarrier(event, now = Date.now()) {
+  if (!pendingMatch) return { state: null, effects: [], verdict: 'ignored' };
+  const reduced = reduceLaunchBarrier(pendingMatch, event, now);
+  pendingMatch = reduced.state;
+  for (const effect of reduced.effects) {
+    if (effect.kind === 'deploy') await deploy(effect.payload);
+    else await broadcastLobby(effect.kind, effect.payload).catch(() => {});
+  }
+  renderRoster();
+  return reduced;
+}
+
+function scheduleSingletonConvergence() {
+  if (singletonSettleTimer || !session || lobbyVisibility !== 'public'
+    || !isLobbyOwner() || currentGroup().length !== 1) return;
+  singletonSettleTimer = setTimeout(() => {
+    singletonSettleTimer = 0;
+    void settlePublicSingleton();
+  }, 120 + Math.floor(Math.random() * 180));
+}
+
+function startLobbyMaintenance() {
+  clearInterval(lobbyMaintenanceTimer);
+  let pulse = 0;
+  lobbyMaintenanceTimer = setInterval(() => {
+    if (!session || launchStarted || lobbyMaintenanceBusy) return;
+    lobbyMaintenanceBusy = true;
+    void (async () => {
+      try {
+        await dispatchLobbyConsensus({ type: 'tick' });
+        for (const packet of consensusMaintenancePackets(lobbyConsensus)) {
+          await broadcastLobby(packet.kind, packet.payload).catch(() => {});
+        }
+        if (pendingMatch) await dispatchLaunchBarrier({ type: 'tick' });
+        if (pendingMatch?.phase === 'decision' && pendingMatch.decisionOwner !== session.did) {
+          await broadcastLobby('commit-receipt', launchControl(pendingMatch)).catch(() => {});
+        } else if (pendingMatch?.phase === 'go' && pendingMatch.decisionOwner !== session.did) {
+          await broadcastLobby('go-receipt', launchControl(pendingMatch)).catch(() => {});
+        }
+        if (pendingMatch && ['decision', 'go'].includes(pendingMatch.phase)) {
+          await session.retain?.('lobby').catch(() => {});
+          const recovered = await session.history?.('lobby').catch(() => []) ?? [];
+          for (const message of recovered.slice(-32)) await handleLobbyPacket(message).catch(() => {});
+          if (pendingMatch?.decisionOwner === session.did) void commitMatch();
+        } else if (pendingMatch?.phase === 'aborted') {
+          pendingMatch = null;
+          committing = false;
+          displayError('No decision owner remained. The match was cancelled.');
+        }
+        if (++pulse % 4 === 0 && isLobbyOwner()) await announceOpenLobby().catch(() => {});
+        scheduleSingletonConvergence();
+      } finally {
+        lobbyMaintenanceBusy = false;
+      }
+    })();
+  }, 500);
+}
+
+function stopLobbyMaintenance() {
+  clearInterval(lobbyMaintenanceTimer);
+  clearTimeout(singletonSettleTimer);
+  lobbyMaintenanceTimer = 0;
+  singletonSettleTimer = 0;
+  lobbyMaintenanceBusy = false;
+}
+
+function validAdvertisedRoster(packet) {
+  const members = normalizeLobbyMembers(packet?.members);
+  return members && members.includes(packet.host)
+    && Number.isSafeInteger(packet.term) && packet.term >= 1
+    && validLobbyRevision(packet.revision)
+    ? members : null;
+}
+
+function versionAfter(term, revision, currentTerm = lobbyTerm, currentRevision = lobbyRevision) {
+  return term > currentTerm || (term === currentTerm && revision > currentRevision);
+}
+
+function versionAtLeast(left, right) {
+  return !!left && (left.term > right.term
+    || (left.term === right.term && left.revision >= right.revision));
+}
+
+async function announceOpenLobby() {
+  if (!session || !lobbyId || !isLobbyOwner() || launchStarted || pendingMatch
+    || lobbyConsensus.pending || lobbyConsensus.admission) return;
+  const members = currentGroup();
+  if (!members.includes(session.did)) members.push(session.did);
+  members.sort();
+  await broadcastLobby('open', {
+    host: session.did,
+    members,
+    term: lobbyTerm,
+    revision: lobbyRevision,
+    visibility: lobbyVisibility,
+    capacity: ownCapacity,
   });
 }
 
-function scheduleQuickStart() {
-  if (quickTimer || !isHost() || currentGroup().length < 2 || launchStarted) return;
-  quickTimer = setTimeout(() => {
-    quickTimer = null;
-    if (isHost() && currentGroup().length >= 2) startMatch();
-  }, 3200);
+async function announceRoster() {
+  if (!session || !lobbyId || !isLobbyOwner()) return;
+  await broadcastLobby('roster', {
+    host: session.did,
+    members: currentGroup(),
+    term: lobbyTerm,
+    revision: lobbyRevision,
+    visibility: lobbyVisibility,
+  });
+}
+
+async function establishOwnedLobby() {
+  lobbyId = createPublicLobbyId();
+  lobbyHostDid = session.did;
+  lobbyTerm = 1;
+  lobbyRevision = 1;
+  matchAttempt = 0;
+  pendingJoin = null;
+  lobbyMembers.clear();
+  lobbyMembers.add(session.did);
+  installLobbyConsensus(createLobbyConsensus({
+    selfDid: session.did,
+    lobbyId,
+    owner: session.did,
+    visibility: lobbyVisibility,
+    term: lobbyTerm,
+    revision: lobbyRevision,
+    members: [session.did],
+  }));
+  await announceOpenLobby();
+  await broadcastLobby('ready', { capacity: ownCapacity });
+  renderRoster();
+}
+
+async function requestLobbyJoin(candidate) {
+  if (!session) return false;
+  const requested = createPendingJoin(candidate, createInviteCode(), joinGeneration, Date.now(), 8_000);
+  if (!requested) return false;
+  pendingJoin = requested;
+  try {
+    await broadcastLobby('join', {
+      lobbyId: candidate.lobbyId,
+      host: candidate.host,
+      term: candidate.term,
+      revision: candidate.revision,
+      joinNonce: requested.nonce,
+      visibility: lobbyVisibility,
+      capacity: ownCapacity,
+    });
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await delay(100);
+      if (lobbyId === candidate.lobbyId && lobbyHostDid === candidate.host
+        && lobbyMembers.has(session.did)) return true;
+    }
+    const cancellation = lobbyConsensus.pending?.proposal;
+    await dispatchLobbyConsensus({
+      type: 'cancel-pending', member: session.did, joinNonce: requested.nonce,
+    });
+    await broadcastLobby('join-cancel', {
+      lobbyId: candidate.lobbyId,
+      host: candidate.host,
+      term: candidate.term,
+      revision: candidate.revision,
+      joinNonce: requested.nonce,
+      ...(cancellation?.proposalId ? { proposalId: cancellation.proposalId } : {}),
+    }).catch(() => {});
+    if (!lobbyId) installLobbyConsensus(createLobbyConsensus({
+      selfDid: session.did,
+      visibility: lobbyVisibility,
+    }));
+    return false;
+  } finally {
+    if (pendingJoin === requested) pendingJoin = null;
+  }
+}
+
+async function settlePublicSingleton() {
+  if (!session || lobbyVisibility !== 'public' || !isLobbyOwner() || currentGroup().length !== 1) return;
+  // Two peers can finish the same discovery window before either advertises.
+  // Give those simultaneous singleton lobbies one deterministic convergence
+  // pass: the lexicographically larger lobby yields to the smaller one.
+  await delay(200 + Math.floor(Math.random() * 250));
+  await broadcastLobby('discover', { visibility: lobbyVisibility });
+  await delay(250);
+  if (!session || !isLobbyOwner() || currentGroup().length !== 1) return;
+  const online = new Set([session.did, ...session.roster().map((peer) => peer.did)]);
+  const candidate = selectOpenLobby(openLobbies.values(), online, session.did);
+  if (!shouldYieldPublicSingleton(lobbyId, currentGroup(), candidate)) return;
+  const previous = lobbyConsensus;
+  await broadcastLobby('closed', { host: session.did, term: lobbyTerm, revision: lobbyRevision }).catch(() => {});
+  installLobbyConsensus(createLobbyConsensus({ selfDid: session.did, visibility: lobbyVisibility }));
+  if (await requestLobbyJoin(candidate)) return;
+  installLobbyConsensus(createLobbyConsensus({
+    selfDid: session.did,
+    lobbyId: previous.lobbyId,
+    owner: session.did,
+    visibility: previous.visibility,
+    term: previous.term,
+    revision: previous.revision + 1,
+    members: [session.did],
+  }));
+  await announceOpenLobby().catch(() => {});
+}
+
+async function discoverAndJoinLobby({ createIfMissing }) {
+  openLobbies.clear();
+  await broadcastLobby('discover', { visibility: lobbyVisibility });
+  await delay(600);
+  const rejected = new Set();
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const online = new Set([session.did, ...session.roster().map((peer) => peer.did)]);
+    const available = [...openLobbies.values()].filter((candidate) => !rejected.has(candidate.lobbyId));
+    const candidate = lobbyVisibility === 'public'
+      ? selectOpenLobby(available, online, session.did)
+      : available.filter((value) => value.visibility === 'private'
+        && online.has(value.host) && value.members.length < MAX_PLAYERS
+        && !value.members.includes(session.did))
+        .sort((a, b) => b.members.length - a.members.length || a.lobbyId.localeCompare(b.lobbyId))[0];
+    if (!candidate) break;
+    if (await requestLobbyJoin(candidate)) return;
+    rejected.add(candidate.lobbyId);
+  }
+  if (createIfMissing) {
+    await establishOwnedLobby();
+    await settlePublicSingleton();
+    return;
+  }
+  throw new Error('No open private lobby answered. Check the invite code and ask the host to stay in the lobby.');
 }
 
 async function startMatch() {
-  if (!session || launchStarted || pendingMatch || !isHost()) return;
+  if (!session || launchStarted || pendingMatch || lobbyConsensus.pending
+    || lobbyConsensus.admission || !isLobbyOwner()) return;
   const members = currentGroup();
-  if (!members.length) return;
+  if (members.length < 2) return;
   const scope = `match-${createInviteCode()}`;
   const hosts = hostOrder(members);
-  const payload = { members, hosts, scope, seed: seedForScope(scope), host: hosts[0] };
-  pendingMatch = { payload, acknowledgements: new Set([session.did]) };
+  const payload = {
+    members,
+    hosts,
+    scope,
+    seed: seedForScope(scope),
+    host: hosts[0],
+    term: lobbyTerm,
+    revision: lobbyRevision,
+    attempt: ++matchAttempt,
+  };
+  pendingMatch = createLaunchBarrier({
+    payload, ownerDid: session.did, selfDid: session.did,
+  });
   byId('lobby-status').textContent = 'Confirming the fireteam…';
+  await broadcastLobby('closed', {
+    host: session.did,
+    term: lobbyTerm,
+    revision: payload.revision,
+    attempt: payload.attempt,
+  }).catch(() => {});
   for (let attempt = 0; attempt < 6 && pendingMatch && !launchStarted; attempt++) {
-    await broadcastLobby('proposal', payload).catch(() => {});
+    await broadcastLobby('proposal', launchControl(pendingMatch)).catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 450));
-    if (pendingMatch && members.every((did) => pendingMatch.acknowledgements.has(did))) {
+    if (pendingMatch && allAcknowledged(pendingMatch)) {
       await commitMatch();
       return;
     }
   }
   if (!launchStarted) {
-    pendingMatch = null;
-    displayError('A fireteam member did not confirm. Check the connection and deploy again.');
+    await abortMatchAttempt('A fireteam member did not confirm. Check the connection and deploy again.');
   }
 }
 
+async function abortMatchAttempt(message = '') {
+  const failed = pendingMatch;
+  pendingMatch = null;
+  committing = false;
+  if (failed && session && failed.decisionOwner === session.did) {
+    const oldRevision = failed.payload.revision;
+    const replacingOwner = lobbyHostDid !== session.did;
+    const nextTerm = replacingOwner ? lobbyTerm + 1 : lobbyTerm;
+    const nextRevision = replacingOwner ? 1 : Math.max(lobbyRevision, oldRevision) + 1;
+    installLobbyConsensus(createLobbyConsensus({
+      selfDid: session.did,
+      lobbyId,
+      owner: session.did,
+      visibility: lobbyVisibility,
+      term: nextTerm,
+      revision: nextRevision,
+      members: currentGroup(),
+    }));
+    matchAttempt = 0;
+    const members = currentGroup();
+    await broadcastLobby('abort', {
+      term: failed.payload.term,
+      revision: oldRevision,
+      attempt: failed.payload.attempt,
+      decisionOwner: failed.decisionOwner,
+      decisionTerm: failed.decisionTerm,
+      nextOwner: session.did,
+      nextTerm,
+      nextRevision,
+      members,
+    }).catch(() => {});
+    await announceOpenLobby().catch(() => {});
+  }
+  renderRoster();
+  if (message) displayError(message);
+}
+
 async function commitMatch() {
-  if (!pendingMatch || committing || launchStarted) return;
+  if (!pendingMatch || committing || launchStarted || pendingMatch.decisionOwner !== session.did) return;
   committing = true;
   const payload = pendingMatch.payload;
-  await broadcastLobby('commit', payload);
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  await broadcastLobby('commit', payload).catch(() => {});
-  await deploy(payload);
+  try {
+    if (pendingMatch.phase === 'proposal') {
+      const begun = await dispatchLaunchBarrier({ type: 'begin-decision' });
+      if (begun.verdict !== 'accepted') return;
+    }
+    if (pendingMatch.phase === 'decision') {
+      for (let attempt = 0; attempt < 12 && pendingMatch && !launchStarted; attempt++) {
+        await broadcastLobby('commit', launchControl(pendingMatch)).catch(() => {});
+        await delay(350);
+        if (pendingMatch && allCommitReceipts(pendingMatch)) break;
+      }
+      if (!pendingMatch || !allCommitReceipts(pendingMatch)) {
+        throw new Error('a fireteam member did not receive the commit decision');
+      }
+      await dispatchLaunchBarrier({ type: 'begin-go' });
+    }
+    if (pendingMatch?.phase === 'go') {
+      for (let attempt = 0; attempt < 12 && pendingMatch && !launchStarted; attempt++) {
+        await broadcastLobby('go', launchControl(pendingMatch)).catch(() => {});
+        await delay(350);
+        if (pendingMatch && allGoReceipts(pendingMatch)) break;
+      }
+      if (!pendingMatch || !allGoReceipts(pendingMatch)) {
+        throw new Error('a fireteam member did not receive the launch prepare');
+      }
+      await dispatchLaunchBarrier({ type: 'begin-launch' });
+    }
+    if (pendingMatch?.phase === 'launch') {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        await broadcastLobby('launch', launchControl(pendingMatch)).catch(() => {});
+        await delay(200);
+      }
+      await deploy(payload);
+    }
+  } catch (error) {
+    if (!launchStarted) await abortMatchAttempt(`Could not confirm the match: ${error.message || error}`);
+  } finally {
+    if (!launchStarted) committing = false;
+  }
 }
 
 async function deploy({ members, hosts, scope, seed, host }) {
   if (launchStarted || !session || !members.includes(session.did)) return;
   launchStarted = true;
-  clearTimeout(quickTimer);
-  quickTimer = null;
+  stopLobbyMaintenance();
   for (const off of lobbyOff.splice(0)) off();
   const lobbySession = session;
   const name = lobbySession.name;
@@ -276,38 +678,323 @@ async function deploy({ members, hosts, scope, seed, host }) {
 }
 
 function validMatchPayload(packet) {
-  if (!session || !Array.isArray(packet?.members)) return null;
-  const members = [...new Set(packet.members.filter((did) => typeof did === 'string' && did.length <= 160))].sort();
-  const expected = currentGroup();
-  const valid = members.length > 0 && members.length <= MAX_PLAYERS
-    && members.length === expected.length
-    && members.every((did, index) => did === expected[index])
-    && Array.isArray(packet.hosts)
-    && packet.hosts.length === members.length
-    && packet.hosts.every((did, index) => did === hostOrder(members)[index])
-    && packet.from === packet.hosts[0]
-    && packet.host === packet.hosts[0]
-    && /^match-[a-z0-9]{12,48}$/.test(packet.scope)
-    && packet.seed === seedForScope(packet.scope);
-  return valid ? { members, hosts: [...packet.hosts], scope: packet.scope, seed: packet.seed, host: packet.host } : null;
+  if (!session || packet?.term !== lobbyTerm || !validLobbyRevision(packet?.revision)
+    || packet.revision !== lobbyRevision) return null;
+  return validateMatchProposal(packet, {
+    expectedMembers: currentGroup(),
+    ownerDid: lobbyHostDid,
+    term: lobbyTerm,
+    revision: packet.revision,
+  });
 }
 
 function setJoinButtons(disabled) {
   for (const id of ['quick-play', 'host-private', 'join-private']) byId(id).disabled = disabled;
 }
 
+function normalizedCapacity(value) {
+  return {
+    score: Math.max(0, Math.min(1_000, Number(value?.score) || 0)),
+    outMbps: Math.max(0, Number(value?.outMbps) || 0),
+    rttMs: Math.max(0, Number(value?.rttMs) || 0),
+  };
+}
+
+async function handleLobbyPacket(message) {
+  const packet = message?.data;
+  if (!session || !packet || packet.v !== PROTOCOL_VERSION
+    || message?.from !== packet.from || packet.from === session.did) return;
+  if (lobbyVisibility === 'private'
+    && !(await verifyInviteProof(inviteCode, packet.from, packet.inviteProof))) return;
+  if (packet.name) lobbyNames.set(packet.from, String(packet.name).slice(0, 24));
+
+  if (packet.kind === 'discover') {
+    if (packet.visibility === lobbyVisibility) await announceOpenLobby();
+    return;
+  }
+
+  if (packet.kind === 'open') {
+    const members = validAdvertisedRoster(packet);
+    if (!members || packet.host !== packet.from || !isPublicLobbyId(packet.lobbyId)
+      || packet.visibility !== lobbyVisibility) return;
+    const closed = closedLobbyRevisions.get(lobbyRevisionKey(packet.lobbyId, packet.host));
+    if (closed && versionAtLeast(closed, packet)) return;
+    openLobbies.set(packet.lobbyId, {
+      lobbyId: packet.lobbyId,
+      host: packet.host,
+      members,
+      term: packet.term,
+      revision: packet.revision,
+      visibility: packet.visibility,
+    });
+    hostScores.set(packet.host, normalizedCapacity(packet.capacity));
+    // Discovery advertisements never mutate a joined lobby. Membership moves
+    // only through the reducer's nonce-bound commit/removal/takeover packets.
+    scheduleSingletonConvergence();
+    return;
+  }
+
+  if (packet.kind === 'closed') {
+    const advertised = openLobbies.get(packet.lobbyId);
+    if (packet.host === packet.from && Number.isSafeInteger(packet.term) && packet.term >= 1
+      && validLobbyRevision(packet.revision)) {
+      const key = lobbyRevisionKey(packet.lobbyId, packet.host);
+      const previous = closedLobbyRevisions.get(key);
+      if (!previous || versionAfter(packet.term, packet.revision, previous.term, previous.revision)) {
+        closedLobbyRevisions.set(key, { term: packet.term, revision: packet.revision });
+      }
+      if (advertised?.host === packet.from && versionAtLeast(packet, advertised)) {
+        openLobbies.delete(packet.lobbyId);
+      }
+    }
+    return;
+  }
+
+  if (packet.kind === 'join') {
+    if (!isLobbyOwner() || packet.host !== session.did || packet.lobbyId !== lobbyId
+      || packet.visibility !== lobbyVisibility || packet.term !== lobbyTerm
+      || packet.revision !== lobbyRevision || launchStarted || pendingMatch) return;
+    if (typeof packet.joinNonce !== 'string' || !/^[a-z0-9]{20,48}$/.test(packet.joinNonce)) return;
+    const online = new Set(session.roster().map((peer) => peer.did));
+    if (!online.has(packet.from) || (!lobbyMembers.has(packet.from) && currentGroup().length >= MAX_PLAYERS)) return;
+    hostScores.set(packet.from, normalizedCapacity(packet.capacity));
+    const reduced = await dispatchLobbyConsensus({
+      type: 'owner-propose-add',
+      member: packet.from,
+      joinNonce: packet.joinNonce,
+    });
+    if (!reduced.effects.length && lobbyConsensus.pending?.proposal.member === packet.from
+      && lobbyConsensus.pending.proposal.joinNonce === packet.joinNonce) {
+      await broadcastLobby('accept', lobbyConsensus.pending.proposal).catch(() => {});
+    }
+    return;
+  }
+
+  if (packet.kind === 'join-cancel') {
+    const admissionHost = lobbyConsensus.pending?.proposal.host
+      || lobbyConsensus.admission?.host || session.did;
+    if (!isLobbyOwner() || packet.host !== admissionHost || packet.lobbyId !== lobbyId) return;
+    const reduced = await dispatchLobbyConsensus({
+      type: 'cancel-pending',
+      from: packet.from,
+      member: packet.from,
+      proposalId: packet.proposalId,
+      lobbyId: packet.lobbyId,
+      host: packet.host,
+      term: packet.term,
+      revision: packet.revision,
+      joinNonce: packet.joinNonce,
+    });
+    if (reduced.verdict === 'accepted' && !lobbyConsensus.pending && !lobbyConsensus.admission) {
+      matchAttempt = 0;
+      await announceOpenLobby().catch(() => {});
+    }
+    return;
+  }
+
+  if (packet.kind === 'accept') {
+    const adopting = acceptsPendingJoin(pendingJoin, packet, session.did, joinGeneration);
+    const existing = packet.lobbyId === lobbyId && packet.host === lobbyHostDid
+      && lobbyMembers.has(session.did);
+    if (!adopting && !existing) return;
+    await dispatchLobbyConsensus({ type: 'accept', packet, pendingJoinMatches: adopting });
+    return;
+  }
+
+  if (packet.kind === 'confirm') {
+    const before = lobbyRevision;
+    await dispatchLobbyConsensus({ type: 'confirm', packet });
+    if (lobbyRevision !== before && isLobbyOwner()) {
+      matchAttempt = 0;
+      await announceOpenLobby().catch(() => {});
+    }
+    return;
+  }
+
+  if (packet.kind === 'roster-commit') {
+    const expectedHost = lobbyConsensus.pending?.proposal.host || lobbyHostDid;
+    if (!expectedHost || packet.from !== expectedHost || packet.host !== expectedHost) return;
+    const reduced = await dispatchLobbyConsensus({ type: 'roster-commit', packet });
+    if (reduced.verdict === 'accepted' || reduced.verdict === 'idempotent') {
+      if (packet.member === session.did) pendingJoin = null;
+      if (reduced.verdict === 'accepted') {
+        matchAttempt = 0;
+        pendingMatch = null;
+        committing = false;
+      }
+      await broadcastLobby('ready', { term: lobbyTerm, revision: lobbyRevision, capacity: ownCapacity });
+      if (isLobbyOwner()) await announceOpenLobby().catch(() => {});
+    }
+    return;
+  }
+
+  if (packet.kind === 'roster') {
+    const members = validAdvertisedRoster(packet);
+    if (!members || !lobbyMembers.has(packet.from)
+      || packet.host !== packet.from || packet.host !== lobbyHostDid
+      || packet.lobbyId !== lobbyId || packet.visibility !== lobbyVisibility
+      || !members.includes(session.did) || !versionAfter(packet.term, packet.revision)) return;
+    const reduced = await dispatchLobbyConsensus({ type: 'roster', packet: { ...packet, members } });
+    if (reduced.verdict !== 'accepted') return;
+    matchAttempt = 0;
+    pendingMatch = null;
+    committing = false;
+    renderRoster();
+    return;
+  }
+
+  if (packet.kind === 'member-sync') {
+    if (!isCommittedLobbyPeer(packet.from)) return;
+    await dispatchLobbyConsensus({
+      type: 'member-sync',
+      packet,
+      online: [session.did, ...session.roster().map((peer) => peer.did)],
+    });
+    return;
+  }
+
+  if (packet.kind === 'takeover') {
+    if (!isCommittedLobbyPeer(packet.from)) return;
+    await dispatchLobbyConsensus({
+      type: 'takeover',
+      packet,
+      online: [session.did, ...session.roster().map((peer) => peer.did)],
+    });
+    if (isLobbyOwner()) {
+      await announceRoster().catch(() => {});
+      await announceOpenLobby().catch(() => {});
+    }
+    return;
+  }
+
+  // A retained final may have been authored by the original owner immediately
+  // before it departed. That DID is no longer in the current roster, but the
+  // reducer still has the exact nonce/proposal admission lineage needed to
+  // authenticate (or reject) it. Route only this self-validating control before
+  // the ordinary current-member gate.
+  if (packet.kind === 'admission-final') {
+    await dispatchLobbyConsensus({ type: 'admission-final', packet });
+    return;
+  }
+
+  if (!lobbyId || packet.lobbyId !== lobbyId || !lobbyMembers.has(packet.from)) return;
+  if (packet.kind === 'ready') {
+    hostScores.set(packet.from, normalizedCapacity(packet.capacity));
+    if (isLobbyOwner()) await announceRoster().catch(() => {});
+  } else if (packet.kind === 'admission-ack') {
+    const reduced = await dispatchLobbyConsensus({ type: 'admission-ack', packet });
+    if (reduced.verdict === 'accepted' && isLobbyOwner()) {
+      matchAttempt = 0;
+      await announceOpenLobby().catch(() => {});
+    }
+  } else if (packet.kind === 'proposal') {
+    const payload = validMatchPayload(packet);
+    if (payload) {
+      if (payload.revision > lobbyRevision) {
+        lobbyRevision = payload.revision;
+        matchAttempt = 0;
+        pendingMatch = null;
+        committing = false;
+      }
+      const disposition = proposalDisposition(pendingMatch?.payload, matchAttempt, payload);
+      if (disposition === 'duplicate') {
+        await broadcastLobby('ack', launchControl(pendingMatch));
+      } else if (disposition === 'replace') {
+        matchAttempt = Math.max(matchAttempt, payload.attempt);
+        pendingMatch = createLaunchBarrier({
+          payload, ownerDid: packet.from, selfDid: session.did, follower: true,
+        });
+        await broadcastLobby('ack', launchControl(pendingMatch));
+        const expected = payload;
+        setTimeout(() => {
+          if (pendingMatch?.decisionOwner !== session.did && pendingMatch?.phase === 'proposal'
+            && sameMatchPayload(pendingMatch.payload, expected)) {
+            pendingMatch = null;
+            committing = false;
+            renderRoster();
+          }
+        }, 5_000);
+      }
+    }
+  } else if (packet.kind === 'ack' && pendingMatch && pendingMatch.decisionOwner === session.did
+    && sameMatchPayload(packet, pendingMatch.payload)
+    && pendingMatch.payload.members.includes(packet.from)) {
+    await dispatchLaunchBarrier({ type: 'ack', packet });
+    if (pendingMatch && allAcknowledged(pendingMatch)) {
+      await commitMatch();
+    }
+  } else if (packet.kind === 'abort') {
+    if (!pendingMatch || packet.decisionOwner !== pendingMatch.decisionOwner
+      || packet.decisionTerm !== pendingMatch.decisionTerm) return;
+    const aborted = validateLobbyAbort(packet, {
+      ownerDid: pendingMatch.decisionOwner,
+      lobbyId,
+      term: lobbyTerm,
+      revision: lobbyRevision,
+      expectedMembers: currentGroup(),
+      pendingPayload: pendingMatch?.payload,
+      selfDid: session.did,
+    });
+    if (aborted) {
+      installLobbyConsensus(createLobbyConsensus({
+        selfDid: session.did,
+        lobbyId,
+        owner: aborted.nextOwner,
+        visibility: lobbyVisibility,
+        term: aborted.nextTerm,
+        revision: aborted.nextRevision,
+        members: aborted.members,
+      }));
+      matchAttempt = 0;
+      pendingMatch = null;
+      committing = false;
+    }
+  } else if (packet.kind === 'commit' && pendingMatch) {
+    await dispatchLaunchBarrier({ type: 'commit', packet });
+  } else if (packet.kind === 'commit-receipt' && pendingMatch) {
+    await dispatchLaunchBarrier({ type: 'commit-receipt', packet });
+  } else if (packet.kind === 'go' && pendingMatch) {
+    await dispatchLaunchBarrier({ type: 'go', packet });
+  } else if (packet.kind === 'go-receipt' && pendingMatch) {
+    await dispatchLaunchBarrier({ type: 'go-receipt', packet });
+  } else if (packet.kind === 'launch' && pendingMatch) {
+    await dispatchLaunchBarrier({ type: 'launch', packet });
+  } else if (packet.kind === 'decision-takeover' && pendingMatch) {
+    const reduced = await dispatchLaunchBarrier({
+      type: 'takeover',
+      packet,
+      online: [session.did, ...session.roster().map((peer) => peer.did)],
+    });
+    if (['accepted', 'idempotent'].includes(reduced.verdict)
+      && pendingMatch?.decisionOwner === session.did) void commitMatch();
+  }
+  renderRoster();
+}
+
 async function joinLobby(mode) {
   const generation = ++joinGeneration;
+  joinController?.abort();
+  const controller = new AbortController();
+  joinController = controller;
   setJoinButtons(true);
+  stopLobbyMaintenance();
   for (const off of lobbyOff.splice(0)) off();
   if (session) await session.close();
   session = null;
   lobbyMode = mode;
+  lobbyVisibility = mode === 'quick' ? 'public' : 'private';
+  lobbyId = '';
+  lobbyHostDid = '';
+  lobbyTerm = 0;
+  lobbyRevision = 0;
+  matchAttempt = 0;
   launchStarted = false;
   committing = false;
   pendingMatch = null;
-  readyPeers.clear();
-  readyEchoed.clear();
+  pendingJoin = null;
+  lobbyMembers.clear();
+  openLobbies.clear();
+  closedLobbyRevisions.clear();
   hostScores.clear();
   lobbyNames.clear();
   const name = playerName();
@@ -327,6 +1014,7 @@ async function joinLobby(mode) {
     }
   } catch (error) {
     displayError(error.message);
+    if (generation === joinGeneration) setJoinButtons(false);
     return;
   }
 
@@ -338,86 +1026,89 @@ async function joinLobby(mode) {
   byId('lobby-status').dataset.tone = '';
   byId('lobby-status').textContent = 'Opening a peer-to-peer room…';
   try {
-    const joined = await joinMultiplayerRoom({ roomId, name });
+    const joined = await joinMultiplayerRoom({ roomId, name, signal: controller.signal });
     if (generation !== joinGeneration) {
       await joined.close();
       return;
     }
     session = joined;
     session.setScope(roomId);
-    ownCapacity = await session.capacity().catch(() => ({ score: 0, outMbps: 0, rttMs: 0 }));
-    ownCapacity.score = Math.round(Math.max(0, Math.min(1_000, Number(ownCapacity.score) || 0)));
-    ownCapacity.outMbps = Math.max(0, Math.round(Number(ownCapacity.outMbps) || 0));
-    ownCapacity.rttMs = Math.max(0, Math.round(Number(ownCapacity.rttMs) || 0));
+    configureSessionCapabilities();
+    installLobbyConsensus(createLobbyConsensus({ selfDid: session.did, visibility: lobbyVisibility }));
+    ownCapacity = normalizedCapacity(await session.capacity().catch(() => ({})));
+    ownCapacity.score = Math.round(ownCapacity.score);
+    ownCapacity.outMbps = Math.round(ownCapacity.outMbps);
+    ownCapacity.rttMs = Math.round(ownCapacity.rttMs);
     hostScores.set(session.did, ownCapacity);
     byId('transport-label').textContent = session.transport === 'peerd'
       ? 'PEERD BASE MESH'
       : 'WEBRTC · WEB BUNDLE';
+    await session.retain?.('lobby').catch(() => {});
     const offTopic = await session.subscribe('lobby', (message) => {
-      void (async () => {
-        const packet = message?.data;
-        if (!packet || packet.v !== PROTOCOL_VERSION || message?.from !== packet.from || packet.from === session.did) return;
-        if (lobbyMode !== 'quick'
-          && !(await verifyInviteProof(inviteCode, packet.from, packet.inviteProof))) return;
-        if (packet.name) lobbyNames.set(message.from, String(packet.name).slice(0, 24));
-        if (packet.kind === 'ready') {
-          readyPeers.add(packet.from);
-          hostScores.set(packet.from, {
-            score: Math.max(0, Math.min(1_000, Number(packet.capacity?.score) || 0)),
-            outMbps: Math.max(0, Number(packet.capacity?.outMbps) || 0),
-            rttMs: Math.max(0, Number(packet.capacity?.rttMs) || 0),
-          });
-          if (!readyEchoed.has(packet.from)) {
-            readyEchoed.add(packet.from);
-            broadcastLobby('ready', { capacity: ownCapacity }).catch(() => {});
-          }
-        } else if (packet.kind === 'proposal') {
-          const payload = validMatchPayload(packet);
-          if (payload) {
-            pendingMatch = { payload, acknowledgements: new Set() };
-            broadcastLobby('ack', { scope: payload.scope, members: payload.members }).catch(() => {});
-          }
-        } else if (packet.kind === 'ack' && pendingMatch && isHost()
-          && packet.scope === pendingMatch.payload.scope
-          && Array.isArray(packet.members)
-          && packet.members.join('\u0000') === pendingMatch.payload.members.join('\u0000')
-          && pendingMatch.payload.members.includes(packet.from)) {
-          pendingMatch.acknowledgements.add(packet.from);
-          if (pendingMatch.payload.members.every((did) => pendingMatch.acknowledgements.has(did))) {
-            commitMatch().catch((error) => displayError(error.message));
-          }
-        } else if (packet.kind === 'commit' && pendingMatch) {
-          const payload = validMatchPayload(packet);
-          if (payload && payload.scope === pendingMatch.payload.scope) deploy(payload);
-        }
-        renderRoster();
-      })().catch(() => {});
+      void handleLobbyPacket(message).catch(() => {});
     });
     lobbyOff.push(
       offTopic,
-      session.on('roster', renderRoster),
+      session.on('roster', (roster) => {
+        renderRoster(roster);
+        if (lobbyConsensus.recovery) {
+          broadcastLobby('member-sync', {
+            lobbyId: lobbyConsensus.lobbyId,
+            previousOwner: lobbyConsensus.recovery.previousOwner,
+            term: lobbyConsensus.recovery.term,
+          }).catch(() => {});
+        }
+      }),
       session.on('voice', updateVoice),
       session.on('peer-leave', (did) => {
-        readyPeers.delete(did);
-        readyEchoed.delete(did);
+        const wasLobbyMember = lobbyMembers.has(did);
+        for (const [id, advertised] of openLobbies) {
+          if (advertised.host === did || advertised.members.includes(did)) openLobbies.delete(id);
+        }
+        if (pendingJoin?.host === did) pendingJoin = null;
         hostScores.delete(did);
-        if (pendingMatch?.payload.members.includes(did)) {
+        const recoveringDecision = ['decision', 'go', 'launch'].includes(pendingMatch?.phase)
+          && pendingMatch.payload.members.includes(did);
+        if (pendingMatch?.payload.members.includes(did) && !recoveringDecision) {
           pendingMatch = null;
           committing = false;
           displayError('A fireteam member disconnected. Match confirmation was cancelled.');
+        }
+        if (recoveringDecision && did === pendingMatch?.decisionOwner) {
+          committing = false;
+          void dispatchLaunchBarrier({ type: 'owner-left', did });
+        }
+        if (wasLobbyMember && did === lobbyHostDid && !recoveringDecision) {
+          void dispatchLobbyConsensus({ type: 'owner-left', did });
+        } else if (wasLobbyMember && isLobbyOwner() && !recoveringDecision) {
+          void dispatchLobbyConsensus({ type: 'owner-remove', member: did });
+          matchAttempt = 0;
+          announceOpenLobby().catch(() => {});
         }
         renderRoster();
       }),
     );
     await session.refreshPresence();
-    await broadcastLobby('ready', { capacity: ownCapacity });
+    for (const message of await session.history?.('lobby').catch(() => []) ?? []) {
+      await handleLobbyPacket(message).catch(() => {});
+    }
+    startLobbyMaintenance();
+    if (mode === 'host') await establishOwnedLobby();
+    else await discoverAndJoinLobby({ createIfMissing: mode === 'quick' });
     renderRoster();
   } catch (error) {
     if (generation === joinGeneration) {
+      const failedSession = session;
       session = null;
-      displayError(error.message || 'Could not open the multiplayer room.');
+      stopLobbyMaintenance();
+      for (const off of lobbyOff.splice(0)) off();
+      await failedSession?.close().catch(() => {});
+      if (error?.code !== 'JOIN_CANCELLED') {
+        displayError(error.message || 'Could not open the multiplayer room.');
+      }
     }
   } finally {
+    if (joinController === controller) joinController = null;
     if (generation === joinGeneration) setJoinButtons(false);
   }
 }
@@ -443,19 +1134,28 @@ async function launchGame(config) {
 
 async function leaveLobby() {
   joinGeneration += 1;
+  joinController?.abort();
+  joinController = null;
+  stopLobbyMaintenance();
   setJoinButtons(false);
-  clearTimeout(quickTimer);
-  quickTimer = null;
   for (const off of lobbyOff.splice(0)) off();
   if (session) await session.close();
   session = null;
   updateVoice({ active: false, muted: false });
   lobbyNames.clear();
-  readyPeers.clear();
-  readyEchoed.clear();
+  lobbyMembers.clear();
+  openLobbies.clear();
+  closedLobbyRevisions.clear();
   hostScores.clear();
+  lobbyId = '';
+  lobbyHostDid = '';
+  lobbyTerm = 0;
+  lobbyRevision = 0;
+  matchAttempt = 0;
+  pendingJoin = null;
   pendingMatch = null;
   committing = false;
+  lobbyConsensus = createLobbyConsensus();
   showPage('multiplayer');
 }
 
@@ -523,3 +1223,111 @@ else if (initialRoute.startsWith('docs')) {
   const requested = initialRoute.split('/')[1];
   document.querySelector(`[data-doc-tab="${requested}"]`)?.click();
 } else showPage('menu');
+
+function launcherObservation() {
+  const activePage = pages.find((page) => !page.hidden)?.dataset.launchPage || 'menu';
+  return {
+    screen: activePage,
+    playerName: byId('player-name').value,
+    lobby: session ? {
+      mode: lobbyMode,
+      visibility: lobbyVisibility,
+      lobbyId: lobbyId || null,
+      owner: lobbyHostDid || null,
+      revision: lobbyRevision || null,
+      self: session.did,
+      isOwner: isLobbyOwner(),
+      members: currentGroup().map((did) => ({
+        did,
+        name: did === session.did ? session.name : lobbyNames.get(did) || shortPeer(did),
+        authority: hostOrder()[0] === did,
+      })),
+      canStart: isLobbyOwner() && currentGroup().length >= 2 && !pendingMatch
+        && !lobbyConsensus.pending && !lobbyConsensus.admission,
+      transport: session.transport,
+      status: byId('lobby-status').textContent,
+    } : null,
+    error: byId('multiplayer-error')?.hidden ? null : byId('multiplayer-error')?.textContent,
+    joinOperation: agentJoinOperation ? { ...agentJoinOperation } : null,
+    startOperation: agentStartOperation ? { ...agentStartOperation } : null,
+    voiceAvailable: !!session?.supportsVoice,
+  };
+}
+
+function beginAgentJoin(mode) {
+  if (agentJoinOperation?.state === 'pending') throw new Error('a lobby join is already pending');
+  const operation = { mode, state: 'pending', startedAt: Date.now() };
+  agentJoinOperation = operation;
+  joinLobby(mode).then(() => {
+    if (agentJoinOperation !== operation) return;
+    operation.state = session && lobbyId ? 'complete' : 'failed';
+    if (operation.state === 'failed') {
+      operation.error = byId('multiplayer-error')?.textContent || 'lobby join did not complete';
+    }
+    operation.completedAt = Date.now();
+  }).catch((error) => {
+    if (agentJoinOperation !== operation) return;
+    operation.state = 'failed';
+    operation.error = String(error?.message || error);
+    operation.completedAt = Date.now();
+  });
+}
+
+function beginAgentStart() {
+  if (agentStartOperation?.state === 'pending') throw new Error('a match start is already pending');
+  if (!session || !lobbyId || !isLobbyOwner() || currentGroup().length < 2) {
+    throw new Error('the lobby owner needs at least two committed members to start');
+  }
+  if (lobbyConsensus.pending || lobbyConsensus.admission) {
+    throw new Error('wait for the current lobby admission to finish');
+  }
+  const operation = { state: 'pending', startedAt: Date.now() };
+  agentStartOperation = operation;
+  startMatch().then(() => {
+    if (agentStartOperation !== operation) return;
+    operation.state = launchStarted ? 'complete' : 'failed';
+    if (operation.state === 'failed') {
+      operation.error = byId('lobby-status')?.textContent || 'match start did not complete';
+    }
+    operation.completedAt = Date.now();
+  }).catch((error) => {
+    if (agentStartOperation !== operation) return;
+    operation.state = 'failed';
+    operation.error = String(error?.message || error);
+    operation.completedAt = Date.now();
+  });
+}
+
+globalThis.peerd?.agent?.expose({
+  observe: launcherObservation,
+  act: async ({ action, params = {} } = {}) => {
+    if (action === 'open-page') {
+      const page = String(params.page || 'menu');
+      if (!['menu', 'multiplayer', 'about', 'docs'].includes(page)) throw new Error('unknown launcher page');
+      showPage(page);
+    } else if (action === 'set-name') {
+      const name = String(params.name || '').trim().slice(0, 24);
+      if (!name) throw new Error('name is required');
+      byId('player-name').value = name;
+      rememberName(name);
+    } else if (action === 'solo') {
+      void launchGame({ mode: 'solo', session: null, name: playerName(), seed: params.seed || undefined });
+    } else if (action === 'quick-match') {
+      beginAgentJoin('quick');
+    } else if (action === 'host-private') {
+      beginAgentJoin('host');
+    } else if (action === 'join-private') {
+      byId('invite-code').value = String(params.code || '');
+      beginAgentJoin('join');
+    } else if (action === 'start-game') {
+      beginAgentStart();
+    } else if (action === 'leave-lobby') {
+      await leaveLobby();
+    } else if (action === 'voice-toggle') {
+      await toggleVoice();
+    } else {
+      throw new Error('unknown launcher action');
+    }
+    return launcherObservation();
+  },
+});

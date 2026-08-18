@@ -1,26 +1,55 @@
 # Multiplayer protocol
 
-Charon protocol version 2 presents the same room API inside peerd and on the
-standalone web page. peerd keeps identity, WebRTC, RTC statistics, and
-microphone handles in the trusted parent; the website bundles the corresponding
-peerd primitives.
+Charon protocol version 9 presents the same core room API inside peerd and on
+the standalone web page. peerd keeps identity and WebRTC handles in the trusted
+parent; the website bundles the corresponding peerd primitives. Optional
+capacity and voice surfaces are capability-detected rather than assumed.
 
 ## Lobby and deployment
 
-1. Join the live `charon:quickplay:v2` public queue or a private room whose
+1. Join the live `charon:quickplay:v9` public discovery room or a private room whose
    address is SHA-256-derived from an invite code. Mesh presence removes stale
-   peers; a stable queue avoids stranding players on opposite time epochs.
+   peers; a stable discovery room avoids stranding players on opposite time epochs.
    Private lobby messages require a DID-bound HMAC proof, so an overlay peer
    that learns the derived room address cannot impersonate an invite holder.
-2. Publish `ready` with a bounded host-capacity sample. The sample combines
-   available outgoing bitrate/RTT when RTCStats exposes it with coarse
-   CPU/memory and Network Information fallbacks.
-3. Rank candidates by capacity score, then DID as the deterministic tie-break.
-4. The selected candidate proposes an exact roster, isolated random match room,
-   seed, and complete failover order.
-5. Every member must acknowledge the same proposal. The host retransmits until
-   all acknowledge, then publishes commit twice.
-6. Each member leaves matchmaking, joins the match room with the same identity,
+2. Quick Match asks for open logical lobbies, joins the fullest one with room,
+   or creates and advertises a public lobby when none answers. Private hosts
+   advertise only inside the invite-derived room. Admission is a nonce-bound
+   provisional accept: the requester and every current member confirm the same
+   proposed roster before the owner commits it. The committed admission remains
+   provisional until the requester acknowledges that exact nonce/proposal. A
+   retained timeout cancel can then revision-remove only that unacknowledged
+   admission; reordered acknowledgements, duplicates, and cancels from an older
+   rejoin token are harmless. Every survivor applies the retained finalization.
+   If the owner dies while a survivor missed it, the requester reproves the
+   exact finalized token in the new term; the successor holds old-term cancels
+   during a bounded resolution window and rolls back only when no proof arrives.
+   Expired, stale, reordered, or unsolicited packets cannot create a logical member. Simultaneous public
+   singletons periodically converge on the lower random lobby id.
+3. The owner accepts up to four members. Every roster carries a monotonically
+   revisioned term. On owner departure, eligible committed members exchange
+   membership observations, elect the lowest live DID, and publish a recoverable
+   takeover in the next term. At two or more, that lobby owner may
+   start immediately or keep waiting; Quick Match never auto-starts.
+4. Publish `ready` with a bounded authority-capacity sample when the adapter
+   exposes one. The standalone adapter combines available outgoing bitrate/RTT
+   with coarse CPU/memory and Network Information fallbacks. A Peerd bridge
+   without the optional operation publishes a neutral score, making DID order
+   the deterministic tie-breaker.
+5. The owner ranks simulation-authority candidates by capacity score, then DID,
+   and freezes that complete order in the revisioned proposal. Lobby ownership
+   remains with the creator; followers validate the frozen permutation instead
+   of recomputing it from asynchronously delivered capacity samples.
+6. The lobby owner proposes an exact roster, isolated random match room, seed,
+   and complete authority failover order.
+7. Every member must acknowledge the same term, revision, and attempt. The owner
+   retains and retransmits the decision until every member returns an explicit
+   commit receipt, then retains and retransmits `go` until every peer returns a
+   go receipt. Only then does it retain and retransmit a final `launch`. A peer
+   that missed the live decision recovers it from topic history. A departed
+   decision owner is replaced, after a grace period, in the frozen member order.
+   Failed attempts explicitly abort, advance the lobby revision, and re-advertise.
+8. Only after final `launch`, each member leaves the lobby, joins the match room with the same identity,
    removes lobby listeners, and pins voice recipients to the committed roster.
 
 The match room remains a full WebRTC mesh. Electing an authority does not tear
@@ -39,10 +68,14 @@ entity presentation/lifecycle state; full checkpoints also refresh RNG time,
 doors, outcome, armory, and statistics. Direct sends are serialized per peer so
 packet sequence cannot overtake signing.
 
-Every guest retains the latest checkpoint. When the current authority has been
-observed and then disappears from match presence, all remaining peers choose
-the first connected DID in the committed failover order. The promoted peer
-starts ticking its retained state and immediately emits a full checkpoint.
+Every guest retains the latest checkpoint. Peers allow the selected authority a
+bounded arrival grace; if it never joins, or if an observed authority departs,
+all remaining peers permanently choose the first connected DID in the committed
+failover order. Each election advances a monotonically increasing term tied to
+that frozen order. A late original authority cannot preempt the term, and a
+reconnecting older partition adopts the higher canonical term before accepting
+more actions or checkpoints. The promoted peer starts ticking its retained
+state and immediately emits a full checkpoint.
 
 ## Game packets
 
@@ -68,12 +101,14 @@ media and does not travel through application data channels.
 
 ## Voice
 
-Voice begins only after an explicit user gesture. In peerd, the trusted parent
-also asks for app voice consent. A sandboxed dwapp never receives a MediaStream,
-AudioContext, device label, raw RTCStats, or networking handle.
+Voice begins only after an explicit user gesture. The current Peerd bridge v0
+does not expose its optional voice operations, so the Charon dwapp hides that
+control. A future bridge must advertise the complete voice operation set before
+Charon enables it. A sandboxed dwapp never receives a MediaStream, AudioContext,
+device label, raw RTCStats, or networking handle.
 
-Both adapters use dedicated audio-only `RTCPeerConnection` media sessions. The
-browser negotiates Opus, caps speech bitrate, and owns RTP packetization,
+The standalone browser adapter uses dedicated audio-only `RTCPeerConnection`
+media sessions. It negotiates Opus, caps speech bitrate, and owns RTP packetization,
 jitter buffering, acoustic echo cancellation, noise suppression, and automatic
 gain control. A deterministic offerer prevents glare. Authenticated direct
 messages carry only bounded, versioned ready/SDP/ICE/hangup signaling with
@@ -87,7 +122,8 @@ media signaling never crosses the trusted bridge into the dwapp.
   user denies peerd consent or a joined bridge fails.
 - Leaving closes subscriptions, presence, audio tracks/context, direct
   messaging, gossip, and the room.
-- Losing a lobby peer cancels in-flight consensus. Losing the match authority
+- Losing a lobby peer removes it from that explicit lobby and cancels in-flight
+  consensus. Losing the lobby owner promotes the lowest remaining DID. Losing the match authority
   promotes the next connected committed candidate.
 - Rendezvous is discovery/signaling only; established peer links survive its
   outage.

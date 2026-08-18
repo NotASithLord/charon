@@ -3762,3 +3762,133 @@ window.__game = {
   flamerState: () => ({ hasFlamer, heldIsFlamer, fuel: flamer.fuel, live: flamer.live, jet: _flameJet }),
 };
 window.__audio = audio; // sound-board / audit harness
+
+function gameObservation() {
+  const living = {};
+  let alive = 0;
+  for (const agent of sim.agents) {
+    if (agent.dead || agent.hp <= 0) continue;
+    alive++;
+    const faction = String(agent.faction);
+    living[faction] = (living[faction] || 0) + 1;
+  }
+  const room = sim.graph.node(player.agent.node);
+  return {
+    screen: introGone ? (ended ? 'result' : 'game') : 'briefing',
+    run: {
+      seed,
+      mode: LAUNCH.mode || 'solo',
+      timeSeconds: Number(sim.t.toFixed(2)),
+      tick: sim.tickCount,
+      outcome: sim.outcome || null,
+      authority: isSimAuthority(),
+    },
+    player: {
+      x: Number(player.x.toFixed(2)),
+      z: Number(player.z.toFixed(2)),
+      deck: player.deck,
+      room: room?.name || null,
+      yaw: Number(player.yaw.toFixed(3)),
+      pitch: Number(player.pitch.toFixed(3)),
+      health: Math.max(0, Math.ceil(player.agent.hp)),
+      armor: Math.max(0, Math.ceil(player.armor)),
+      dead: player.dead,
+      pinned: player.pinned,
+      weapon: heldIsFlamer ? 'flamethrower' : 'MA5',
+      ammo: heldIsFlamer
+        ? { fuel: Number(flamer.frac.toFixed(3)) }
+        : { magazine: weapon.mag, reserve: weapon.reserve, reloading: weapon.reloading },
+      frags,
+    },
+    world: { alive, livingByFaction: living, fires: sim.fires.length },
+    fireteam: {
+      order: fireteam.order?.kind || null,
+      membersAlive: fireteam.members.filter((id) => {
+        const member = sim.byId.get(id);
+        return member && !member.dead && member.hp > 0;
+      }).length,
+    },
+    performance: {
+      backend: renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2',
+      frameMs: Number(_fpsEma.toFixed(2)),
+      qualityRung: rung,
+      renderStopped: _renderStopped,
+      surfacedErrors: _fatalShown,
+    },
+    multiplayer: LAUNCH.session ? {
+      self: LAUNCH.session.did,
+      members: [...new Set(LAUNCH.members || [])],
+      transport: LAUNCH.session.transport,
+      scope: LAUNCH.scope,
+    } : null,
+  };
+}
+
+const agentDelay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function pulseAgentKey(code, duration = 120) {
+  player.locked = true;
+  player.keys.add(code);
+  try { await agentDelay(Math.max(50, Math.min(2_000, Number(duration) || 120))); }
+  finally { player.keys.delete(code); }
+}
+
+globalThis.peerd?.agent?.expose({
+  observe: gameObservation,
+  act: async ({ action, params = {} } = {}) => {
+    if (action === 'deploy') {
+      introChars = INTRO_TOTAL;
+      introRender();
+      introGone = true;
+      intro.style.display = 'none';
+      overlay.classList.add('hidden');
+      player.locked = true;
+    } else if (action === 'move') {
+      const direction = String(params.direction || 'forward');
+      const code = ({ forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD' })[direction];
+      if (!code) throw new Error('direction must be forward, back, left, or right');
+      if (params.sprint) player.keys.add('ShiftLeft');
+      try { await pulseAgentKey(code, params.durationMs || 500); }
+      finally { player.keys.delete('ShiftLeft'); }
+    } else if (action === 'jump') {
+      await pulseAgentKey('Space', params.durationMs || 120);
+    } else if (action === 'look') {
+      const yawDelta = Math.max(-Math.PI, Math.min(Math.PI, Number(params.yawDelta) || 0));
+      const pitchDelta = Math.max(-1, Math.min(1, Number(params.pitchDelta) || 0));
+      player.yaw += yawDelta;
+      player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch + pitchDelta));
+    } else if (action === 'fire') {
+      player.locked = true;
+      fireHeld = true;
+      try { await agentDelay(Math.max(50, Math.min(2_000, Number(params.durationMs) || 250))); }
+      finally { fireHeld = false; }
+    } else if (action === 'reload') {
+      reloadPressed = true;
+    } else if (action === 'melee') {
+      meleePressed = true;
+    } else if (action === 'grenade') {
+      player.locked = true;
+      fragPressed = true;
+    } else if (action === 'interact') {
+      await pulseAgentKey('KeyE');
+    } else if (action === 'climb') {
+      await pulseAgentKey('KeyL');
+    } else if (action === 'map') {
+      toggleMap(params.open === undefined ? !mapOpen : !!params.open);
+    } else if (action === 'order') {
+      const order = String(params.order || '');
+      if (!['follow', 'hold', 'advance'].includes(order)) throw new Error('unknown fireteam order');
+      setOrder(order);
+    } else if (action === 'weapon') {
+      const weaponName = String(params.weapon || 'swap');
+      if (weaponName === 'swap') swapWeapon();
+      else if (weaponName === 'rifle') selectWeapon(false);
+      else if (weaponName === 'flamethrower') selectWeapon(true);
+      else throw new Error('weapon must be rifle, flamethrower, or swap');
+    } else if (action === 'restart') {
+      setTimeout(() => location.reload(), 0);
+    } else {
+      throw new Error('unknown game action');
+    }
+    return gameObservation();
+  },
+});

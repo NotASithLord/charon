@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {
   PROTOCOL_VERSION,
   createInviteCode,
+  createPublicLobbyId,
   inviteProof,
+  isPublicLobbyId,
   matchScope,
   matchRoom,
   normalizeInviteCode,
@@ -11,6 +13,7 @@ import {
   quickplayRoom,
   rankHosts,
   seedForScope,
+  selectOpenLobby,
   validGamePacket,
   verifyInviteProof,
 } from './protocol.js';
@@ -20,6 +23,17 @@ const fixedRandom = { getRandomValues(bytes) { bytes.fill(17); return bytes; } }
 const invite = createInviteCode(fixedRandom);
 assert.equal(invite.length, 20);
 assert.equal(normalizeInviteCode(` ${invite.toUpperCase()} `), invite);
+const publicLobby = createPublicLobbyId(fixedRandom);
+assert.equal(isPublicLobbyId(publicLobby), true);
+assert.equal(isPublicLobbyId('private-room'), false);
+assert.deepEqual(selectOpenLobby([
+  { lobbyId: 'lobby-aaaaaaaaaaaa', host: 'did:a', members: ['did:a'] },
+  { lobbyId: 'lobby-bbbbbbbbbbbb', host: 'did:b', members: ['did:b', 'did:c'] },
+  { lobbyId: 'lobby-cccccccccccc', host: 'did:z', members: ['did:z'] },
+  { lobbyId: 'lobby-dddddddddddd', host: 'did:d', members: ['did:d', 'did:e', 'did:f', 'did:g'] },
+], ['did:a', 'did:b', 'did:c', 'did:d', 'did:e', 'did:f', 'did:g']), {
+  lobbyId: 'lobby-bbbbbbbbbbbb', host: 'did:b', members: ['did:b', 'did:c'],
+});
 const inviteRoom = await privateRoom(invite);
 assert.match(inviteRoom, new RegExp(`^charon:v${PROTOCOL_VERSION}:private:[0-9a-f]{32}$`));
 assert.equal(inviteRoom.includes(invite), false);
@@ -38,10 +52,12 @@ assert.deepEqual(rankHosts(['did:b', 'did:a'], new Map([
 ])), ['did:b', 'did:a']);
 assert.deepEqual(rankHosts(['did:b', 'did:a'], new Map()), ['did:a', 'did:b']);
 assert.equal(peerNumber('did:a'), peerNumber('did:a'));
-assert.equal(validGamePacket({ v: PROTOCOL_VERSION, kind: 'state', from: 'did:a', seq: 1 }), true);
-assert.equal(validGamePacket({ v: PROTOCOL_VERSION - 1, kind: 'state', from: 'did:a', seq: 1 }), false);
-assert.equal(validGamePacket({ v: PROTOCOL_VERSION, kind: 'eval', from: 'did:a', seq: 1 }), false);
-assert.equal(validGamePacket({ v: PROTOCOL_VERSION, kind: 'state', from: 'did:a', seq: -1 }), false);
+const gamePacket = { v: PROTOCOL_VERSION, kind: 'state', from: 'did:a', authority: 'did:a', authorityTerm: 1, seq: 1 };
+assert.equal(validGamePacket(gamePacket), true);
+assert.equal(validGamePacket({ ...gamePacket, v: PROTOCOL_VERSION - 1 }), false);
+assert.equal(validGamePacket({ ...gamePacket, kind: 'eval' }), false);
+assert.equal(validGamePacket({ ...gamePacket, seq: -1 }), false);
+assert.equal(validGamePacket({ ...gamePacket, authorityTerm: 0 }), false);
 const ready = { __peerdMedia: 1, scope: 'squad', kind: 'ready', session: '0123456789ab', ack: false };
 assert.equal(isRoomVoiceSignal(ready), true);
 assert.equal(isRoomVoiceSignal({ ...ready, session: 'short' }), false);

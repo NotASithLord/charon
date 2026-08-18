@@ -35,27 +35,34 @@ access.
 Charon has two adapters over one application protocol:
 
 - In peerd, the dwapp calls the consent-gated parent bridge. Identity,
-  authenticated room membership, gossip, presence, direct messages, and voice
-  stay on peerd's always-on base WebRTC mesh. The opaque app frame receives no
-  raw network or microphone primitive.
+  authenticated room membership, gossip, presence, and direct messages stay on
+  peerd's always-on base WebRTC mesh. The current bridge does not expose voice
+  or raw capacity statistics; Charon capability-detects both and hides voice
+  when unavailable. The opaque app frame receives no raw network primitive.
 - On the web, `multiplayer/peerd-browser.js` is a generated browser bundle of
   those same peerd primitives. It establishes authenticated `did:key` WebRTC
   links through peerd's cold-start rendezvous and then communicates peer to
   peer.
 
-Quick Match partitions live, ready peers in a public queue into fireteams of up to four. A
-proposal/ack/commit barrier freezes membership, then the fireteam leaves the
-queue for its own match room. Private rooms use high-entropy, unlisted invite
+Quick Match discovers the fullest open public lobby and creates one only when
+none answers. A nonce-bound admission is not startable until the requester
+acknowledges exact commit delivery; its retained timeout cancel can rollback
+only that unacknowledged token. Finalized requesters reprove that token after
+owner failover, so an old cancel cannot delete them from a successor's roster.
+Once a second player joins, the lobby creator
+may deploy or wait for up to four. A proposal/ack/commit barrier freezes membership, then the
+fireteam leaves the lobby for its own match room. Private rooms use high-entropy, unlisted invite
 codes: the room address is a one-way derivation of the code and every lobby
 message must carry a DID-bound HMAC proof. Payload identities must match their
 authenticated envelopes.
 
-Every fireteam keeps its full peer mesh. Peers advertise a coarse peerd capacity
-score derived from outgoing bandwidth/RTT and local CPU/memory hints; the best
-candidate advances the 15 Hz ship simulation. Inputs fan out directly to the
+Every fireteam keeps its full peer mesh. Where the adapter supports it, peers
+advertise a coarse capacity score derived from outgoing bandwidth/RTT and local
+CPU/memory hints; otherwise deterministic DID order chooses the authority. The
+best candidate advances the 15 Hz ship simulation. Inputs fan out directly to the
 mesh, while the authority sends ordered delta checkpoints at 5 Hz and periodic
 full checkpoints. If it disconnects, the next ranked, already-connected peer
-continues from its retained checkpoint. Voice uses browser-native WebRTC RTP
+continues from its retained checkpoint. The standalone web adapter's voice uses browser-native WebRTC RTP
 with Opus, acoustic echo cancellation, noise suppression, automatic gain, and
 the browser jitter buffer; only bounded SDP/ICE signaling uses direct messages.
 
@@ -73,16 +80,24 @@ npm run build:dwapp    # produce dist/dwapp/{hub,sim,fused}
 ```text
 index.html       hub and game document
 launcher.css     hub stylesheet
-bundle.js        complete module graph and embedded binary assets
-peerd.json       dwapp manifest with the dweb capability
+bundle.js        readable, self-contained JavaScript module graph
+assets/          byte-identical textures and audio exposed by peerd.assets
+peerd.json       dweb capability and attached game-developer actor contract
 ```
 
-Import the folder into peerd or publish it over the dweb. The hub is larger
-than peerd's interactive authoring ceiling because it embeds the game's meshes,
-textures, and audio, but remains within the import/publish package cap. It does
-not perform relative fetches in the opaque-origin runner.
+Import the deterministic `dwapp/charon-app.peerd` artifact into peerd, or use
+the folder while developing locally. The hub is larger
+than peerd's interactive authoring ceiling because it carries the game's source,
+textures, and audio, but remains within the import/publish package cap. Binary
+assets remain separate from readable code and resolve through `peerd.assets` in
+the opaque-origin runner. Opening the dwapp also
+binds its app-scoped game-developer actor. The manifest grants only bounded
+observe/action playtesting primitives through a code-first `app_code` surface,
+so one short script can act, wait, and inspect the result without granting raw
+DOM, network, microphone, or extension access.
 
-The checked-in `dwapp/hub/` folder is the ready-to-import release snapshot.
+The checked-in `dwapp/hub/` folder and `dwapp/charon-app.peerd` are generated
+from the same bytes; `npm run check:dwapp` rejects stale release output.
 See [docs/PEERD-HUB.md](docs/PEERD-HUB.md) for the contract and bridge surface.
 
 ## Verify

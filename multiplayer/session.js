@@ -44,6 +44,8 @@ class SessionBase {
     this.listeners = new Map();
     this.topicOff = new Map();
     this.allowedVoicePeers = new Set();
+    this.supportsCapacity = false;
+    this.supportsVoice = false;
   }
 
   emit(event, value) {
@@ -81,11 +83,16 @@ class SessionBase {
   }
 }
 
-class BridgeSession extends SessionBase {
+export class BridgeSession extends SessionBase {
   constructor(args) {
     super({ ...args, transport: 'peerd' });
     this.client = args.client;
     this.unsubscribers = [];
+    this.operations = new Set(args.operations ?? []);
+    this.supportsCapacity = this.operations.has('capacity');
+    this.supportsVoice = [
+      'voice-start', 'voice-peers', 'voice-mute', 'voice-status', 'voice-unlock', 'voice-stop',
+    ].every((op) => this.operations.has(op));
   }
 
   async subscribe(topic, callback) {
@@ -100,8 +107,16 @@ class BridgeSession extends SessionBase {
     return this.on(`topic:${wire}`, callback);
   }
 
-  publish(topic, data) {
-    return this.client.call('publish', { topic: scopedTopic(this.scope, topic), data });
+  publish(topic, data, { retain = false } = {}) {
+    return this.client.call('publish', { topic: scopedTopic(this.scope, topic), data, retain });
+  }
+
+  retain(topic) {
+    return this.client.call('retain', { topic: scopedTopic(this.scope, topic) });
+  }
+
+  history(topic) {
+    return this.client.call('history', { topic: scopedTopic(this.scope, topic) });
   }
 
   sendDirect(to, data) {
@@ -109,15 +124,20 @@ class BridgeSession extends SessionBase {
   }
 
   capacity() {
-    return this.client.call('capacity');
+    return this.supportsCapacity
+      ? this.client.call('capacity')
+      : Promise.resolve({ score: 0, outMbps: 0, rttMs: 0 });
   }
 
   setVoicePeers(peers) {
     if (!super.setVoicePeers(peers)) return;
-    this.client.call('voice-peers', { peers: [...this.allowedVoicePeers] }).catch(() => {});
+    if (this.supportsVoice) {
+      this.client.call('voice-peers', { peers: [...this.allowedVoicePeers] }).catch(() => {});
+    }
   }
 
   startVoice(options = {}) {
+    if (!this.supportsVoice) return Promise.reject(new Error('voice is unavailable in this Peerd bridge'));
     return this.client.call('voice-start', {
       muted: !!options.startMuted,
       peers: [...this.allowedVoicePeers],
@@ -125,18 +145,22 @@ class BridgeSession extends SessionBase {
   }
 
   setVoiceMuted(muted) {
+    if (!this.supportsVoice) return Promise.reject(new Error('voice is unavailable in this Peerd bridge'));
     return this.client.call('voice-mute', { muted: !!muted });
   }
 
   voiceStatus() {
+    if (!this.supportsVoice) return Promise.resolve({ active: false, muted: false, unavailable: true });
     return this.client.call('voice-status');
   }
 
   resumeVoicePlayback() {
+    if (!this.supportsVoice) return Promise.reject(new Error('voice is unavailable in this Peerd bridge'));
     return this.client.call('voice-unlock');
   }
 
   stopVoice() {
+    if (!this.supportsVoice) return Promise.resolve({ active: false, muted: false, unavailable: true });
     return this.client.call('voice-stop');
   }
 
@@ -160,25 +184,47 @@ class BridgeSession extends SessionBase {
   }
 }
 
-async function bridgeSession({ roomId, name }) {
+async function bridgeSession({ roomId, name, signal }) {
   const client = createDwebClient();
+  const cancelled = () => {
+    const error = new Error('multiplayer join cancelled');
+    error.code = 'JOIN_CANCELLED';
+    return error;
+  };
+  const onAbort = () => client.dispose();
+  if (signal?.aborted) { client.dispose(); throw cancelled(); }
+  signal?.addEventListener('abort', onAbort, { once: true });
   let hello;
   try { hello = await client.hello(); }
   catch (error) {
     client.dispose();
+    signal?.removeEventListener('abort', onAbort);
+    if (signal?.aborted) throw cancelled();
     error.code = 'BRIDGE_UNAVAILABLE';
     throw error;
   }
   if (!hello?.available) {
     client.dispose();
+    signal?.removeEventListener('abort', onAbort);
     const error = new Error('peerd bridge unavailable');
     error.code = 'BRIDGE_UNAVAILABLE';
     throw error;
   }
   let joined;
-  try { joined = await client.call('join', { roomId, name }); }
-  catch (error) { client.dispose(); throw error; }
-  const session = new BridgeSession({ roomId, name, did: joined.did, client });
+  // A host may leave this pending on explicit user consent. The bridge owns
+  // cancellation/rollback; the frame must not invent a short consent timer.
+  try { joined = await client.call('join', { roomId, name }, 0); }
+  catch (error) {
+    client.dispose();
+    signal?.removeEventListener('abort', onAbort);
+    if (signal?.aborted) throw cancelled();
+    throw error;
+  }
+  // Bridge v0 advertises no optional media/RTC-stat surface. Future hosts may
+  // add an explicit operations list without making old hosts receive unknown
+  // RPCs that fail after a lobby has otherwise joined successfully.
+  const operations = Array.isArray(hello.operations) ? hello.operations.filter((op) => typeof op === 'string') : [];
+  const session = new BridgeSession({ roomId, name, did: joined.did, client, operations });
   const updateMember = ({ did, meta } = {}) => {
     if (!did || did === session.did) return;
     session.members.set(did, { did, name: meta?.name || session.members.get(did)?.name || '' });
@@ -196,8 +242,16 @@ async function bridgeSession({ roomId, name }) {
     client.on('peer-gone', dropMember),
     client.on('direct', (message) => session.emit('direct', message)),
   );
-  await client.call('announce', { meta: { name } });
-  await session.refreshPresence();
+  try {
+    await client.call('announce', { meta: { name } });
+    await session.refreshPresence();
+  } catch (error) {
+    await session.close().catch(() => {});
+    signal?.removeEventListener('abort', onAbort);
+    if (signal?.aborted) throw cancelled();
+    throw error;
+  }
+  signal?.removeEventListener('abort', onAbort);
   return session;
 }
 
@@ -206,10 +260,13 @@ class BrowserSession extends SessionBase {
     super({ ...args, transport: 'web' });
     this.room = args.room;
     this.gossip = args.gossip;
+    this.sync = args.sync;
     this.presence = args.presence;
     this.direct = args.direct;
     this.identity = args.identity;
     this.unsubscribers = args.unsubscribers;
+    this.supportsCapacity = true;
+    this.supportsVoice = true;
     this.requestedVoicePeers = new Set();
     this.voice = createRoomVoice({
       selfDid: this.did,
@@ -226,9 +283,26 @@ class BrowserSession extends SessionBase {
     return off;
   }
 
-  async publish(topic, data) {
-    const envelope = await this.gossip.publish(scopedTopic(this.scope, topic), data);
+  async publish(topic, data, { retain = false } = {}) {
+    const wire = scopedTopic(this.scope, topic);
+    const envelope = retain ? await this.sync.publish(wire, data) : await this.gossip.publish(wire, data);
     return { id: envelope.id, ts: envelope.ts };
+  }
+
+  retain(topic) {
+    this.sync.retain(scopedTopic(this.scope, topic));
+    return Promise.resolve({ ok: true });
+  }
+
+  history(topic) {
+    const wire = scopedTopic(this.scope, topic);
+    return Promise.resolve(this.sync.history(wire).map((env) => ({
+      topic: wire,
+      from: env.from,
+      data: env.body.data,
+      ts: env.ts,
+      id: env.id,
+    })));
   }
 
   sendDirect(to, data) {
@@ -293,6 +367,7 @@ class BrowserSession extends SessionBase {
     this.presence.close();
     this.voice.stop();
     this.direct.close();
+    this.sync.close();
     this.gossip.close();
     this.room.leave();
   }
@@ -302,10 +377,14 @@ async function browserSession({ roomId, name, identity: suppliedIdentity }) {
   if (!globalThis.RTCPeerConnection || !globalThis.WebSocket || !globalThis.crypto?.subtle) {
     throw new Error('this browser does not provide WebRTC and WebCrypto');
   }
-  const { generateIdentity, joinRoom, createGossip, createPresence, createDirect } = await import('./peerd-browser.js');
+  const {
+    generateIdentity, joinRoom, createGossip, createPresence, createDirect,
+    createTopicSync, createMemoryTopicStore,
+  } = await import('./peerd-browser.js');
   const identity = suppliedIdentity ?? await generateIdentity();
   let room;
   let gossip;
+  let sync;
   let presence;
   let direct;
   let session;
@@ -313,9 +392,12 @@ async function browserSession({ roomId, name, identity: suppliedIdentity }) {
   try {
     room = await joinRoom({ roomId, identity, kind: 'website' });
     gossip = createGossip({ mesh: room.mesh });
+    sync = createTopicSync({ mesh: room.mesh, gossip, store: createMemoryTopicStore() });
     presence = createPresence({ gossip, selfDid: identity.did, meta: () => ({ name, mediaVoice: 1 }) });
     direct = createDirect({ mesh: room.mesh });
-    session = new BrowserSession({ roomId, name, did: identity.did, identity, room, gossip, presence, direct, unsubscribers });
+    session = new BrowserSession({
+      roomId, name, did: identity.did, identity, room, gossip, sync, presence, direct, unsubscribers,
+    });
   unsubscribers.push(
     room.onPeer(({ did } = {}) => {
       if (!did || did === session.did) return;
@@ -369,6 +451,7 @@ async function browserSession({ roomId, name, identity: suppliedIdentity }) {
     for (const off of unsubscribers.splice(0)) off();
     try { presence?.close(); } catch { /* partial setup */ }
     try { direct?.close(); } catch { /* partial setup */ }
+    try { sync?.close(); } catch { /* partial setup */ }
     try { gossip?.close(); } catch { /* partial setup */ }
     try { room?.leave(); } catch { /* partial setup */ }
     throw error;

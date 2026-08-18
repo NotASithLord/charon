@@ -1,3 +1,12 @@
+// 9: committed lobby admission remains rollback-safe until the requester
+// acknowledges its exact nonce/proposal; retained timeout cancels cannot ghost.
+// 8: match packets carry a mergeable authority term and launch uses a retained
+// prepare/receipt/final decision, healing reconnecting network partitions.
+// 7: lobby membership is a nonce-bound accept/confirm/commit state machine;
+// launch decisions are retained and receipt-gated with deterministic recovery.
+// 6: Quick Match is an explicit public-lobby discovery protocol. It never
+// auto-starts a shared queue cohort; lobby ownership and game authority are
+// distinct, and every match begins through the same proposal barrier.
 // 5: med packs — a peer's use travels as a 'medkit' packet the authority
 // validates, and spent-kit ids ride the full snapshot's world section.
 // 4: the row carries player armor (moved into the sim to fix a co-op death
@@ -6,18 +15,54 @@
 // positional array validated on its LENGTH, so a v2 peer would reject every
 // v3 row wholesale — the version is what keeps the two builds from meeting in
 // the same room at all instead of staring at frozen NPCs.
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 9;
 export const MAX_PLAYERS = 4;
 export const QUICKPLAY_ROOM = `charon:quickplay:v${PROTOCOL_VERSION}`;
 const ROOM_PREFIX = `charon:v${PROTOCOL_VERSION}:`;
 const SAFE_CODE = /^[a-z0-9][a-z0-9-]{5,47}$/;
-const GAME_KINDS = new Set(['state', 'hit', 'explosion', 'shot', 'snapshot', 'medkit']);
+const PUBLIC_LOBBY = /^lobby-[a-z0-9]{12,48}$/;
+const GAME_KINDS = new Set(['election', 'state', 'hit', 'explosion', 'shot', 'snapshot', 'medkit']);
 
 export function createInviteCode(random = globalThis.crypto) {
   if (!random?.getRandomValues) throw new Error('secure random values are unavailable');
   const bytes = new Uint8Array(10);
   random.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(36).padStart(2, '0')).join('').slice(0, 20);
+}
+
+export function createPublicLobbyId(random = globalThis.crypto) {
+  return `lobby-${createInviteCode(random)}`;
+}
+
+export function isPublicLobbyId(value) {
+  return typeof value === 'string' && PUBLIC_LOBBY.test(value);
+}
+
+// Quick Match fills an existing open lobby before creating another. A caller
+// supplies authenticated room presence separately, so replayed advertisements
+// from a departed host never win. Full/malformed rosters are ignored.
+export function selectOpenLobby(advertisements, onlineDids, selfDid = '') {
+  const online = new Set(Array.from(onlineDids ?? [], String));
+  const candidates = Array.from(advertisements ?? []).flatMap((value) => {
+    if (!value || !isPublicLobbyId(value.lobbyId) || typeof value.host !== 'string'
+        || !online.has(value.host) || !Array.isArray(value.members)) return [];
+    const members = [...new Set(value.members.map(String))].sort();
+    if (members.length < 1 || members.length >= MAX_PLAYERS
+        || !members.includes(value.host)
+        || members.some((did) => !online.has(did))
+        || (selfDid && members.includes(String(selfDid)))) return [];
+    return [{
+      lobbyId: value.lobbyId,
+      host: value.host,
+      members,
+      ...(Number.isSafeInteger(value.term) ? { term: value.term } : {}),
+      ...(Number.isSafeInteger(value.revision) ? { revision: value.revision } : {}),
+    }];
+  });
+  candidates.sort((a, b) => b.members.length - a.members.length
+    || a.lobbyId.localeCompare(b.lobbyId)
+    || a.host.localeCompare(b.host));
+  return candidates[0] ?? null;
 }
 
 export function normalizeInviteCode(value) {
@@ -127,6 +172,11 @@ export function validGamePacket(packet) {
     && GAME_KINDS.has(packet.kind)
     && typeof packet.from === 'string'
     && packet.from.length <= 160
+    && typeof packet.authority === 'string'
+    && packet.authority.length > 0
+    && packet.authority.length <= 160
+    && Number.isSafeInteger(packet.authorityTerm)
+    && packet.authorityTerm >= 1
     && Number.isSafeInteger(packet.seq)
     && packet.seq > 0
     && packet.seq <= 0x7fffffff;

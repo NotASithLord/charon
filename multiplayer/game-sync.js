@@ -2,6 +2,10 @@ import * as THREE from '../engine/vendor/three.webgpu.module.js';
 import { hurtFloodForm } from '../sim/combat.js';
 import { makeAgent } from '../sim/init.js';
 import { PROTOCOL_VERSION, peerNumber, validGamePacket } from './protocol.js';
+import {
+  advanceAuthority, AUTHORITY_ARRIVAL_GRACE_MS, authorityIsPresent, mergeAuthorityElection,
+  packetMatchesAuthority,
+} from './authority.js';
 
 const STATE_HZ = 10;
 const SNAPSHOT_HZ = 5;
@@ -129,7 +133,13 @@ export function createGameSync({
   const allowed = new Set(members);
   const candidates = [...new Set([...hostOrder, host, ...members].filter((did) => allowed.has(did)))];
   let authorityDid = candidates[0] || session.did;
-  let authoritySeen = authorityDid === session.did;
+  let authorityTerm = 1;
+  // The match-room refresh happens before this synchronizer is constructed.
+  // Seed liveness from that current roster as well as future roster events, or
+  // a follower that joined second would never promote after the authority left.
+  let authoritySeen = authorityIsPresent(session.did, session.roster(), authorityDid);
+  let authorityGraceUntil = performance.now() + AUTHORITY_ARRIVAL_GRACE_MS;
+  let connectedDids = new Set(session.roster().map((peer) => peer.did).filter((did) => allowed.has(did)));
   const latestSequence = new Map();
   const lastShots = new Map();
   const peerNames = new Map();
@@ -147,21 +157,32 @@ export function createGameSync({
   let lastState = null;
   let lastStateAt = -Infinity;
   let lastFullSnapshotAt = -Infinity;
+  let lastElectionAt = -Infinity;
   const isAuthority = () => session.did === authorityDid;
 
-  const offRoster = session.on('roster', (roster) => {
-    const connected = new Set(roster.map((peer) => peer.did).filter((did) => allowed.has(did)));
-    if (connected.has(authorityDid)) {
-      authoritySeen = true;
-      return;
-    }
-    if (!authoritySeen) return;
-    const replacement = candidates.find((did) => connected.has(did));
-    if (!replacement || replacement === authorityDid) return;
-    authorityDid = replacement;
-    authoritySeen = true;
+  const refreshAuthority = (now = performance.now()) => {
+    const next = advanceAuthority({
+      selfDid: session.did,
+      authorityDid,
+      authoritySeen,
+      candidates,
+      connected: connectedDids,
+      now,
+      graceUntil: authorityGraceUntil,
+    });
+    authoritySeen = next.authoritySeen;
+    authorityGraceUntil = next.graceUntil;
+    if (!next.promoted) return;
+    authorityDid = next.authorityDid;
+    authorityTerm += 1;
     snapshotCache.clear();
     lastFullSnapshotAt = -Infinity;
+    lastElectionAt = -Infinity;
+  };
+
+  const offRoster = session.on('roster', (roster) => {
+    connectedDids = new Set(roster.map((peer) => peer.did).filter((did) => allowed.has(did)));
+    refreshAuthority();
   });
 
   const recipients = () => [...allowed].filter((did) => did !== session.did);
@@ -172,6 +193,8 @@ export function createGameSync({
       from: session.did,
       name,
       seq: ++sequence,
+      authority: authorityDid,
+      authorityTerm,
       ...payload,
     };
     return Promise.allSettled(recipients().map((did) => {
@@ -340,6 +363,22 @@ export function createGameSync({
     }
     if (!actionAllowed(actionBuckets, packet.from, packet.kind, performance.now())) return;
 
+    if (packet.kind === 'election') {
+      const merged = mergeAuthorityElection({ authorityDid, authorityTerm, candidates, packet });
+      if (!merged.accepted) return;
+      if (merged.authorityTerm > authorityTerm) {
+        authorityDid = merged.authorityDid;
+        authorityTerm = merged.authorityTerm;
+        authoritySeen = authorityIsPresent(session.did, session.roster(), authorityDid);
+        authorityGraceUntil = performance.now() + AUTHORITY_ARRIVAL_GRACE_MS;
+        snapshotCache.clear();
+        lastFullSnapshotAt = -Infinity;
+        lastElectionAt = -Infinity;
+      }
+      return;
+    }
+    if (!packetMatchesAuthority({ authorityDid, authorityTerm }, packet)) return;
+
     if (packet.kind === 'state') {
       applyRemotePose(packet.from, packet);
       return;
@@ -437,6 +476,11 @@ export function createGameSync({
     },
     update(dt, now) {
       if (closed) return;
+      refreshAuthority(performance.now());
+      if (isAuthority() && now - lastElectionAt >= 1_000) {
+        send('election');
+        lastElectionAt = now;
+      }
       stateAccumulator += dt;
       if (stateAccumulator >= 1 / STATE_HZ) {
         stateAccumulator %= 1 / STATE_HZ;
@@ -505,6 +549,7 @@ export function createGameSync({
     peers: () => session.roster().filter((peer) => !peer.self && allowed.has(peer.did)),
     isAuthority,
     authority: () => authorityDid,
+    authorityTerm: () => authorityTerm,
     close() {
       closed = true;
       offDirect();

@@ -1,8 +1,8 @@
 // Charon's sample bank on the FTL engine's positional synth (engine/
 // audio.js owns the harness: context, master bus, pan/attenuation,
 // through-hull far layer, ambience bed, klaxon). Everything here is the
-// GAME's sound: the procedural definitions of every one-shot the horror
-// runs on. No assets — all baked at first user gesture.
+// GAME's sound: a procedural fallback bank plus raw packaged recordings that
+// are decoded at first user gesture.
 
 import { PositionalSynth } from '../engine/audio.js';
 
@@ -101,18 +101,25 @@ export class GameAudio extends PositionalSynth {
     return r;
   }
 
-  // fetch + decode the real takes over the procedural bank. Async and
-  // best-effort: until a file lands the procedural voice still plays, and a
-  // missing or undecodable file just leaves the bank alone.
+  // Decode the real takes over the procedural bank. A peerd dwapp reads raw
+  // packaged bytes because its CSP deliberately blocks fetch, including blob:
+  // URLs; the ordinary website keeps the relative-fetch fallback.
   async _loadSamples() {
     // in parallel — loaded one after another, the last cue in the list was
     // still procedural seconds into the run
     await Promise.all(Object.entries(SAMPLES).map(async ([key, files]) => {
       const bufs = (await Promise.all(files.map(async (f) => {
         try {
-          const res = await fetch(`./assets/sounds/${f}`);
-          if (!res.ok) return null;
-          return await this.ctx.decodeAudioData(await res.arrayBuffer());
+          const path = `assets/sounds/${f}`;
+          const packed = globalThis.peerd?.assets?.bytes?.(path);
+          let bytes;
+          if (packed) bytes = packed.slice().buffer;
+          else {
+            const res = await fetch(`./${path}`);
+            if (!res.ok) return null;
+            bytes = await res.arrayBuffer();
+          }
+          return await this.ctx.decodeAudioData(bytes);
         } catch { return null; } // keep whatever is already in the bank
       }))).filter(Boolean);
       if (bufs.length) { this.buffers[key] = bufs[0]; this._alts[key] = bufs; }

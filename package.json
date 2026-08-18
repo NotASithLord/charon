@@ -1,6 +1,6 @@
 {
   "name": "halo-charon-poc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Halo Charon POC \u2014 simulation core + VAT rendering validation harness",
@@ -13,10 +13,12 @@
     "melee": "node sim/melee-check.mjs",
     "melee-arc": "node game/melee-check.mjs",
     "commands": "node sim/command-check.js",
-    "multiplayer": "node multiplayer/protocol-check.mjs",
-    "check": "npm run multiplayer && npm run determinism && npm run physics && npm run ragdoll && npm run melee && npm run melee-arc && npm run commands",
+    "multiplayer": "node multiplayer/protocol-check.mjs && node multiplayer/lobby-state-check.mjs && node multiplayer/lobby-consensus-check.mjs && node multiplayer/match-launch-check.mjs && node multiplayer/authority-check.mjs && node multiplayer/dweb-client-check.mjs && node multiplayer/session-cancel-check.mjs && node multiplayer/session-capability-check.mjs && node multiplayer/voice-check.mjs",
+    "check": "npm run multiplayer && npm run determinism && npm run physics && npm run ragdoll && npm run melee && npm run melee-arc && npm run commands && npm run check:dwapp",
     "vendor:peerd": "node scripts/vendor-peerd-browser.mjs",
     "build:dwapp": "node scripts/build-dwapp.mjs",
+    "check:dwapp": "node scripts/build-dwapp.mjs --check",
+    "check:peerd-compat": "node scripts/check-peerd-compat.mjs",
     "build:site": "node scripts/build-site.mjs",
     "deploy": "npm run build:site && wrangler deploy"
   },

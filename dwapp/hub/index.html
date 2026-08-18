@@ -182,18 +182,17 @@
   #hitmarker::before, #hitmarker::after {
     content: ""; position: absolute; background: #ff5348;
   }
-  #reloadGlare {
-    position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0;
-    background:
-      radial-gradient(circle at 58% 42%, rgba(235,246,255,0.95) 0 4%, rgba(174,211,242,0.46) 15%, transparent 48%),
-      linear-gradient(115deg, transparent 20%, rgba(196,225,250,0.22) 48%, transparent 72%);
-    mix-blend-mode: screen;
-  }
   #hitmarker::before { left: 10px; top: 0; width: 2px; height: 22px; }
   #hitmarker::after { left: 0; top: 10px; width: 22px; height: 2px; }
   #dmgdir {
     position: absolute; left: 50%; top: 50%; width: 130px; height: 130px;
     margin: -65px 0 0 -65px; pointer-events: none; opacity: 0; border-radius: 50%;
+  }
+  /* med pack used — a soft white-green wash from the screen edges, the
+     opposite voice of the red damage vignette */
+  #healflash {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0) 55%, rgba(150,235,180,0.35) 100%);
   }
   #dmgdir::before {
     content: ""; position: absolute; left: 50%; top: -6px; margin-left: -22px;
@@ -313,7 +312,7 @@
         <div class="hub-form">
           <label class="hub-label" for="player-name">Callsign</label><input class="hub-input" id="player-name" maxlength="24" autocomplete="nickname" placeholder="ODST callsign">
           <div class="hub-form-row">
-            <div><span class="hub-label">Public queue</span><button class="hub-button primary" id="quick-play"><b>QUICK MATCH</b><em>FIND FIRETEAM →</em></button><p class="hub-note">Pairs you with available survivors, up to four per fireteam.</p></div>
+            <div><span class="hub-label">Public lobbies</span><button class="hub-button primary" id="quick-play"><b>QUICK MATCH</b><em>FIND FIRETEAM →</em></button><p class="hub-note">Joins an open lobby, or creates one when every lobby is full.</p></div>
             <div><span class="hub-label">Invite-only</span><button class="hub-button" id="host-private"><b>CREATE PRIVATE ROOM</b><em>GENERATE CODE →</em></button><p class="hub-note">A high-entropy room code is never listed or advertised.</p></div>
           </div>
           <div style="margin-top:22px"><label class="hub-label" for="invite-code">Join with invite code</label><div class="invite-copy"><input class="hub-input" id="invite-code" maxlength="48" placeholder="paste fireteam code"><button class="mini-button" id="join-private">JOIN ROOM</button></div><p id="multiplayer-error" class="hub-error" role="alert" aria-live="assertive" hidden></p></div>
@@ -346,9 +345,9 @@
           <nav class="docs-tabs" role="tablist" aria-label="Developer documentation"><button id="docs-tab-overview" role="tab" data-doc-tab="overview" aria-controls="docs-panel-overview" aria-selected="true">01 · Overview</button><button id="docs-tab-network" role="tab" data-doc-tab="network" aria-controls="docs-panel-network" aria-selected="false" tabindex="-1">02 · Networking</button><button id="docs-tab-dwapp" role="tab" data-doc-tab="dwapp" aria-controls="docs-panel-dwapp" aria-selected="false" tabindex="-1">03 · dwapp package</button><button id="docs-tab-run" role="tab" data-doc-tab="run" aria-controls="docs-panel-run" aria-selected="false" tabindex="-1">04 · Run & test</button></nav>
           <div>
             <article id="docs-panel-overview" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-overview" data-doc-panel="overview"><h2>Architecture overview</h2><p>Charon separates the deterministic ship simulation from rendering and player input. The simulation writes one packed agent buffer; the 3D layer consumes it without owning world state.</p><h3>PRIMARY SURFACES</h3><ul><li><code>sim/</code> — ship graph, factions, combat, commands, and deterministic ticks.</li><li><code>game/</code> — first-person controls, 3D world, HUD, audio, and the hub launcher.</li><li><code>multiplayer/</code> — room abstraction, lobby protocol, game synchronization, and voice.</li></ul></article>
-            <article id="docs-panel-network" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-network" data-doc-panel="network" hidden><h2>Multiplayer protocol</h2><p>The peerd build calls the consent-gated dwapp bridge. The web build bundles peerd’s identity, room, mesh, gossip, presence, direct-message, and WebRTC transport primitives.</p><h3>FLOW</h3><ul><li>Join a lobby and authenticate peers with did:key identities.</li><li>Quick Match partitions ready peers into fireteams of four; private lobby messages require a DID-bound invite HMAC.</li><li>A proposal/ack/commit barrier freezes membership before deployment.</li><li>The fireteam leaves matchmaking for an isolated match room.</li><li>The authority advances the ship simulation and sends delta checkpoints; player poses and validated actions use direct WebRTC messages.</li><li>Voice uses native RTP/Opus; bounded SDP/ICE signaling uses authenticated direct messages.</li></ul><pre>lobby → ready → proposal / ack / commit → match room
-                                           ↘ direct state, actions, voice</pre></article>
-            <article id="docs-panel-dwapp" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-dwapp" data-doc-panel="dwapp" hidden><h2>peerd dwapp package</h2><p>The hub output contains a schema-1 <code>peerd.json</code> declaring <code>kind: "dwapp"</code>, one entry HTML document, one stylesheet, and one self-contained module bundle. Assets are embedded as data URIs so the opaque-origin sandbox performs no relative fetches.</p><h3>BRIDGE OPERATIONS USED</h3><p><code>hello</code>, <code>join</code>, <code>leave</code>, <code>presence</code>, <code>announce</code>, <code>subscribe</code>, <code>publish</code>, and the room voice operations. Raw WebRTC and microphone handles remain sealed in peerd’s trusted parent.</p><pre>npm run build:dwapp
+            <article id="docs-panel-network" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-network" data-doc-panel="network" hidden><h2>Multiplayer protocol</h2><p>The peerd build calls the consent-gated dwapp bridge. The web build bundles peerd’s identity, room, mesh, gossip, presence, direct-message, and WebRTC transport primitives.</p><h3>FLOW</h3><ul><li>Join a room and authenticate peers with did:key identities.</li><li>Quick Match discovers the fullest open public lobby and creates one only if none answers; private lobby messages require a DID-bound invite HMAC.</li><li>A nonce-bound join remains rollback-safe until the requester acknowledges exact commit delivery, so a delayed commit cannot leave a ghost member after timeout.</li><li>The lobby creator may deploy after a second player joins, or keep waiting up to four. Optional capacity ranking chooses simulation authority separately; otherwise DID order is deterministic.</li><li>A proposal/ack/commit-receipt/go-receipt/final-launch barrier freezes membership before deployment.</li><li>The fireteam leaves the lobby for an isolated match room.</li><li>The authority advances the ship simulation and sends term-bound delta checkpoints; player poses and validated actions use direct WebRTC messages.</li><li>The standalone adapter offers native RTP/Opus voice; the current Peerd bridge hides voice because it does not expose media operations.</li></ul><pre>discover → join / accept / admission-ack → ready → proposal / receipts → final launch → match room
+                                              ↘ direct state and actions</pre></article>
+            <article id="docs-panel-dwapp" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-dwapp" data-doc-panel="dwapp" hidden><h2>peerd dwapp package</h2><p>The hub output contains a schema-1 <code>peerd.json</code> declaring <code>kind: "dwapp"</code>, one entry HTML document, one stylesheet, and one self-contained readable module bundle. Textures and audio remain byte-identical binary files resolved through <code>peerd.assets</code> in the opaque-origin sandbox.</p><h3>BRIDGE OPERATIONS USED</h3><p>The current bridge provides <code>hello</code>, <code>join</code>, <code>leave</code>, <code>presence</code>, <code>announce</code>, <code>subscribe</code>, <code>publish</code>, <code>retain</code>, <code>history</code>, and <code>dm-send</code>. Optional capacity and voice operations are used only when advertised by a future bridge.</p><pre>npm run build:dwapp
 # output: dist/dwapp/hub/</pre></article>
             <article id="docs-panel-run" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-run" data-doc-panel="run" hidden><h2>Run and verify</h2><p>Use any static server for the web build. Multiplayer requires a secure browser context outside localhost because microphone capture and WebCrypto are secure-context APIs.</p><pre>npm run serve
 npm run multiplayer
@@ -357,7 +356,7 @@ npm run build:dwapp</pre></article>
           </div>
         </div>
       </section>
-      <footer class="hub-footer"><span>CHARON NETWORK PROTOCOL v2</span><span>WEBGPU · WEBGL2 · WEBRTC · PEERD DWEB</span></footer>
+      <footer class="hub-footer"><span>CHARON NETWORK PROTOCOL v9</span><span>WEBGPU · WEBGL2 · WEBRTC · PEERD DWEB</span></footer>
     </main>
   </div>
   <canvas id="c"></canvas>
@@ -378,8 +377,8 @@ npm run build:dwapp</pre></article>
   <div class="hud" id="hint"></div>
   <div class="hud" id="pinned">SOMETHING HAS HOLD OF YOU</div>
   <div id="hitmarker"></div>
-  <div id="reloadGlare" aria-hidden="true"></div>
   <div id="dmgdir"></div>
+  <div id="healflash"></div>
   <canvas id="tracker" width="150" height="150"></canvas>
   <div class="hud" id="networkHud" hidden><span id="networkState">P2P · 1 ONLINE</span><button id="gameVoice" type="button">MIC LIVE</button></div>
   <div id="frags">4 FRAG</div>

@@ -6,7 +6,7 @@
 import { build } from 'esbuild';
 import { access, mkdir } from 'fs/promises';
 import { dirname, join, resolve } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PEERD = resolve(process.env.PEERD_SOURCE || join(ROOT, '..', 'peerd'));
@@ -22,9 +22,9 @@ await build({
       "export { generateIdentity } from './peerd-distributed/identity/keypair.js';",
       "export { joinRoom } from './peerd-distributed/transport/rooms.js';",
       "export { createGossip } from './peerd-distributed/gossip/topic.js';",
+      "export { createTopicSync, createMemoryTopicStore } from './peerd-distributed/gossip/sync.js';",
       "export { createPresence } from './peerd-distributed/gossip/presence.js';",
       "export { createDirect } from './peerd-distributed/messaging/direct.js';",
-      "export { createRoomVoice, isRoomVoiceSignal } from './peerd-distributed/apps/room-voice.js';",
     ].join('\n'),
     resolveDir: EXTENSION,
     sourcefile: 'charon-peerd-browser-entry.js',
@@ -44,5 +44,16 @@ await build({
     },
   }],
 });
+
+// Execute the browser-format module in Node as a no-DOM smoke test. This
+// catches UMD/ESM wrapper mistakes that compile successfully but initialize an
+// empty codec namespace when the retained-topic transport is imported.
+const smoke = await import(`${pathToFileURL(OUT).href}?smoke=${Date.now()}`);
+for (const name of [
+  'generateIdentity', 'joinRoom', 'createGossip', 'createTopicSync',
+  'createMemoryTopicStore', 'createPresence', 'createDirect',
+]) {
+  if (typeof smoke[name] !== 'function') throw new Error(`vendored browser primitive missing: ${name}`);
+}
 
 console.log(`bundled peerd browser primitives → ${OUT}`);
