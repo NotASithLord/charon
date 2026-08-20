@@ -451,9 +451,11 @@ export const PARAMS = {
     // a scared human RUNS (user: they fled at a jog) — 4.2 m/s, a real
     // panicked sprint. The lunge (~6.6) and charge (~6.3) still beat it.
     civilian: 1.0, civilianFlee: 3.0, armed: 1.0, marine: 1.0,
-    // pods SKITTER (user note: they were too slow) — quicker than a walking
-    // human even off the lunge, matching how the games read
-    infection: 1.35, combatForm: 1.25,
+    // pods SKITTER at full tilt ALWAYS (user: they read fast when attacking
+    // and slow otherwise — one speed now). 4.7 = the old 1.35 base × the old
+    // 3.5 lunge burst, so the attack closing speed (~6.6 m/s) is unchanged
+    // and travel simply matches it.
+    infection: 4.7, combatForm: 1.25,
     carrier: 0.55, // lore: a slow, blundering waddle — people underestimate it
     drag: 0.5,
     // lore: combat forms don't jog at prey — they SPRINT, as fast as a
@@ -462,9 +464,12 @@ export const PARAMS = {
     // must be game-fast or every open-room assault dies crossing the floor.
     chargeMult: 3.6,
     // lore: an infection form closing on a host doesn't walk — it SKITTERS
-    // and leaps (~4.4 m/s). Must comfortably beat civilianFlee or no grab
-    // ever lands in open space (grabs now require physical reach).
-    infectionLunge: 3.5,
+    // and leaps. Must comfortably beat civilianFlee or no grab ever lands
+    // in open space (grabs now require physical reach). The old 3.5 burst
+    // was folded into the base multiplier (user: pods looked fast attacking
+    // and slow otherwise — they move at the fast speed ALL the time now);
+    // the plumbing stays so the charging flag still drives the sprint anim.
+    infectionLunge: 1.0,
     // ...and once the 2 m pounce commits (combat.pounce) it goes faster still.
     // Deliberately small: the hop is only ~4 sim ticks long at 15 Hz as it is,
     // and a bigger burst leaves the render's arc smoothing nothing to draw.

@@ -53,7 +53,7 @@ export const SHIP = {
     // doorways the geometry could not actually open (sealed-room bug)
     { id: 'd2corrF', name: 'Hab Corridor Fore', deck: 2, foreAft: 0.32, type: 'corridor', capacity: 8, w: 52, d: 4, row: 0, roles: ['artery'] },
     { id: 'd2corrA', name: 'Hab Corridor Aft', deck: 2, foreAft: 0.60, type: 'corridor', capacity: 8, w: 56, d: 4, row: 0, roles: ['artery'] },
-    { id: 'crewA', name: 'Crew Quarters A', deck: 2, foreAft: 0.28, type: 'room', capacity: 14, w: 18, d: 12, row: 1, roles: ['quarters', 'soft'] },
+    { id: 'crewA', name: 'Crew Quarters A', deck: 2, foreAft: 0.294, type: 'room', capacity: 14, w: 18, d: 12, row: 1, roles: ['quarters', 'soft'] },
     { id: 'mess', name: 'Mess Hall', deck: 2, foreAft: 0.38, type: 'open', capacity: 28, w: 20, d: 14, row: 1, roles: ['soft'] },
     { id: 'galley', name: 'Galley', deck: 2, foreAft: 0.46, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['soft'] },
     { id: 'crewB', name: 'Crew Quarters B', deck: 2, foreAft: 0.30, type: 'room', capacity: 14, w: 18, d: 12, row: -1, roles: ['quarters', 'soft'] },
@@ -78,7 +78,7 @@ export const SHIP = {
     // instead of knotting at one landing.
     { id: 'corrM', name: 'Main Corridor', deck: 3, foreAft: 0.43, type: 'corridor', capacity: 16, w: 74, d: 4, row: 0, roles: ['artery'] },
     { id: 'corrA', name: 'Main Corridor Aft', deck: 3, foreAft: 0.74, type: 'corridor', capacity: 10, w: 44, d: 4, row: 0, roles: ['artery'] },
-    { id: 'gym', name: 'Gymnasium', deck: 3, foreAft: 0.28, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['soft'] },
+    { id: 'gym', name: 'Gymnasium', deck: 3, foreAft: 0.2965, type: 'room', capacity: 8, w: 12, d: 9, row: 1, roles: ['soft'] },
     { id: 'security', name: 'Security', deck: 3, foreAft: 0.36, type: 'room', capacity: 10, w: 12, d: 10, row: 1, roles: ['marines'] },
     { id: 'stores3', name: 'Deck 3 Stores', deck: 3, foreAft: 0.44, type: 'room', capacity: 5, w: 8, d: 6, row: 1, roles: ['cargo'] },
     { id: 'armory', name: 'Armory', deck: 3, foreAft: 0.38, type: 'room', capacity: 8, w: 12, d: 9, row: -1, roles: ['armory', 'armed'] },
@@ -148,6 +148,8 @@ export const SHIP = {
     { a: 'd2corrF', b: 'mess', type: 'hatch', lockable: true },
     { a: 'd2corrF', b: 'galley', type: 'hatch', lockable: true },
     { a: 'mess', b: 'galley', type: 'hatch', lockable: true },
+    { a: 'crewA', b: 'mess', type: 'hatch', lockable: true },      // loop: crewA-mess-corrF
+    { a: 'd2corrA', b: 'galley', type: 'hatch', lockable: true },  // loop: galley bridges both hab corridors
     { a: 'd2corrF', b: 'crewB', type: 'hatch', lockable: true },
     { a: 'd2corrF', b: 'd2store', type: 'hatch', lockable: true },
     { a: 'd2corrF', b: 'd2corrA', type: 'hatch', lockable: true },
@@ -160,11 +162,13 @@ export const SHIP = {
     { a: 'd2corrA', b: 'brig', type: 'blastdoor', lockable: true },
     { a: 'rec', b: 'lounge', type: 'hatch', lockable: true },
     { a: 'cryo', b: 'hydro', type: 'hatch', lockable: true },
+    { a: 'cryo', b: 'brig', type: 'hatch', lockable: true },       // loop: brig-cryo-corrA
     { a: 'd2corrF', b: 'corrM', type: 'ladder', lockable: false }, // deck2->3 (fore landing)
     { a: 'd2corrA', b: 'corrM', type: 'lift', lockable: false },   // deck2->3 (aft landing)
     // ---- deck 3 · operations / weapons ----
     { a: 'corrM', b: 'gym', type: 'hatch', lockable: true },
     { a: 'corrM', b: 'security', type: 'hatch', lockable: true },
+    { a: 'gym', b: 'security', type: 'hatch', lockable: true },    // loop: gym-security-corrM
     { a: 'corrM', b: 'armory', type: 'blastdoor', lockable: true },
     { a: 'corrM', b: 'stores3', type: 'hatch', lockable: true },
     { a: 'corrM', b: 'fireCtl', type: 'hatch', lockable: true },
@@ -185,6 +189,7 @@ export const SHIP = {
     { a: 'engCorrF', b: 'pumps', type: 'hatch', lockable: true },
     { a: 'engCorrA', b: 'd5store', type: 'hatch', lockable: true },
     { a: 'engCorrA', b: 'workshopA', type: 'hatch', lockable: true },
+    { a: 'd5store', b: 'workshopA', type: 'hatch', lockable: true }, // loop: stores-workshop-corrA
     { a: 'engCorrA', b: 'eng', type: 'hatch', lockable: true },
     { a: 'eng', b: 'reactor', type: 'blastdoor', lockable: true },
     { a: 'lifesup', b: 'capPort', type: 'hatch', lockable: true },
@@ -201,6 +206,8 @@ export const SHIP = {
     // produced a degenerate sealed tube. Control still opens onto Hangar
     // Fore, which adjoins Hangar Aft.)
     { a: 'hangar', b: 'launchPort', type: 'hatch', lockable: true },
+    { a: 'hangarCtl', b: 'launchPort', type: 'hatch', lockable: true }, // loop: control-launch-hangar
+    { a: 'hangarA', b: 'launchPort', type: 'hatch', lockable: true },   // loop: the flight deck rings
     { a: 'hangar', b: 'launchStbd', type: 'hatch', lockable: true },
     { a: 'hangarA', b: 'vehicle', type: 'hatch', lockable: true },
     { a: 'hangarA', b: 'ordnance', type: 'hatch', lockable: true },
