@@ -418,7 +418,10 @@ export class Agents3D {
     // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
     // call for every carried rifle on the ship (marines, armed crew, armed
     // combat forms) — see game/rifle-model.js
-    this.rifle = makeInstanced(scene, carryGeometry(), 0x23272e);
+    // darkened in step with the viewmodel body (user: the gun read waaaay
+    // too light) — same near-black gunmetal family so carried rifles and
+    // your own stay consistent
+    this.rifle = makeInstanced(scene, carryGeometry(), 0x101317);
     this.rifle.material.roughness = 0.45;
     this.rifle.material.metalness = 0.65;
     // THE FLAMETHROWER IS NOT AN MA5 (it was rendering as one, which made the
