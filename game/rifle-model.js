@@ -64,7 +64,10 @@ export function buildRifleViewmodel() {
   // negative Vs edge-clamped into the atlas's white top row. So the color
   // IS the on-screen pixel: the games' gunmetal, straight up.
   const bodyMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2e33,
+    // (user: consistent now but waaaay too light) — this color IS the
+    // on-screen pixel (constant lighting term, see above), so it must be
+    // the DARK end of gunmetal, not the mid-grey swatch
+    color: 0x14161a,
     roughness: 0.88, metalness: 0.15,
   });
   const dispMat = new THREE.MeshStandardMaterial({ map: tex('display'), emissive: 0xffffff, emissiveMap: tex('display'), emissiveIntensity: 0.8, roughness: 0.6 });

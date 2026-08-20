@@ -527,17 +527,23 @@ export function resolveCombat(sim, dt) {
       const targets = sim.occupants(floodNode).filter((a) => !a.dead && a.hp > 0 && !a.downed &&
         (a.faction === FACTION.COMBAT || a.faction === FACTION.CARRIER));
       if (!targets.length) continue;
-      sim.gunfireAt(gunNode);
+      let stamped = false;
       for (const sh of shooters) {
         if (sim.t < (sh.nextShotAt ?? 0)) continue;
         // nearest live target (in the deck plane; the storey drop is the same
-        // for all, so it just pushes everything past rifleFalloffM -> accFar)
+        // for all, so it just pushes everything past rifleFalloffM -> accFar).
+        // LOS is HONEST now (user: line-of-sight rules on the stairs): the
+        // sight segment must pass over the well opening — a form deep in the
+        // hangar under the entry ring's floor cannot be seen or shot, and a
+        // shooter far from the well has no angle down it.
         let best = null, bestD = Infinity;
         for (const t of targets) {
+          if (!sim.losClear(sh.x, sh.y, gunNode, t.x, t.y, floodNode)) continue;
           const d = Math.hypot(t.x - sh.x, t.y - sh.y) + (t.faction === FACTION.CARRIER ? 1000 : 0);
           if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && t.id < (best?.id ?? Infinity))) { bestD = d; best = t; }
         }
-        if (!best) break;
+        if (!best) continue; // this shooter has no angle; the next one may
+        if (!stamped) { stamped = true; sim.gunfireAt(gunNode); }
         const gun = sh.faction === FACTION.MARINE ? P.combat.marine.gun : P.combat.armed.gun;
         sh.nextShotAt = sim.t + 1 / gun.rof;
         let acc = gun.accFar; // always the long cross-level shot

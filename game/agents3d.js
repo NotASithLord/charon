@@ -418,7 +418,10 @@ export class Agents3D {
     // real MA5 silhouette (first-strike asset), merged grip+gun, one draw
     // call for every carried rifle on the ship (marines, armed crew, armed
     // combat forms) — see game/rifle-model.js
-    this.rifle = makeInstanced(scene, carryGeometry(), 0x23272e);
+    // darkened in step with the viewmodel body (user: the gun read waaaay
+    // too light) — same near-black gunmetal family so carried rifles and
+    // your own stay consistent
+    this.rifle = makeInstanced(scene, carryGeometry(), 0x101317);
     this.rifle.material.roughness = 0.45;
     this.rifle.material.metalness = 0.65;
     // THE FLAMETHROWER IS NOT AN MA5 (it was rendering as one, which made the
@@ -1632,7 +1635,9 @@ export class Agents3D {
         const [sx, sz] = this.world.simToWorld(sr.x, sr.y, sr.deck);
         let [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
         const ey = elevOf(sr.deck) + 1.3;
-        let ty = elevOf(tr.deck) + 0.7;
+        // + hoverY: fire AT a leaping form converges on the airborne body,
+        // not the patch of floor under its arc
+        let ty = elevOf(tr.deck) + 0.7 + (tr.hoverY > 1e-3 ? tr.hoverY : 0);
         // the render honors the same sight limit as the sim (user: marines
         // visibly lasering a form they couldn't possibly see in the dark)
         const range = Math.hypot(tx - sx, tz - sz);
@@ -1702,8 +1707,11 @@ export class Agents3D {
         if (!sr || !tr) continue;
         const [sx, sz] = this.world.simToWorld(sr.x, sr.y, sr.deck);
         let [tx, tz] = this.world.simToWorld(tr.x, tr.y, tr.deck);
-        const ey = elevOf(sr.deck) + 1.05;
-        let ty = elevOf(tr.deck) + 0.9;
+        // + hoverY (user: a leaping armed form's muzzle flash came from the
+        // floor beneath it) — the body renders at elev + hoverY, so the shot
+        // leaves the airborne rifle, not the deck under the arc
+        const ey = elevOf(sr.deck) + 1.05 + (sr.hoverY > 1e-3 ? sr.hoverY : 0);
+        let ty = elevOf(tr.deck) + 0.9 + (tr.hoverY > 1e-3 ? tr.hoverY : 0);
         // a host's weapon fired one-handed sprays WIDE (lore: suppressive
         // noise, not marksmanship) — big visible scatter
         const fdx = tx - sx, fdz = tz - sz;
