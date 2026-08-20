@@ -309,15 +309,18 @@ export function createGameSync({
         let lockChanged = false;
         for (let index = 0; index < edgeState.length; index++) {
           const bits = edgeState[index];
-          if (!Number.isInteger(bits) || bits < 0 || bits > 3) continue;
+          if (!Number.isInteger(bits) || bits < 0 || bits > 7) continue;
           const edge = sim.graph.edges[index];
           const locked = !!(bits & 1);
           if (edge.locked !== locked) { edge.locked = locked; lockChanged = true; }
           edge.burning = !!(bits & 2);
+          const busted = !!(bits & 4); // flood blew the door out — permanent
+          if (edge.busted !== busted) { edge.busted = busted; lockChanged = true; }
         }
         // cached flow fields read link.locked — the per-tick wipe that used
-        // to cover this apply is gone (graph.sweepBurns replaced it)
-        if (lockChanged) sim.graph.invalidatePathCache();
+        // to cover this apply is gone (graph.sweepBurns replaced it); the
+        // sensing caches (near1/visCache) read locks too
+        if (lockChanged) { sim.graph.invalidatePathCache(); sim._precomputeSensing(); }
       }
       if (packet.world.outcome === null || packet.world.outcome === 'contained' || packet.world.outcome === 'lost') {
         sim.outcome = packet.world.outcome;
@@ -332,6 +335,10 @@ export function createGameSync({
       if (Array.isArray(packet.world.medkits) && packet.world.medkits.length <= 64) {
         const used = new Set(packet.world.medkits.filter((id) => Number.isSafeInteger(id)));
         for (const kit of sim.medkits) kit.used = used.has(kit.id);
+      }
+      if (Array.isArray(packet.world.armorpacks) && packet.world.armorpacks.length <= 64) {
+        const used = new Set(packet.world.armorpacks.filter((id) => Number.isSafeInteger(id)));
+        for (const pack of sim.armorPacks) pack.used = used.has(pack.id);
       }
       if (packet.world.stats && typeof packet.world.stats === 'object') {
         for (const key of Object.keys(sim.stats)) {
@@ -439,6 +446,10 @@ export function createGameSync({
       // kit within reach of where the authority believes they stand.
       const sender = playerAgents.get(packet.from);
       if (sender) sim.playerUseMedkit(sender);
+    } else if (packet.kind === 'armorpack') {
+      // same shape as medkit: playerUseArmorPack revalidates everything
+      const sender = playerAgents.get(packet.from);
+      if (sender) sim.playerUseArmorPack(sender);
     } else if (packet.kind === 'explosion') {
       const values = [packet.deck, packet.x, packet.y, packet.radius, packet.damage];
       if (!packedIntegers(values) || !Number.isInteger(packet.deck) || packet.deck < 1 || packet.deck > 5
@@ -464,6 +475,9 @@ export function createGameSync({
     },
     medkit() {
       send('medkit', {});
+    },
+    armorpack() {
+      send('armorpack', {});
     },
     explosion(deck, x, y, radius, damage) {
       send('explosion', { deck, x: pack(x), y: pack(y), radius: pack(radius), damage: pack(damage) });
@@ -522,7 +536,7 @@ export function createGameSync({
             agents: snapshot.rows,
             removed: snapshot.removed,
             ...(full ? { world: {
-              edges: sim.graph.edges.map((edge) => (edge.locked ? 1 : 0) | (edge.burning ? 2 : 0)),
+              edges: sim.graph.edges.map((edge) => (edge.locked ? 1 : 0) | (edge.burning ? 2 : 0) | (edge.busted ? 4 : 0)),
               outcome: sim.outcome,
               // THE CLOCK ON THE END CARD (co-op report: both won, the host's
               // time was 2 s faster). outcomeAt is frozen when the last form
@@ -540,6 +554,7 @@ export function createGameSync({
               // spent med packs — full state, so a peer's optimistic local
               // use is confirmed (or reverted) by the next full snapshot
               medkits: sim.medkits.filter((kit) => kit.used).map((kit) => kit.id),
+              armorpacks: sim.armorPacks.filter((pack) => pack.used).map((pack) => pack.id),
               stats: { ...sim.stats },
             } } : {}),
           });

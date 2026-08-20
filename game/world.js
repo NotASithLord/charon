@@ -1601,11 +1601,16 @@ export class World {
     for (let k = 0; k < 2; k++) {
       const side = k === 0 ? -1 : 1;
       let off = side * (PW / 2 - 0.03 + slide);
-      let tilt = 0;
-      if (d.buckle) { off += side * d.buckle.gap / 2; tilt = side * d.buckle.tilt; }
+      let tilt = 0, out = 0;
+      if (d.buckle) {
+        off += side * d.buckle.gap / 2;
+        tilt = side * d.buckle.tilt;
+        out = d.buckle.out ?? 0; // busted: panels shoved out of the frame
+      }
       E.set(0, -d.phi, tilt);
       Q.setFromEuler(E);
-      P.set(d.x + ux * off, d.elev + PH / 2, d.z + uz * off);
+      // (-uz, ux) is the door's normal — `out` pushes along it
+      P.set(d.x + ux * off - uz * out, d.elev + PH / 2, d.z + uz * off + ux * out);
       M.compose(P, Q, S.set(1, 1, 1));
       mesh.setMatrixAt(d.slots[k], M);
     }
@@ -1617,7 +1622,8 @@ export class World {
     // from the realism and is unnecessary"): a sealed door's track is DEAD —
     // its lamp is simply off, and the tell is physical: the panels sit ajar
     // (updateDoors) with a gap you can see and shoot through.
-    if (d.bad) c.setHex(0xd77a1c);                    // jammed: amber gutter
+    if (d.edge.busted) c.setHex(0x000000);            // blown off its track: dead
+    else if (d.bad) c.setHex(0xd77a1c);               // jammed: amber gutter
     else if (d.edge.locked) c.setHex(0x000000);       // sealed: lamp dead
     else c.setHex(0x38d06a);                          // powered track: green
     for (const s of d.lampSlots) this.doorLamps.setColorAt(s, c);
@@ -1807,8 +1813,10 @@ export class World {
     const flick = Math.sin(performance.now() * 0.013) * Math.sin(performance.now() * 0.0037);
     for (const d of this.doors) {
       // doors change lock state MID-GAME now (armory seal release, and the
-      // sim's jam/unjam rotation) — flip the status lamp both ways
-      if (!d.edge.locked && d._lampLocked !== false) {
+      // sim's jam/unjam rotation) — flip the status lamp both ways.
+      // A busted door's lamp was killed for good when it blew.
+      if (d.edge.busted && d._busted) { /* wreck: lamp stays dead */ }
+      else if (!d.edge.locked && d._lampLocked !== false) {
         d._lampLocked = false;
         this._setLamp(d);
         this.doorLamps.instanceColor.needsUpdate = true;
@@ -1831,7 +1839,25 @@ export class World {
       // narrower than a body: sim pathing still refuses the edge, the player
       // capsule cannot fit, and isWalkable is unchanged.
       let want = 0;
-      if (d.edge.locked) {
+      if (d.edge.busted) {
+        // BUSTED OUTWARD (user: a dedicated flood charge breaks the door
+        // permanently): panels blown apart, off their track, shoved out of
+        // the frame — and they never move again. Deterministic per-door
+        // shape so every peer sees the same wreck.
+        if (!d._busted) {
+          d._busted = true;
+          const h = (d.edge.i * 2654435761) >>> 0;
+          d.buckle = {
+            gap: 0.85 + (h % 100) / 100 * 0.35,
+            tilt: 0.14 + ((h >>> 8) % 100) / 100 * 0.12,
+            out: ((h & 1) ? 1 : -1) * (0.30 + ((h >>> 16) % 100) / 100 * 0.15),
+          };
+          this._setLamp(d); // track is dead
+          this.doorLamps.instanceColor.needsUpdate = true;
+          this._stampDoor(d); anyStamp = true;
+        }
+        want = 0.62;
+      } else if (d.edge.locked) {
         want = DOORS.ajar01 ?? 0.22;
       } else {
         const list = byDeck[d.deck] ?? [];
@@ -1882,7 +1908,7 @@ export class World {
     const [sx, sy] = this.worldToSim(wx, wz, deck);
     if (!this.isWalkable(deck, sx, sy) || this.propBlocked(deck, sx, sy)) return true;
     for (const d of this.doors) {
-      if (d.deck !== deck || d.open01 >= 0.92) continue;
+      if (d.deck !== deck || d.open01 >= 0.92 || d.edge.busted) continue;
       const dx = wx - d.x, dz = wz - d.z;
       const along = dx * Math.cos(d.phi) + dz * Math.sin(d.phi);
       const through = -dx * Math.sin(d.phi) + dz * Math.cos(d.phi);

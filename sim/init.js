@@ -92,6 +92,7 @@ export function makeAgent(kind, node, graph) {
     // flee / panic bookkeeping
     lastFledFrom: undefined, panicUntil: undefined, desperateSince: undefined,
     steeredTick: undefined, // last tick _spatialSteer/held-spin displaced the body (MOVING flag)
+    busting: null,          // std link a combat form is battering open (door bust)
     givingGround: false,    // shooter backing away while it fires (morale)
     armor: 0, armorHitAt: -99, // player ballistic armor (sim-owned; see hurtHuman)
     frags: 0, nextFragAt: undefined, // marine grenades

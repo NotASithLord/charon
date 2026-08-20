@@ -85,7 +85,7 @@ export class Player extends FpsController {
       // the flamethrower gets first refusal on the press — the game layer owns
       // the "do I already have one / is the tank full" question, so it answers
       // whether it consumed the key rather than us guessing
-      if (!this.onFlamerTaken?.() && !this.onMedkitUsed?.()) {
+      if (!this.onFlamerTaken?.() && !this.onMedkitUsed?.() && !this.onArmorUsed?.()) {
         const src = this.ammoSource();
         if (src && this.onAmmoTaken) this.onAmmoTaken(src);
       }
@@ -324,6 +324,13 @@ export class Player extends FpsController {
   medkitSource() {
     if (this.dead || this.agent.hp >= this.agent.maxHp) return null;
     return this.sim.medkitNear(this.agent);
+  }
+
+  // ARMOR PACKS (user): offered only when the plates are actually dented —
+  // at full armor the pack stays racked, same rule as the med packs
+  armorSource() {
+    if (this.dead || (this.agent.armor ?? 0) >= this.sim.P.player.armor) return null;
+    return this.sim.armorPackNear(this.agent);
   }
 
   // THE FLAMETHROWER, separately (user). Kept apart from ammoSource so the two

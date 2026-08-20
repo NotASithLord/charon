@@ -69,12 +69,18 @@ export function applyCommand(sim, entry) {
     case CMD.SET_DOOR: {
       const e = g.edges[cmd.edgeIdx];
       if (!e || !e.lockable) break;
+      // a busted door is GONE — the flood blew it off its track for good
+      if (e.busted) {
+        sim.log('command', `cannot actuate ${g.node(e.a).name}↔${g.node(e.b).name} — the door is destroyed`);
+        break;
+      }
       // can't actuate a blast door on an unpowered deck (core spec §4.5)
       if (cmd.locked && (g.unpowered[e.a] || g.unpowered[e.b])) {
         sim.log('command', `cannot seal ${g.node(e.a).name}↔${g.node(e.b).name} — no power`);
         break;
       }
       e.locked = !!cmd.locked;
+      e.commanded = true; // the crew's override outranks the malfunction clock
       sim.graph.invalidatePathCache();
       sim._precomputeSensing(); // locks change LOS/hearing topology
       sim.log('command', `${cmd.locked ? 'sealed' : 'opened'} ${g.node(e.a).name}↔${g.node(e.b).name}`);

@@ -15,7 +15,7 @@
 // positional array validated on its LENGTH, so a v2 peer would reject every
 // v3 row wholesale — the version is what keeps the two builds from meeting in
 // the same room at all instead of staring at frozen NPCs.
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 export const MAX_PLAYERS = 4;
 export const QUICKPLAY_ROOM = `charon:quickplay:v${PROTOCOL_VERSION}`;
 const ROOM_PREFIX = `charon:v${PROTOCOL_VERSION}:`;

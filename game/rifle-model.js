@@ -55,11 +55,17 @@ function tex(name) {
 // viewmodel — one instance on screen, so the extra draw calls are free.
 export function buildRifleViewmodel() {
   const group = new THREE.Group();
-  // cool steel tint over the body texture (first-strike's viewmodel look —
-  // the untinted map read too warm/bright under the torch)
+  // MATTE GREY, color only (user: the body rendered striped/white). Bisected
+  // live: this vendored WebGPU build compiles the viewmodel body's shader
+  // with a constant lighting term — output ≈ material.color regardless of
+  // every light in the scene (all locked to 0: no change; magenta in →
+  // magenta out) — and an async-loading map bakes in as its white
+  // placeholder, which is also what striped the original: the port's
+  // negative Vs edge-clamped into the atlas's white top row. So the color
+  // IS the on-screen pixel: the games' gunmetal, straight up.
   const bodyMat = new THREE.MeshStandardMaterial({
-    map: tex('body'), color: new THREE.Color(0.68, 0.71, 0.82),
-    roughness: 0.5, metalness: 0.35,
+    color: 0x2a2e33,
+    roughness: 0.88, metalness: 0.15,
   });
   const dispMat = new THREE.MeshStandardMaterial({ map: tex('display'), emissive: 0xffffff, emissiveMap: tex('display'), emissiveIntensity: 0.8, roughness: 0.6 });
   const compassMat = new THREE.MeshStandardMaterial({ map: tex('compass'), emissive: 0xffffff, emissiveMap: tex('compass'), emissiveIntensity: 0.8 });

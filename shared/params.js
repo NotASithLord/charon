@@ -110,10 +110,25 @@ export const PARAMS = {
     linkDownMinSec: 6, linkDownMaxSec: 18,  // mean 12
   },
   // lockedFraction: per-run graph mutation (visible variety run to run).
-  // shiftEverySec: the damaged ship keeps shifting — every ~2 min (jittered)
-  // a working door jams or a jammed one grinds free, connectivity-guarded
-  // (user: rotate jams, but never cut anyone off from the rest of the ship)
-  door: { lockedFraction: 0.25, shiftEverySec: 110 },
+  // MALFUNCTIONING DOORS ARE ALIVE (user): every faulty door runs its own
+  // deterministic stuck/open timeline. A door with a way around it dwells
+  // 1-10 min per state; a door that would CUT the ship (no route around at
+  // the moment it tries to close) reopens in 30-90s and skips half its
+  // close opportunities. latentFraction of healthy doors carry the fault
+  // too — they seize for the first time mid-session.
+  // bust*Sec: a dedicated flood charge breaks a closed door PERMANENTLY —
+  // form-seconds of battering (two forms halve it), blast doors hold longer.
+  door: {
+    lockedFraction: 0.25,
+    // the ship graph is nearly a tree (52 of 53 doors are sole-route), so
+    // closures are almost always the short choke kind — a fatter latent
+    // population keeps the ship visibly alive without ever caging anyone
+    latentFraction: 0.2,
+    dwellMinSec: 60, dwellMaxSec: 600,
+    chokeClosedMinSec: 30, chokeClosedMaxSec: 90,
+    chokeSkipClose: 0.5,
+    bustHatchSec: 8, bustBlastSec: 20,
+  },
   ambush: { firstStrikeMult: 3.0 }, // PLACEHOLDER, applies to both sides
   motionTracker: { rangeHops: 1 },  // reveals a moving infection form in a vent
   power: { unstableFraction: 0.20 },// PLACEHOLDER
@@ -159,7 +174,17 @@ export const PARAMS = {
   // ends disagreed about whether it was alive. The authority owns it now, so
   // both players get the same buffer and the same death. Mirrors fps-data's
   // old ODST numbers exactly.
-  player: { armor: 50, armorDelaySec: 4.2, armorRegenPerSec: 22 },
+  // NO AUTO-REGEN (user: shields replaced by armor) — armor soaks damage
+  // before health and comes back ONLY from armor packs found in the world.
+  player: { armor: 50 },
+  // racked in the armory + scattered through the ship, per boarder — same
+  // machinery as med packs: seed-stable pools, issued as players attach,
+  // used on the spot with E, restores armor to full.
+  armorpacks: {
+    perPlayerArmory: 3,
+    perPlayerScatter: 4,
+    useRadiusM: 2.0,
+  },
   morale: {
     marineHoldForms: 2,    // stand your ground at this many forms or fewer
     backpedalMps: 1.0,     // retreating fire is a walk backwards, not a sprint

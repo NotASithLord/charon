@@ -136,6 +136,10 @@ export class Sim {
       }
     }
 
+    // the malfunction population and each door's first flip time — after the
+    // fire block so fireSite doors are already marked and stay excluded
+    this._seedDoorFaults();
+
     // MED PACK POOL (user: Halo CE med packs — 2 per player racked in the
     // medbay, 2 per player scattered through the ship "as part of the seed").
     // Placement comes off a DEDICATED RNG stream keyed off the seed, so the
@@ -175,6 +179,38 @@ export class Sim {
     this.medkits = [];
     this._medkitPlayers = 0;
 
+    // ARMOR PACK POOL (user: armor replaces shields — no regen, packs only;
+    // 3 per player racked in the armory, 4 per player scattered). Identical
+    // machinery to the med packs above: dedicated seed-keyed stream, pools
+    // sized for the 4-player cap, issued by slot as players attach.
+    {
+      const arng = new RNG(this.seed + ':armorpacks');
+      const inRoom = (n) => [
+        n.x + arng.range(-Math.max(0.4, n.w / 2 - 1.0), Math.max(0.4, n.w / 2 - 1.0)),
+        n.y + arng.range(-Math.max(0.4, n.d / 2 - 1.0), Math.max(0.4, n.d / 2 - 1.0)),
+      ];
+      const armory = graph.node(graph.byId.get('armory'));
+      this._armorPoolArmory = [];
+      for (let i = 0; i < 12; i++) {
+        const [x, y] = inRoom(armory);
+        this._armorPoolArmory.push({ node: armory.idx, deck: armory.deck, x, y });
+      }
+      const rooms = [];
+      for (let i = 0; i < graph.n; i++) {
+        const n = graph.node(i);
+        if (n.type !== 'room' || n.id === 'armory' || i === graph.breachNode) continue;
+        rooms.push(n);
+      }
+      arng.shuffle(rooms);
+      this._armorPoolScatter = [];
+      for (let i = 0; i < Math.min(16, rooms.length); i++) {
+        const [x, y] = inRoom(rooms[i]);
+        this._armorPoolScatter.push({ node: rooms[i].idx, deck: rooms[i].deck, x, y });
+      }
+    }
+    this.armorPacks = [];
+    this._armorPlayers = 0;
+
     this.hive = new Hive(this);
     assignFirstSweep(this);
     this._refreshOccupancy();
@@ -183,7 +219,8 @@ export class Sim {
     this.writeBuffer();
   }
 
-  // --- sensing precomputation: locks are fixed for the whole run ---
+  // --- sensing precomputation: rebuilt via _doorMutated whenever a lock
+  // flips (malfunction rotation, SET_DOOR, armory release, door busts) ---
   _precomputeSensing() {
     const g = this.graph;
     this.visCache = [];
@@ -351,6 +388,7 @@ export class Sim {
     a.hasRadio = true;
     this.spawn(a);
     this._issueMedkits();
+    this._issueArmorPacks();
     this.log('radio', opts.odst
       ? 'an ODST hits the deck, MA5 hot (you)'
       : 'a lone survivor is moving through the ship (you)');
@@ -373,6 +411,44 @@ export class Sim {
       const spot = this._medkitPoolScatter[slot];
       if (spot) this.medkits.push({ id: 200 + slot, ...spot, used: false });
     }
+  }
+
+  // one boarder's armor pack allotment — same slot-id scheme as med packs
+  // (300+ armory, 400+ scatter) so co-op clients agree on pack identity
+  _issueArmorPacks() {
+    const P = this.P.armorpacks;
+    const idx = this._armorPlayers++;
+    for (let i = 0; i < P.perPlayerArmory; i++) {
+      const slot = idx * P.perPlayerArmory + i;
+      const spot = this._armorPoolArmory[slot];
+      if (spot) this.armorPacks.push({ id: 300 + slot, ...spot, used: false });
+    }
+    for (let i = 0; i < P.perPlayerScatter; i++) {
+      const slot = idx * P.perPlayerScatter + i;
+      const spot = this._armorPoolScatter[slot];
+      if (spot) this.armorPacks.push({ id: 400 + slot, ...spot, used: false });
+    }
+  }
+
+  armorPackNear(a) {
+    const R = this.P.armorpacks.useRadiusM;
+    for (const k of this.armorPacks) {
+      if (k.used || k.deck !== a.deck) continue;
+      if (Math.hypot(k.x - a.x, k.y - a.y) <= R) return k;
+    }
+    return null;
+  }
+
+  // E at an armor pack — plates back to full on the spot (user: armor is
+  // replenished separately by scattered armor packs, never by waiting)
+  playerUseArmorPack(a) {
+    if (!a || a.dead || a.hp <= 0 || (a.armor ?? 0) >= this.P.player.armor) return false;
+    const k = this.armorPackNear(a);
+    if (!k) return false;
+    k.used = true;
+    a.armor = this.P.player.armor;
+    this.log('combat', 'you strap on fresh armor plates (you)', k.node, k.x, k.y);
+    return true;
   }
 
   // the unused kit within arm's reach of this agent, or null
@@ -796,7 +872,6 @@ export class Sim {
       this._armoryWatch();
       this._checkLastStand();
       this._lastStandStragglers();
-      this._doorShiftTick();
       this.stats.conversionsRound = 0;
       this._expireCalls();
     } else if (halfRound === (this.strategicEvery >> 1)) {
@@ -805,18 +880,12 @@ export class Sim {
       strategicSquads(this);
     }
 
+    this._doorFlipTick(); // per-tick: each faulty door keeps its own clock
     updateHumansTick(this, dt);
     updateFloodTick(this, dt);
     this._grenadeTick();
-    // player armor recovers after a lull (authority-owned; peers read it off
-    // the snapshot row, so both ends agree on how much buffer is left)
-    for (const a of this.agents) {
-      if (!a.isPlayer || a.dead || a.hp <= 0) continue;
-      const P = this.P.player;
-      if (this.t - (a.armorHitAt ?? -99) >= P.armorDelaySec && a.armor < P.armor) {
-        a.armor = Math.min(P.armor, a.armor + P.armorRegenPerSec * dt);
-      }
-    }
+    // armor does NOT regenerate (user: shields replaced by armor) — plates
+    // come back only from armor packs (playerUseArmorPack)
     this._advanceMovement(dt);
     this._separate(dt);
     this._fireAvoid(dt);
@@ -1004,46 +1073,74 @@ export class Sim {
     this.calls = this.calls.filter((c) => this.t - c.t < this.P.radio.callFadeSec * 2);
   }
 
-  // DOOR ROTATION (user: some doors suddenly jam, others unjam over a
-  // session — the damaged ship keeps shifting — but never in a way that
-  // cuts anyone off from the rest of the ship). Deterministic: seeded RNG,
-  // fired on the strategic cadence. Excluded: the armory seal (event gate)
-  // and the authored fire-site doors (they ARE the damage).
-  _doorShiftTick() {
-    const every = this.P.door.shiftEverySec ?? 110;
-    if (this._nextDoorShiftAt === undefined) {
-      this._nextDoorShiftAt = every * (0.7 + this.rng.range(0, 0.6));
-    }
-    if (this.t < this._nextDoorShiftAt) return;
-    this._nextDoorShiftAt = this.t + every * (0.7 + this.rng.range(0, 0.6));
-    const cand = this.graph.edges.filter((e) =>
-      e.door && e.lockable && !e.armorySeal && !e.fireSite
-      && this.graph.node(e.a).deck === this.graph.node(e.b).deck);
-    const jammed = cand.filter((e) => e.locked);
-    const open = cand.filter((e) => !e.locked);
-    // bias toward jamming while below the seed's initial jam count, toward
-    // freeing when above — the ship stays roughly as broken as it started
-    const doJam = this.rng.chance(jammed.length < open.length * 0.25 ? 0.6 : 0.35);
-    if (doJam && open.length) {
-      // take the first candidate that leaves its two rooms mutually
-      // reachable by another route (single-edge removal: e.b reachable from
-      // e.a with the edge locked ⇒ the component is unchanged)
-      for (let tries = 0; tries < 6 && open.length; tries++) {
-        const e = open.splice(this.rng.int(open.length), 1)[0];
-        e.locked = true;
-        if (this._reachableStd(e.a, e.b)) {
-          this.graph.invalidatePathCache(); // cached fields read link.locked
-          this.log('radio', `a door mechanism seizes between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name}`, e.a);
-          return;
-        }
-        e.locked = false; // would cut the ship — leave it working
+  // MALFUNCTIONING DOORS ARE ALIVE (user: broken doors should not be static
+  // — some get stuck, others open, all game long). Every faulty door runs
+  // its OWN deterministic timeline: dwell 1-10 min per state while a way
+  // around exists; a door whose closing would CUT the ship (checked at the
+  // moment it tries to close, against the ship as it stands right then)
+  // reopens in 30-90s and skips half its close opportunities, so a sole
+  // route is an inconvenience, never a prison. Deterministic: seeded RNG
+  // draws happen at flip time inside the tick, identically on every peer.
+  // Excluded: the armory seal (event gate), the authored fire-site doors
+  // (they ARE the damage), crew-commanded doors (the override outranks the
+  // fault), and busted doors (there is no door left to malfunction).
+  _doorMalfCandidate(e) {
+    return e.door && e.lockable && !e.armorySeal && !e.fireSite && !e.busted && !e.commanded
+      && this.graph.node(e.a).deck === this.graph.node(e.b).deck;
+  }
+
+  _seedDoorFaults() {
+    const D = this.P.door;
+    this._malfDoors = [];
+    for (const e of this.graph.edges) {
+      if (!this._doorMalfCandidate(e)) continue;
+      if (e.locked) {
+        // the seed's jammed doors ARE the malfunction population — init
+        // guaranteed connectivity around them, so the full closed range
+        e.malfunction = true;
+        e.flipAt = this.rng.range(D.dwellMinSec, D.dwellMaxSec);
+      } else if (this.rng.chance(D.latentFraction)) {
+        // ...plus healthy-looking doors that will seize for the first time
+        // mid-session (user: "some will get stuck")
+        e.malfunction = true;
+        e.flipAt = this.rng.range(D.dwellMinSec, D.dwellMaxSec);
       }
-    } else if (jammed.length) {
-      const e = jammed[this.rng.int(jammed.length)];
-      e.locked = false;
-      this.graph.invalidatePathCache(); // cached fields read link.locked
-      this.log('radio', `the jammed door between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name} grinds free`, e.a);
+      if (e.malfunction) this._malfDoors.push(e);
     }
+  }
+
+  _doorFlipTick() {
+    const D = this.P.door;
+    for (const e of this._malfDoors) {
+      if (e.busted || e.commanded || this.t < e.flipAt) continue;
+      if (e.locked) {
+        e.locked = false;
+        e.flipAt = this.t + this.rng.range(D.dwellMinSec, D.dwellMaxSec);
+        this._doorMutated();
+        this.log('radio', `the jammed door between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name} grinds free`, e.a);
+      } else {
+        // about to seize — is there a way around RIGHT NOW?
+        e.locked = true;
+        const choke = !this._reachableStd(e.a, e.b);
+        if (choke && this.rng.chance(D.chokeSkipClose)) {
+          e.locked = false; // sole route: skip this close opportunity
+          e.flipAt = this.t + this.rng.range(D.dwellMinSec, D.dwellMaxSec);
+          continue;
+        }
+        e.flipAt = this.t + (choke
+          ? this.rng.range(D.chokeClosedMinSec, D.chokeClosedMaxSec)
+          : this.rng.range(D.dwellMinSec, D.dwellMaxSec));
+        this._doorMutated();
+        this.log('radio', `a door mechanism seizes between ${this.graph.node(e.a).name} and ${this.graph.node(e.b).name}`, e.a);
+      }
+    }
+  }
+
+  // every lock mutation invalidates the same two things the SET_DOOR command
+  // always has: route memos and the lock-dependent sensing caches
+  _doorMutated() {
+    this.graph.invalidatePathCache();
+    this._precomputeSensing();
   }
 
   // is `to` reachable from `from` over unlocked std edges?
@@ -1277,6 +1374,47 @@ export class Sim {
       if ((a.task?.kind === TASK.CONVERT || a.task?.kind === TASK.REANIMATE) && !a.move && !a.path.length) {
         a.animTime += dt; continue;
       }
+      // DOOR BUSTING (user: a dedicated flood charge breaks a closed door
+      // permanently, busting it outwards). The form walks onto the panel and
+      // batters it — form-seconds accumulate on the LINK, so a pack shares
+      // the work — until the door blows off its track for good. A door that
+      // grinds open on its own (malfunction flip) releases the form early.
+      if (a.busting) {
+        const link = a.busting;
+        if (!link.locked || link.busted || a.hp <= 0 || a.dead) { a.busting = null; }
+        else {
+          const dbx = link.door.x - a.x, dby = link.door.y - a.y;
+          const dd = Math.hypot(dbx, dby);
+          if (dd > 1.3) {
+            const mps = this.P.movement.baseMps * this.P.speed.combatForm;
+            const stp = Math.min(dd, mps * dt);
+            a.x += (dbx / dd) * stp; a.y += (dby / dd) * stp;
+            a.heading = Math.atan2(dby, dbx);
+            a.followSpeed = stp / dt;
+          } else {
+            a.followSpeed = 0;
+            a.heading = Math.atan2(dby, dbx);
+            a.meleeUntil = this.t + 0.25; // the renderer swings the tentacles
+            link.bustAcc += dt;
+            // the hammering carries — both rooms hear trouble at the door
+            if ((this.tickCount + a.id) % 20 === 0) {
+              this.gunfireTick[link.a] = this.tickCount;
+              this.gunfireTick[link.b] = this.tickCount;
+            }
+            const need = link.type === 'blastdoor' ? this.P.door.bustBlastSec : this.P.door.bustHatchSec;
+            if (link.bustAcc >= need) {
+              link.busted = true;
+              link.locked = false;
+              link.malfunction = false; // there is no door left to malfunction
+              a.busting = null;
+              this._doorMutated();
+              this.log('radio', `the door between ${this.graph.node(link.a).name} and ${this.graph.node(link.b).name} BLOWS OUTWARD — something came through`, link.a);
+            }
+          }
+          a.animTime += dt;
+          continue;
+        }
+      }
       if (a.move) {
         a.move.t += dt / a.move.travelSec;
         const from = g.node(a.move.from), to = g.node(a.move.to);
@@ -1492,6 +1630,16 @@ export class Sim {
         if (flood && this.graph.burningUntil[step.to] > this.t) passable = false;
         if (!passable) {
           if (flood && (link.kind !== 'std' || link.locked)) this.hive.observeBlocked(link);
+          // DEDICATED CHARGE (user): a combat form that finds a closed door
+          // in its way doesn't shrug and reroute — it throws itself at the
+          // panel until the door blows outwards, PERMANENTLY. The armory
+          // event gate is the one door the hive cannot have.
+          if (a.faction === FACTION.COMBAT && link.kind === 'std' && link.locked
+            && !link.armorySeal && !link.fireSite && link.door
+            && this.graph.burningUntil[a.node] <= this.t) {
+            a.busting = link; // handled at the top of the movement pass
+            continue;         // keep the path — it resumes once the door is gone
+          }
           a.path = [];
           continue;
         }
@@ -1782,10 +1930,12 @@ export class Sim {
             if (src && !src.dead && src.hp > 0 && src.deck === a.deck) pn2 = src.pnode ?? src.node;
           }
           // reach it through an unlocked doorway. NOT through the vents any
-          // more (user rule: the in-wall ducting is infection-only) — a
-          // sensed body behind a locked hatch stays out of a combat form's
-          // reach until a door opens or the hive routes it the long way
-          if (pn2 >= 0 && this.setPathTo(a, pn2, ['std'], (l) => !l.locked)) {
+          // more (user rule: the in-wall ducting is infection-only) — and if
+          // every open route is sealed, path THROUGH the locked doors anyway:
+          // the blocked-step check upgrades each closed door on the way into
+          // a dedicated charge that busts it open for good (user rule)
+          if (pn2 >= 0 && (this.setPathTo(a, pn2, ['std'], (l) => !l.locked)
+            || this.setPathTo(a, pn2, ['std'], (l) => l.kind === 'std' && !l.armorySeal))) {
             a.charging = true; a.state = STATE.MOVE;
             return false; // _advanceMovement walks the path through the doorway
           }

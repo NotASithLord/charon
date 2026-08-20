@@ -93,7 +93,12 @@ function reportFatal(what, err) {
   document.body.appendChild(div);
 }
 window.addEventListener('error', (e) => reportFatal('uncaught error', e.error ?? e.message));
-window.addEventListener('unhandledrejection', (e) => reportFatal('unhandled rejection', e.reason));
+window.addEventListener('unhandledrejection', (e) => {
+  // pointer-lock refusals are environmental (sandboxed iframe, focus race) —
+  // annoying, never fatal; everything else still gets the red banner
+  if (/pointer lock/i.test(String(e.reason?.message ?? e.reason ?? ''))) return;
+  reportFatal('unhandled rejection', e.reason);
+});
 {
   const gpuDev = renderer.backend?.device;
   if (gpuDev?.addEventListener) {
@@ -1130,6 +1135,17 @@ player.onMedkitUsed = () => {
   return true;
 };
 
+// ARMOR PACKS (user: armor replaces shields — no regen, replenished only by
+// packs). Same authority pattern as the med packs.
+player.onArmorUsed = () => {
+  const pack = player.armorSource();
+  if (!pack) return false;
+  if (!sim.playerUseArmorPack(player.agent)) return false;
+  if (!isSimAuthority()) gameSync?.armorpack();
+  healFlash = 1;
+  return true;
+};
+
 // the packs themselves, out in the world: Halo CE's white case with the red
 // cross, small enough to sit on a crate lid, emissive enough to read in a
 // blacked-out compartment. One group per kit; visibility tracks kit.used.
@@ -1172,6 +1188,44 @@ const medkitMeshes = [];
     g.rotation.y = (kit.id * 2654435761 % 360) * Math.PI / 180; // stable scatter yaw
     scene.add(g);
     medkitMeshes.push({ kit, mesh: g });
+  }
+}
+
+// ARMOR PACKS (user): a gunmetal case with a gold plate-glow — reads as
+// hardware, not medicine, from across a dark room. Same lifecycle as the
+// med packs: one group per pack, visibility tracks pack.used.
+const armorPackMeshes = [];
+{
+  const caseMat = new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.45, metalness: 0.55, emissive: 0x11141a, emissiveIntensity: 0.5 });
+  const plateMat = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.4, metalness: 0.6, emissive: 0x8a6a12, emissiveIntensity: 0.9 });
+  const caseGeo = new THREE.BoxGeometry(0.36, 0.13, 0.26);
+  const plateGeo = new THREE.BoxGeometry(0.26, 0.02, 0.16);
+  const ribGeo = new THREE.BoxGeometry(0.362, 0.03, 0.06);
+  const clearOfProps = (kit) => {
+    for (const p of world.props) {
+      if (p.deck !== kit.deck) continue;
+      const dx = kit.x - p.x, dy = kit.y - p.y;
+      if (Math.abs(dx) >= p.hw + 0.2 || Math.abs(dy) >= p.hd + 0.2) continue;
+      const pushX = (p.hw + 0.25 - Math.abs(dx)) * (dx >= 0 ? 1 : -1);
+      const pushY = (p.hd + 0.25 - Math.abs(dy)) * (dy >= 0 ? 1 : -1);
+      if (Math.abs(pushX) <= Math.abs(pushY)) kit.x += pushX; else kit.y += pushY;
+    }
+  };
+  for (const pack of sim.armorPacks) {
+    clearOfProps(pack);
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(caseGeo, caseMat);
+    body.position.y = 0.065;
+    const plate = new THREE.Mesh(plateGeo, plateMat);
+    plate.position.y = 0.14;
+    const rib = new THREE.Mesh(ribGeo, plateMat);
+    rib.position.y = 0.065;
+    g.add(body, plate, rib);
+    const [wx, wz] = world.simToWorld(pack.x, pack.y, pack.deck);
+    g.position.set(wx, elevOf(pack.deck), wz);
+    g.rotation.y = (pack.id * 2654435761 % 360) * Math.PI / 180;
+    scene.add(g);
+    armorPackMeshes.push({ pack, mesh: g });
   }
 }
 
@@ -1355,7 +1409,7 @@ function dismissIntro() {
   intro.style.display = 'none';
   overlay.classList.add('hidden');
   audio.ensure();
-  canvas.requestPointerLock();
+  canvas.requestPointerLock()?.catch?.(() => {}); // sandboxed iframes refuse — not fatal
 }
 intro.addEventListener('click', () => {
   if (introDone) dismissIntro();
@@ -1376,7 +1430,7 @@ const ghostAlive = () => {
 overlay.addEventListener('click', () => {
   if (player.dead && !ghostAlive()) return;
   overlay.classList.add('hidden');
-  if (!player.dead) canvas.requestPointerLock();
+  if (!player.dead) canvas.requestPointerLock()?.catch?.(() => {});
 });
 let ended = false;
 function endScreen(title, text, final = true) {
@@ -3433,7 +3487,10 @@ function frame(now) {
   // lamp brightens and dims as one.
   torch.intensity += ((inDark ? 430 : 260) - torch.intensity) * dimT;
   torchSpill.intensity = torch.intensity * 0.09;
-  gunFill.intensity = torch.intensity * 0.0038;
+  // 0.0038 put ~40 lux on the receiver — past the ~30-lux white point, so
+  // the gun clipped white no matter its albedo (user: white/striped rifle).
+  // A third of that reads as lit gunmetal.
+  gunFill.intensity = torch.intensity * 0.0008;
   torch.distance = inFog ? sim.P.darkness.fogViewM + 2 : 30;
   torchSpill.distance = inFog ? sim.P.darkness.fogViewM + 1 : 14;
   {
@@ -3452,7 +3509,11 @@ function frame(now) {
       _torchRifleDirection.subVectors(_torchRifleTip, _torchRifleBase).normalize();
       tdir.lerp(_torchRifleDirection, reloadFlashJank * 0.94).normalize();
     }
-    torch.position.set(tp.x, tp.y - 0.1, tp.z);
+    // BOTH beam apexes sit past the muzzle (user: white rifle) — from the
+    // eye, the main cone's penumbra edge grazed the receiver at point-blank
+    // range and clipped it white even with the fill dimmed. Behind the apex
+    // there is no cone; the room ahead cannot tell the difference.
+    torch.position.set(tp.x + tdir.x * 0.85, tp.y - 0.1 + tdir.y * 0.85, tp.z + tdir.z * 0.85);
     // spill apex out past the muzzle — see the note where it is built
     torchSpill.position.set(tp.x + tdir.x * 0.75, tp.y - 0.1 + tdir.y * 0.75, tp.z + tdir.z * 0.75);
     torchTarget.position.set(tp.x + tdir.x * 10, tp.y + tdir.y * 10, tp.z + tdir.z * 10);
@@ -3525,6 +3586,7 @@ function frame(now) {
   }
   // med packs vanish when spent — on this client or, in co-op, on any other
   for (const m of medkitMeshes) m.mesh.visible = !m.kit.used;
+  for (const m of armorPackMeshes) m.mesh.visible = !m.pack.used;
   shake = Math.max(0, shake - dtReal * 3);
 
   // sliding doors open for ANY movement near them (user rule) — mover
@@ -3641,6 +3703,9 @@ function frame(now) {
     setStyle('hint', 'display', 'block');
   } else if (!player.dead && player.medkitSource()) {
     setText('hint', 'E — use the med pack');
+    setStyle('hint', 'display', 'block');
+  } else if (!player.dead && player.armorSource()) {
+    setText('hint', 'E — strap on armor plates');
     setStyle('hint', 'display', 'block');
   } else if (src) {
     setText('hint', src === 'armory'

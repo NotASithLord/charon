@@ -29,6 +29,10 @@ export class ShipGraph {
     this.edges = data.edges.map((e, i) => ({
       i, a: idx(e.a), b: idx(e.b), type: e.type, lockable: e.lockable,
       locked: false, kind: LAYER.STD,
+      // malfunction rotation (sim._doorFlipTick) + flood door-busting state —
+      // pre-declared so every edge keeps one hidden class. `commanded`: the
+      // crew forced this door (SET_DOOR) — the override outranks the fault.
+      malfunction: false, flipAt: -1, busted: false, bustAcc: 0, commanded: false,
       // strict connection designation for the map (user note): H=hatch,
       // B=blastdoor, L=lift, K=ladder, numbered in load order
       label: EDGE_PREFIX[e.type] + '-' + String(i + 1).padStart(2, '0'),
