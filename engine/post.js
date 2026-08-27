@@ -151,14 +151,33 @@ export class PostFX {
 
     this._scene = scene;
     this._camera = camera;
+    this._warmedPipelines = new Set();
   }
 
   // Compile the scene's materials against the PASS target (the HDR
   // half-float RT the scene actually renders into every frame). WebGPU
   // pipelines are target-format specific — compiling against the canvas
   // (renderer.compileAsync's default) warms nothing this chain uses.
-  compileScene() {
-    return this.scenePass.compileAsync(this.renderer);
+  compileScene(signal) {
+    return this.scenePass.compileAsync(this.renderer, signal);
+  }
+
+  // Scene variants still compile per quality rung, but equivalent full/lite
+  // post graphs submit only once. Re-rendering an already-warm graph burns a
+  // complete scene + post frame without creating a new pipeline.
+  async prewarm({ lite = this.lite, signal, beforeRender, timeSec = performance.now() / 1000 } = {}) {
+    await this.compileScene(signal);
+    if (signal?.aborted) return false;
+    const pipeline = lite ? this.litePost : this.post;
+    if (this._warmedPipelines.has(pipeline)) return true;
+    beforeRender?.();
+    if (signal?.aborted) return false;
+    const previous = this.lite;
+    this.lite = lite;
+    try { this.render(this._scene, this._camera, timeSec); }
+    finally { this.lite = previous; }
+    this._warmedPipelines.add(pipeline);
+    return true;
   }
 
   // main.js grades exposure every frame — keep the old property surface

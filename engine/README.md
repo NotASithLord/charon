@@ -15,8 +15,8 @@ through constructor options and callbacks.
 
 | Module | What it is |
 | --- | --- |
-| `runtime.js` | The shell: `createRenderer` (WebGPU boot with automatic WebGL2 fallback when WebGPU is missing or fails to init — a browser can expose `navigator.gpu` yet not actually work on an older OS; `forceWebGL` pins WebGL2; linear-HDR + PCFSoft defaults), `installDeviceLostReload` (reload-in-place recovery with a session cap; a lost WebGPU device downgrades the reload onto WebGL2 via `?gl=1`), `QualityGovernor` (rung ladder + per-rung effects callback + whole-frame pixel budget + prewarm with force-warm/restore), `TickScheduler` (fixed-step sim ticks in MessageChannel macrotasks, off the rAF path — see `tick.js`). |
-| `post.js` | HDR post pipeline on the TSL node system: scene pass → bloom (patched `BloomNode`, mip-count parameterized) → grade (chromatic aberration, Narkowicz ACES, vignette, midtone grain, manual sRGB) → compact FXAA. One `PostFX` class; `setBloomScale`, `exposure`, `setSize`. |
+| `runtime.js` | The shell: `createRenderer` (WebGPU boot with automatic WebGL2 fallback when WebGPU is missing or fails to init — a browser can expose `navigator.gpu` yet not actually work on an older OS; `forceWebGL` pins WebGL2; linear-HDR + PCFSoft defaults), `installDeviceLostReload` (reload-in-place recovery with a session cap; a lost WebGPU device downgrades the reload onto WebGL2 via `?gl=1`), `QualityGovernor` (rung ladder + per-rung effects callback + whole-frame pixel budget + cancellable prewarm with force-warm/restore), `TickScheduler` (fixed-step sim ticks in coalesced MessageChannel macrotasks, off the rAF path — see `tick.js`). |
+| `post.js` | HDR post pipeline on the TSL node system: scene pass → bloom (patched `BloomNode`, mip-count parameterized) → grade (chromatic aberration, Narkowicz ACES, vignette, midtone grain, manual sRGB) → compact FXAA. One `PostFX` class; cancellable, graph-deduplicated `prewarm`, `setBloomScale`, `exposure`, `setSize`. |
 | `lights.js` | `LightPool` — a fixed pool of point lights serving unlimited *virtual* light declarations per frame (brightest-and-nearest win). Constant light count = bounded fragment cost and zero shader recompiles. Zero per-frame garbage. |
 | `fx.js` | Instanced-billboard particle FX (fire with TSL shader flames, sparks, blood decals with a ring buffer and canvas-baked smears). Camera-billboarded quads — the node renderer draws `THREE.Points` at 1px, so never use Points. |
 | `fps-controller.js` | `FpsController` — pointer-lock look, exponential-accel walking, jump/gravity, Rapier capsule sweep for horizontal with analytic vertical (ground rest, step-down snap, ceiling clamp), fixed-step determinism, render-pose interpolation. Floors/ceilings/level stacking injected as callbacks; hosts subclass and override `poseY()` for climbs/vehicles. |
@@ -37,6 +37,9 @@ A host game supplies:
 - a `forceWarm(scene)` callback listing late-appearing pipelines
   (hidden veils, count-0 instanced sets) so prewarm compiles them; it
   returns a restore function that the governor *always* runs;
+- a `compileRung(rung, index, signal)` callback when using custom render
+  targets; pass the signal through and call `cancelPrewarm()` as gameplay
+  begins so loading work can never spill into a live session;
 - a fixed-step `run()` body for `TickScheduler` (the deterministic sim);
 - scene content, materials, HUD, input — all game-side.
 
@@ -46,7 +49,8 @@ Hard-won invariants the engine encodes (see comments at each site):
   30ms strategic tick delays at most one frame instead of every frame.
 - **Never resize render targets on the fly more than ~every 3s** — the
   governor's cadence exists so RT reallocation can't hitch play.
-- **Recompiles are prewarmed, then rung changes are uniform-only.**
+- **Recompiles are prewarmed, then rung changes are uniform-only.** Warm-up
+  is cancellable, and shared full/lite post graphs submit only once.
 - **Fixed light pool.** Adding/removing real lights recompiles every
   program; declare virtual lights instead.
 - **Partial instanced uploads.** Upload `count × 16` floats, not the
