@@ -39319,16 +39319,17 @@ ${builder.flow.code}`;
        *
        * @async
        * @param {Renderer} renderer - The renderer.
+       * @param {?AbortSignal} signal - Stops after the current material when aborted.
        * @return {Promise} A Promise that resolves when the compile has been finished.
        * @see {@link Renderer#compileAsync}
        */
-      async compileAsync(renderer2) {
+      async compileAsync(renderer2, signal = null) {
         if (renderer2._initialized === false) await renderer2.init();
         const currentRenderTarget = renderer2.getRenderTarget();
         const currentMRT = renderer2.getMRT();
         renderer2.setRenderTarget(this.renderTarget);
         renderer2.setMRT(this._mrt);
-        const promise = renderer2.compileAsync(this.scene, this.camera);
+        const promise = renderer2.compileAsync(this.scene, this.camera, null, signal);
         renderer2.setRenderTarget(currentRenderTarget);
         renderer2.setMRT(currentMRT);
         await promise;
@@ -49123,9 +49124,10 @@ ${builder.flow.code}`;
        * @param {Object3D} scene - The scene or 3D object to precompile.
        * @param {Camera} camera - The camera that is used to render the scene.
        * @param {?Scene} targetScene - If the first argument is a 3D object, this parameter must represent the scene the 3D object is going to be added.
+       * @param {?AbortSignal} signal - Stops after the current material when aborted.
        * @return {Promise} A Promise that resolves when the compile has been finished.
        */
-      async compileAsync(scene2, camera2, targetScene = null) {
+      async compileAsync(scene2, camera2, targetScene = null, signal = null) {
         if (this._isDeviceLost === true) return;
         if (this._initialized === false) await this.init();
         const nodeFrame = this._nodes.nodeFrame;
@@ -49198,6 +49200,7 @@ ${builder.flow.code}`;
         this._handleObjectFunction = previousHandleObjectFunction;
         this._compilationPromises = previousCompilationPromises;
         for (const item of compilationPromises) {
+          if (signal?.aborted === true) break;
           const renderObject = this._objects.get(item.object, item.material, item.scene, item.camera, item.lightsNode, item.renderContext, item.clippingContext, item.passId);
           renderObject.drawRange = item.object.geometry.drawRange;
           renderObject.group = item.group;
@@ -89619,13 +89622,34 @@ var init_post = __esm({
         this.freeWhenLite = false;
         this._scene = scene2;
         this._camera = camera2;
+        this._warmedPipelines = /* @__PURE__ */ new Set();
       }
       // Compile the scene's materials against the PASS target (the HDR
       // half-float RT the scene actually renders into every frame). WebGPU
       // pipelines are target-format specific — compiling against the canvas
       // (renderer.compileAsync's default) warms nothing this chain uses.
-      compileScene() {
-        return this.scenePass.compileAsync(this.renderer);
+      compileScene(signal) {
+        return this.scenePass.compileAsync(this.renderer, signal);
+      }
+      // Scene variants still compile per quality rung, but equivalent full/lite
+      // post graphs submit only once. Re-rendering an already-warm graph burns a
+      // complete scene + post frame without creating a new pipeline.
+      async prewarm({ lite = this.lite, signal, beforeRender, timeSec = performance.now() / 1e3 } = {}) {
+        await this.compileScene(signal);
+        if (signal?.aborted) return false;
+        const pipeline = lite ? this.litePost : this.post;
+        if (this._warmedPipelines.has(pipeline)) return true;
+        beforeRender?.();
+        if (signal?.aborted) return false;
+        const previous = this.lite;
+        this.lite = lite;
+        try {
+          this.render(this._scene, this._camera, timeSec);
+        } finally {
+          this.lite = previous;
+        }
+        this._warmedPipelines.add(pipeline);
+        return true;
       }
       // main.js grades exposure every frame — keep the old property surface
       get exposure() {
@@ -89685,9 +89709,18 @@ var init_tick = __esm({
         this.maxPerTask = maxPerTask;
         this.dropBacklogSteps = dropBacklogSteps;
         this.acc = 0;
+        this._scheduled = false;
         const ch = new MessageChannel();
         this._port = ch.port2;
-        ch.port1.onmessage = () => this._drain();
+        ch.port1.onmessage = () => {
+          this._scheduled = false;
+          this._drain();
+        };
+      }
+      _schedule() {
+        if (this._scheduled) return;
+        this._scheduled = true;
+        this._port.postMessage(0);
       }
       _drain() {
         let ran = 0;
@@ -89696,13 +89729,13 @@ var init_tick = __esm({
           this.acc -= this.stepSec;
         }
         if (this.acc > this.stepSec * this.dropBacklogSteps) this.acc = 0;
-        else if (this.acc >= this.stepSec) this._port.postMessage(0);
+        else if (this.acc >= this.stepSec) this._schedule();
       }
       // call from the frame loop with the real delta; due steps are scheduled,
       // never run inline
       add(dtSec) {
         this.acc += dtSec;
-        if (this.acc >= this.stepSec) this._port.postMessage(0);
+        if (this.acc >= this.stepSec) this._schedule();
       }
     };
   }
@@ -89780,6 +89813,7 @@ var init_runtime = __esm({
         this._slow = 0;
         this._fast = 0;
         this._movedAt = 0;
+        this._prewarmRun = null;
       }
       applyRung(i2) {
         this.rung = i2;
@@ -89814,7 +89848,7 @@ var init_runtime = __esm({
       // function, which ALWAYS runs (a failed compile that left warm state
       // applied once read as a fully-dark scene).
       //
-      // `compileRung(rungDef, index)` — REQUIRED for hosts with a post chain
+      // `compileRung(rungDef, index, signal)` — REQUIRED for hosts with a post chain
       // (perf pass 3): WebGPU pipelines are RENDER-TARGET-FORMAT specific, and
       // the default renderer.compileAsync(scene, camera) compiles against the
       // CANVAS. A host whose scene pass renders into an HDR PassNode target was
@@ -89825,35 +89859,87 @@ var init_runtime = __esm({
       // render for the fullscreen chain and shadow-depth pipelines).
       async prewarm(scene2, camera2, { order, forceWarm, compileRung } = {}) {
         if (this.pinned) return;
+        this.cancelPrewarm();
         this.prewarming = true;
         const start = this.rung;
-        const seq = order ?? [2, 3, this.rungs.length - 1, start];
+        const seq = [...new Set(order ?? [2, 3, this.rungs.length - 1, start])].filter((i2) => i2 >= 0 && i2 < this.rungs.length);
+        const run = {
+          start,
+          controller: new AbortController(),
+          restore: null,
+          cancelled: false,
+          finished: false
+        };
+        this._prewarmRun = run;
         const DEADLINE_MS = 18e3;
         try {
-          const restore = forceWarm ? forceWarm(scene2) : null;
+          run.restore = forceWarm ? forceWarm(scene2) : null;
           try {
             for (const i2 of seq) {
+              if (run.cancelled) break;
               this.applyRung(i2);
-              const compile = compileRung ? Promise.resolve(compileRung(this.rungs[i2], i2)) : this.renderer.compileAsync(scene2, camera2);
+              const compile = compileRung ? Promise.resolve(compileRung(this.rungs[i2], i2, run.controller.signal)) : this.renderer.compileAsync(scene2, camera2, null, run.controller.signal);
+              let timer;
               const timedOut = await Promise.race([
                 compile.then(() => false),
-                new Promise((r2) => setTimeout(() => r2(true), DEADLINE_MS))
-              ]);
+                new Promise((r2) => {
+                  timer = setTimeout(() => r2(true), DEADLINE_MS);
+                })
+              ]).finally(() => clearTimeout(timer));
               if (timedOut) {
-                console.warn(`[${this.label}] prewarm rung ${i2} compile exceeded ${DEADLINE_MS}ms — unblocking the quality ladder (slow shader compiles; pipelines will finish warming in the background)`);
+                console.warn(`[${this.label}] prewarm rung ${i2} compile exceeded ${DEADLINE_MS}ms — stopping warm-up before it can spill into gameplay`);
+                run.cancelled = true;
+                run.controller.abort();
                 this._pinWarm();
                 break;
               }
               this._pinWarm();
             }
           } finally {
+            const restore = run.restore;
+            run.restore = null;
             restore?.();
           }
         } catch {
         } finally {
-          this.applyRung(start);
-          this.prewarming = false;
+          this._finishPrewarm(run);
         }
+      }
+      // Gameplay must never inherit unfinished loading work. Aborting stops the
+      // renderer after its current material, restores force-warmed objects and
+      // returns to the live rung immediately.
+      cancelPrewarm() {
+        const run = this._prewarmRun;
+        if (!run || run.finished) return;
+        run.cancelled = true;
+        run.controller.abort();
+        this._finishPrewarm(run);
+      }
+      _finishPrewarm(run) {
+        if (run.finished) return;
+        run.finished = true;
+        try {
+          run.restore?.();
+        } catch {
+        }
+        run.restore = null;
+        if (this._prewarmRun !== run) return;
+        this.applyRung(run.start);
+        this.prewarming = false;
+        this._prewarmRun = null;
+        this.fitResolution();
+        this._resetFrameHistory(performance.now());
+      }
+      // Warm-up hitches are loading samples, not evidence that gameplay is slow.
+      // Reset them before the governor can turn one compile into a target resize
+      // and a second visible hitch.
+      _resetFrameHistory(now) {
+        this._ema = 16;
+        this._interval = 16.7;
+        this._evalAt = now;
+        this._slow = 0;
+        this._fast = 0;
+        this._resFast = 0;
       }
       // KEEP WHAT PREWARM BUILT (swarm finding, and the standing "invisible flood"
       // report). three REF-COUNTS compiled pipelines and node-builder state, and
@@ -90934,6 +91020,7 @@ function introFrame(now) {
   if (!introDone) requestAnimationFrame(introFrame);
 }
 function dismissIntro() {
+  governor.cancelPrewarm();
   introGone = true;
   intro.style.display = "none";
   overlay.classList.add("hidden");
@@ -92956,14 +93043,16 @@ var init_main = __esm({
       // build the fullscreen chain, bloom mips, bind groups and — with the
       // casters forced on above — the shadow-depth pipelines, all behind the
       // intro instead of mid-fight
-      compileRung: async (R2) => {
-        await post.compileScene();
-        if (torch.castShadow) {
-          torch.shadow.needsUpdate = true;
-          _shadowAt = performance.now();
+      compileRung: (R2, _i, signal) => post.prewarm({
+        lite: R2.litePost,
+        signal,
+        beforeRender: () => {
+          if (torch.castShadow) {
+            torch.shadow.needsUpdate = true;
+            _shadowAt = performance.now();
+          }
         }
-        post.render(scene, camera, performance.now() / 1e3);
-      }
+      })
     });
     weapon = new HeldWeapon(MA5);
     FLAME = sim.P.flamethrower.player;
@@ -93729,6 +93818,7 @@ var init_main = __esm({
       observe: gameObservation,
       act: async ({ action, params = {} } = {}) => {
         if (action === "deploy") {
+          governor.cancelPrewarm();
           introChars = INTRO_TOTAL;
           introRender();
           introGone = true;

@@ -9,7 +9,9 @@
 // them (perf pass 3: at 3 steps per task, every hard hitch — GC pause,
 // pipeline compile, target realloc — was echoed as a second long frame
 // by the burst of catch-up ticks that followed it). A backlog deeper
-// than `dropBacklogSteps` is dropped rather than marathon-replayed.
+// than `dropBacklogSteps` is dropped rather than marathon-replayed. Pending
+// messages are coalesced so repeated frame submissions cannot queue an echo
+// train behind a temporary main-thread stall.
 export class TickScheduler {
   constructor({ stepSec, run, maxPerTask = 1, dropBacklogSteps = 40 }) {
     this.stepSec = stepSec;
@@ -17,9 +19,19 @@ export class TickScheduler {
     this.maxPerTask = maxPerTask;
     this.dropBacklogSteps = dropBacklogSteps;
     this.acc = 0;
+    this._scheduled = false;
     const ch = new MessageChannel();
     this._port = ch.port2;
-    ch.port1.onmessage = () => this._drain();
+    ch.port1.onmessage = () => {
+      this._scheduled = false;
+      this._drain();
+    };
+  }
+
+  _schedule() {
+    if (this._scheduled) return;
+    this._scheduled = true;
+    this._port.postMessage(0);
   }
 
   _drain() {
@@ -29,13 +41,13 @@ export class TickScheduler {
       this.acc -= this.stepSec;
     }
     if (this.acc > this.stepSec * this.dropBacklogSteps) this.acc = 0;
-    else if (this.acc >= this.stepSec) this._port.postMessage(0);
+    else if (this.acc >= this.stepSec) this._schedule();
   }
 
   // call from the frame loop with the real delta; due steps are scheduled,
   // never run inline
   add(dtSec) {
     this.acc += dtSec;
-    if (this.acc >= this.stepSec) this._port.postMessage(0);
+    if (this.acc >= this.stepSec) this._schedule();
   }
 }

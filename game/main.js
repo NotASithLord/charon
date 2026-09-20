@@ -872,14 +872,13 @@ governor.prewarm(scene, camera, {
   // build the fullscreen chain, bloom mips, bind groups and — with the
   // casters forced on above — the shadow-depth pipelines, all behind the
   // intro instead of mid-fight
-  compileRung: async (R) => {
-    await post.compileScene();
-    if (torch.castShadow) { torch.shadow.needsUpdate = true; _shadowAt = performance.now(); }
-    // real clock, not 0: a compile that outlives prewarm's deadline still
-    // lands here later, and a 0 would seed the lite-free stability clock in
-    // the past (review finding) — with the live clock it is just a frame
-    post.render(scene, camera, performance.now() / 1000);
-  },
+  compileRung: (R, _i, signal) => post.prewarm({
+    lite: R.litePost,
+    signal,
+    beforeRender: () => {
+      if (torch.castShadow) { torch.shadow.needsUpdate = true; _shadowAt = performance.now(); }
+    },
+  }),
 });
 // LITE-FREE IS DISARMED (playtest: first-ever black screen / freeze on an M4
 // at rung 2, right after perf pass 5 shipped). It is the only thing in that
@@ -1405,6 +1404,7 @@ function introFrame(now) {
 }
 requestAnimationFrame(introFrame);
 function dismissIntro() {
+  governor.cancelPrewarm();
   introGone = true;
   intro.style.display = 'none';
   overlay.classList.add('hidden');
@@ -3917,6 +3917,7 @@ globalThis.peerd?.agent?.expose({
   observe: gameObservation,
   act: async ({ action, params = {} } = {}) => {
     if (action === 'deploy') {
+      governor.cancelPrewarm();
       introChars = INTRO_TOTAL;
       introRender();
       introGone = true;

@@ -40941,10 +40941,11 @@ class PassNode extends TempNode {
 	 *
 	 * @async
 	 * @param {Renderer} renderer - The renderer.
+	 * @param {?AbortSignal} signal - Stops after the current material when aborted.
 	 * @return {Promise} A Promise that resolves when the compile has been finished.
 	 * @see {@link Renderer#compileAsync}
 	 */
-	async compileAsync( renderer ) {
+	async compileAsync( renderer, signal = null ) {
 
 		// charon patch: restore the render target on the SAME TICK, not after
 		// the await. Renderer.compileAsync consumes the active target only in
@@ -40968,7 +40969,7 @@ class PassNode extends TempNode {
 		renderer.setRenderTarget( this.renderTarget );
 		renderer.setMRT( this._mrt );
 
-		const promise = renderer.compileAsync( this.scene, this.camera );
+		const promise = renderer.compileAsync( this.scene, this.camera, null, signal );
 
 		renderer.setRenderTarget( currentRenderTarget );
 		renderer.setMRT( currentMRT );
@@ -60114,9 +60115,10 @@ class Renderer {
 	 * @param {Object3D} scene - The scene or 3D object to precompile.
 	 * @param {Camera} camera - The camera that is used to render the scene.
 	 * @param {?Scene} targetScene - If the first argument is a 3D object, this parameter must represent the scene the 3D object is going to be added.
+	 * @param {?AbortSignal} signal - Stops after the current material when aborted.
 	 * @return {Promise} A Promise that resolves when the compile has been finished.
 	 */
-	async compileAsync( scene, camera, targetScene = null ) {
+	async compileAsync( scene, camera, targetScene = null, signal = null ) {
 
 		if ( this._isDeviceLost === true ) return;
 
@@ -60270,6 +60272,8 @@ class Renderer {
 		// Yields between objects to keep animation smooth
 
 		for ( const item of compilationPromises ) {
+
+			if ( signal?.aborted === true ) break;
 
 			const renderObject = this._objects.get( item.object, item.material, item.scene, item.camera, item.lightsNode, item.renderContext, item.clippingContext, item.passId );
 			renderObject.drawRange = item.object.geometry.drawRange;

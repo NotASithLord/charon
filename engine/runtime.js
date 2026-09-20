@@ -107,6 +107,7 @@ export class QualityGovernor {
     this._slow = 0;
     this._fast = 0;
     this._movedAt = 0;
+    this._prewarmRun = null;
   }
 
   applyRung(i) {
@@ -141,7 +142,7 @@ export class QualityGovernor {
   // function, which ALWAYS runs (a failed compile that left warm state
   // applied once read as a fully-dark scene).
   //
-  // `compileRung(rungDef, index)` — REQUIRED for hosts with a post chain
+  // `compileRung(rungDef, index, signal)` — REQUIRED for hosts with a post chain
   // (perf pass 3): WebGPU pipelines are RENDER-TARGET-FORMAT specific, and
   // the default renderer.compileAsync(scene, camera) compiles against the
   // CANVAS. A host whose scene pass renders into an HDR PassNode target was
@@ -152,34 +153,47 @@ export class QualityGovernor {
   // render for the fullscreen chain and shadow-depth pipelines).
   async prewarm(scene, camera, { order, forceWarm, compileRung } = {}) {
     if (this.pinned) return;
+    this.cancelPrewarm();
     this.prewarming = true;
     const start = this.rung;
-    const seq = order ?? [2, 3, this.rungs.length - 1, start];
+    const seq = [...new Set(order ?? [2, 3, this.rungs.length - 1, start])]
+      .filter((i) => i >= 0 && i < this.rungs.length);
+    const run = {
+      start,
+      controller: new AbortController(),
+      restore: null,
+      cancelled: false,
+      finished: false,
+    };
+    this._prewarmRun = run;
     // WATCHDOG (swarm finding, live incident): Firefox's wgpu can grind a
     // compileAsync for minutes (the backend yields one rAF per object at
     // whatever the frame rate is) or stall a pipeline promise outright — and
     // the vendored wrapper only ever RESOLVES, so the catch below can never
     // fire on a stall. Un-deadlined, `prewarming` latched true forever and
     // the descend ladder below was dead code: the game sat at rung 0 at 20
-    // FPS. Each rung now races a generous deadline; on timeout we abandon
-    // the wait (the compile keeps filling the pipeline cache in the
-    // background — pipelines lazy-compile mid-game exactly as pre-prewarm),
-    // and `prewarming` ALWAYS clears in the finally.
+    // FPS. Each rung now races a generous deadline; on timeout the signal
+    // stops compilation after its current material instead of letting
+    // abandoned warm-up work spill into gameplay. `prewarming` ALWAYS clears.
     const DEADLINE_MS = 18000;
     try {
-      const restore = forceWarm ? forceWarm(scene) : null;
+      run.restore = forceWarm ? forceWarm(scene) : null;
       try {
         for (const i of seq) {
+          if (run.cancelled) break;
           this.applyRung(i);
           const compile = compileRung
-            ? Promise.resolve(compileRung(this.rungs[i], i))
-            : this.renderer.compileAsync(scene, camera);
+            ? Promise.resolve(compileRung(this.rungs[i], i, run.controller.signal))
+            : this.renderer.compileAsync(scene, camera, null, run.controller.signal);
+          let timer;
           const timedOut = await Promise.race([
             compile.then(() => false),
-            new Promise((r) => setTimeout(() => r(true), DEADLINE_MS)),
-          ]);
+            new Promise((r) => { timer = setTimeout(() => r(true), DEADLINE_MS); }),
+          ]).finally(() => clearTimeout(timer));
           if (timedOut) {
-            console.warn(`[${this.label}] prewarm rung ${i} compile exceeded ${DEADLINE_MS}ms — unblocking the quality ladder (slow shader compiles; pipelines will finish warming in the background)`);
+            console.warn(`[${this.label}] prewarm rung ${i} compile exceeded ${DEADLINE_MS}ms — stopping warm-up before it can spill into gameplay`);
+            run.cancelled = true;
+            run.controller.abort();
             this._pinWarm();
             break;
           }
@@ -188,12 +202,49 @@ export class QualityGovernor {
           this._pinWarm();
         }
       } finally {
+        const restore = run.restore;
+        run.restore = null;
         restore?.();
       }
     } catch { /* fall through to the finally — the ladder must never stay latched */ } finally {
-      this.applyRung(start);
-      this.prewarming = false;
+      this._finishPrewarm(run);
     }
+  }
+
+  // Gameplay must never inherit unfinished loading work. Aborting stops the
+  // renderer after its current material, restores force-warmed objects and
+  // returns to the live rung immediately.
+  cancelPrewarm() {
+    const run = this._prewarmRun;
+    if (!run || run.finished) return;
+    run.cancelled = true;
+    run.controller.abort();
+    this._finishPrewarm(run);
+  }
+
+  _finishPrewarm(run) {
+    if (run.finished) return;
+    run.finished = true;
+    try { run.restore?.(); } catch { /* restore the ladder even if host cleanup fails */ }
+    run.restore = null;
+    if (this._prewarmRun !== run) return;
+    this.applyRung(run.start);
+    this.prewarming = false;
+    this._prewarmRun = null;
+    this.fitResolution();
+    this._resetFrameHistory(performance.now());
+  }
+
+  // Warm-up hitches are loading samples, not evidence that gameplay is slow.
+  // Reset them before the governor can turn one compile into a target resize
+  // and a second visible hitch.
+  _resetFrameHistory(now) {
+    this._ema = 16;
+    this._interval = 16.7;
+    this._evalAt = now;
+    this._slow = 0;
+    this._fast = 0;
+    this._resFast = 0;
   }
 
   // KEEP WHAT PREWARM BUILT (swarm finding, and the standing "invisible flood"
