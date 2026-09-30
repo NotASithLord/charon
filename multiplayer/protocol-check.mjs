@@ -35,18 +35,18 @@ assert.deepEqual(selectOpenLobby([
   lobbyId: 'lobby-bbbbbbbbbbbb', host: 'did:b', members: ['did:b', 'did:c'],
 });
 const inviteRoom = await privateRoom(invite);
-assert.match(inviteRoom, new RegExp(`^charon:v${PROTOCOL_VERSION}:private:[0-9a-f]{32}$`));
+assert.match(inviteRoom, new RegExp(`^saturn-devouring:v${PROTOCOL_VERSION}:private:[0-9a-f]{32}$`));
 assert.equal(inviteRoom.includes(invite), false);
 const proof = await inviteProof(invite, 'did:key:test');
 assert.equal(await verifyInviteProof(invite, 'did:key:test', proof), true);
 assert.equal(await verifyInviteProof(invite, 'did:key:other', proof), false);
-assert.equal(quickplayRoom(0), `charon:quickplay:v${PROTOCOL_VERSION}`);
-assert.equal(quickplayRoom(119_999), `charon:quickplay:v${PROTOCOL_VERSION}`);
-assert.equal(quickplayRoom(120_000), `charon:quickplay:v${PROTOCOL_VERSION}`);
+assert.equal(quickplayRoom(0), `saturn-devouring:quickplay:v${PROTOCOL_VERSION}`);
+assert.equal(quickplayRoom(119_999), `saturn-devouring:quickplay:v${PROTOCOL_VERSION}`);
+assert.equal(quickplayRoom(120_000), `saturn-devouring:quickplay:v${PROTOCOL_VERSION}`);
 assert.equal(matchScope(['did:b', 'did:a']), matchScope(['did:a', 'did:b', 'did:a']));
 assert.notEqual(matchScope(['did:a']), matchScope(['did:b']));
-assert.equal(seedForScope('test'), `charon-multiplayer-v${PROTOCOL_VERSION}:test`);
-assert.equal(matchRoom('match-abc123'), `charon:v${PROTOCOL_VERSION}:match-abc123`);
+assert.equal(seedForScope('test'), `saturn-devouring-multiplayer-v${PROTOCOL_VERSION}:test`);
+assert.equal(matchRoom('match-abc123'), `saturn-devouring:v${PROTOCOL_VERSION}:match-abc123`);
 assert.deepEqual(rankHosts(['did:b', 'did:a'], new Map([
   ['did:a', { score: 120 }], ['did:b', { score: 300 }],
 ])), ['did:b', 'did:a']);

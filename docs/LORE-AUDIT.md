@@ -1,17 +1,16 @@
 # Lore Audit — sim vs. Halo canon
 
-Checked against Halopedia/Halo Alpha material on the Charon-class light
-frigate and Flood gameplay behavior across the rendered games. Each row
+Checked against Halopedia/Halo Alpha material on the light frigate and Flood gameplay behavior across the rendered games. Each row
 says what the sim does, what canon says, and what (if anything) was changed.
 
 ## 1. The ship
 
 | Topic | Canon | Sim | Verdict |
 |---|---|---|---|
-| Class dimensions | Charon-class: **489.7 m** long × 155.6 m wide × 139.2 m tall (e.g. UNSC *Forward Unto Dawn*, FFG-201) | Playable interior 220 m × 5 decks | **OK** — the sim models the pressurized crew section of the forward/mid hull, roughly the dorsal half of the ship. The full hull is mostly hangar volume, MAC shaft, reactor plant and fuel. Documented in `ship.js`. |
+| Class dimensions | reference frigate: **489.7 m** long × 155.6 m wide × 139.2 m tall (e.g. UNSC *Forward Unto Dawn*, FFG-201) | Playable interior 220 m × 5 decks | **OK** — the sim models the pressurized crew section of the forward/mid hull, roughly the dorsal half of the ship. The full hull is mostly hangar volume, MAC shaft, reactor plant and fuel. Documented in `ship.js`. |
 | Complement | Up to **782** max complement (crew + embarked troops); a frigate running light carries far fewer | ~160 souls | **OK** — deliberately "running light" post-portal-event; explicit counts are now scenario inputs. |
 | Bridge position | Bridge sits **atop the dorsal midship superstructure near the MAC shaft**, not in the bow; ~4 stations (Nav/Ops/Weapons/Comms) + captain | Was at foreAft 0.05 (bow) | **FIXED** — command deck moved to foreAft 0.30–0.50, riding above the habitation deck's fore section, matching the exterior silhouette. |
-| Hangar | The Charon-class boasts **one of the largest hangar bays by volume of any frigate**, ventral mid-aft | Two 34×20 m bays + control room + vehicle bay on deck 4, mid-aft | **OK** — largest interior volumes in the sim, positioned mid-aft. |
+| Hangar | The reference frigate boasts **one of the largest hangar bays by volume of any frigate**, ventral mid-aft | Two 34×20 m bays + control room + vehicle bay on deck 4, mid-aft | **OK** — largest interior volumes in the sim, positioned mid-aft. |
 | ODST / lifeboats | Up to 12 SOEIV drop-pod bays near the rear; Bumblebee lifeboats | Barracks carries the `odst` role; two Lifepod bays on deck 3 | **OK** for POC scope. |
 | Cryo | Cryo storage aboard (the *Dawn*'s cryo bay) | Cryo Bay, deck 2, corpse cache | **OK**. |
 

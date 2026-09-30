@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HALO CHARON // GAME</title>
+<title>SATURN DEVOURING // GAME</title>
 <link rel="stylesheet" href="./launcher.css">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -276,20 +276,20 @@
 <body class="launcher-active">
   <div id="launcher">
     <header class="hub-top">
-      <div class="hub-brand"><span class="hub-mark" aria-hidden="true"></span><div><strong>CHARON</strong><span>PEER-TO-PEER SURVIVAL</span></div></div>
+      <div class="hub-brand"><span class="hub-mark" aria-hidden="true"></span><div><strong>SATURN DEVOURING</strong><span>PEER-TO-PEER SURVIVAL</span></div></div>
       <nav class="hub-nav" aria-label="Primary"><button data-open-page="menu">Play</button><button data-open-page="about">About</button><button data-open-page="docs">Developer docs</button></nav>
     </header>
     <main class="hub-shell">
       <section data-launch-page="menu">
         <div class="hub-hero">
           <div>
-            <div class="hub-kicker">UNSC Saturn Devouring · Charon-class frigate</div>
+            <div class="hub-kicker">UNSC Saturn Devouring · light frigate</div>
             <h1>The ship is <span>already dead.</span></h1>
             <p class="hub-deck">A systemic co-op survival game aboard a drifting warship. The crew fights, panics, calls for help, and dies with or without you. The thing in the lower decks learns from all of it.</p>
             <div class="hub-actions">
               <button class="hub-button primary" id="solo-play"><span class="num">01</span><b>PLAY SOLO</b><em>DEPLOY →</em></button>
               <button class="hub-button" data-open-page="multiplayer"><span class="num">02</span><b>MULTIPLAYER</b><em>FORM FIRETEAM →</em></button>
-              <button class="hub-button" data-open-page="about"><span class="num">03</span><b>ABOUT CHARON</b><em>READ →</em></button>
+              <button class="hub-button" data-open-page="about"><span class="num">03</span><b>ABOUT SATURN DEVOURING</b><em>READ →</em></button>
               <button class="hub-button" data-open-page="docs"><span class="num">04</span><b>DEVELOPER DOCS</b><em>OPEN →</em></button>
             </div>
             <p id="menu-notice" hidden></p>
@@ -308,7 +308,7 @@
       <section data-launch-page="multiplayer" hidden>
         <button class="hub-link hub-back" data-open-page="menu">← Main menu</button>
         <div class="hub-kicker">Fireteam assembly</div><h1 class="hub-page-title">Multiplayer</h1>
-        <p class="hub-copy">Every match runs peer-to-peer. In peerd, Charon uses the host’s authenticated base mesh. On the web, the same room, identity, gossip, and WebRTC primitives ship inside the page.</p>
+        <p class="hub-copy">Every match runs peer-to-peer. In peerd, Saturn Devouring uses the host’s authenticated base mesh. On the web, the same room, identity, gossip, and WebRTC primitives ship inside the page.</p>
         <div class="hub-form">
           <label class="hub-label" for="player-name">Callsign</label><input class="hub-input" id="player-name" maxlength="24" autocomplete="nickname" placeholder="ODST callsign">
           <div class="hub-form-row">
@@ -334,8 +334,8 @@
       </section>
 
       <section data-launch-page="about" hidden>
-        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button><div class="hub-kicker">Project briefing</div><h1 class="hub-page-title">About Charon</h1>
-        <div class="hub-copy"><p>Charon is a browser-native survival simulation set aboard the UNSC Saturn Devouring. It does not wait for the player: marines sweep compartments, civilians spread panic, radios fail, bodies become resources, and the Flood chooses where pressure will hurt most.</p><p>Solo and co-op use the same ship simulation. Multiplayer adds live ODST presence, shared weapon damage and explosions, and room voice over authenticated peer-to-peer links. There is no match server in the gameplay path.</p></div>
+        <button class="hub-link hub-back" data-open-page="menu">← Main menu</button><div class="hub-kicker">Project briefing</div><h1 class="hub-page-title">About Saturn Devouring</h1>
+        <div class="hub-copy"><p>Saturn Devouring is a browser-native survival simulation set aboard the UNSC Saturn Devouring. It does not wait for the player: marines sweep compartments, civilians spread panic, radios fail, bodies become resources, and the Flood chooses where pressure will hurt most.</p><p>Solo and co-op use the same ship simulation. Multiplayer adds live ODST presence, shared weapon damage and explosions, and room voice over authenticated peer-to-peer links. There is no match server in the gameplay path.</p></div>
         <div class="hub-grid"><article class="hub-card"><span class="index">SYSTEM 01</span><h2>AUTONOMOUS SHIP</h2><p>Every crew member and hostile form acts inside a deterministic 15 Hz simulation.</p></article><article class="hub-card"><span class="index">SYSTEM 02</span><h2>SHARED INCIDENT</h2><p>Co-op peers inhabit the same seeded outbreak and replicate combat actions in real time.</p></article><article class="hub-card"><span class="index">SYSTEM 03</span><h2>LOCAL-FIRST</h2><p>The complete game, assets, networking client, and docs can travel as one peerd dwapp.</p></article></div>
       </section>
 
@@ -344,7 +344,7 @@
         <div class="docs-layout">
           <nav class="docs-tabs" role="tablist" aria-label="Developer documentation"><button id="docs-tab-overview" role="tab" data-doc-tab="overview" aria-controls="docs-panel-overview" aria-selected="true">01 · Overview</button><button id="docs-tab-network" role="tab" data-doc-tab="network" aria-controls="docs-panel-network" aria-selected="false" tabindex="-1">02 · Networking</button><button id="docs-tab-dwapp" role="tab" data-doc-tab="dwapp" aria-controls="docs-panel-dwapp" aria-selected="false" tabindex="-1">03 · dwapp package</button><button id="docs-tab-run" role="tab" data-doc-tab="run" aria-controls="docs-panel-run" aria-selected="false" tabindex="-1">04 · Run & test</button></nav>
           <div>
-            <article id="docs-panel-overview" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-overview" data-doc-panel="overview"><h2>Architecture overview</h2><p>Charon separates the deterministic ship simulation from rendering and player input. The simulation writes one packed agent buffer; the 3D layer consumes it without owning world state.</p><h3>PRIMARY SURFACES</h3><ul><li><code>sim/</code> — ship graph, factions, combat, commands, and deterministic ticks.</li><li><code>game/</code> — first-person controls, 3D world, HUD, audio, and the hub launcher.</li><li><code>multiplayer/</code> — room abstraction, lobby protocol, game synchronization, and voice.</li></ul></article>
+            <article id="docs-panel-overview" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-overview" data-doc-panel="overview"><h2>Architecture overview</h2><p>Saturn Devouring separates the deterministic ship simulation from rendering and player input. The simulation writes one packed agent buffer; the 3D layer consumes it without owning world state.</p><h3>PRIMARY SURFACES</h3><ul><li><code>sim/</code> — ship graph, factions, combat, commands, and deterministic ticks.</li><li><code>game/</code> — first-person controls, 3D world, HUD, audio, and the hub launcher.</li><li><code>multiplayer/</code> — room abstraction, lobby protocol, game synchronization, and voice.</li></ul></article>
             <article id="docs-panel-network" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-network" data-doc-panel="network" hidden><h2>Multiplayer protocol</h2><p>The peerd build calls the consent-gated dwapp bridge. The web build bundles peerd’s identity, room, mesh, gossip, presence, direct-message, and WebRTC transport primitives.</p><h3>FLOW</h3><ul><li>Join a room and authenticate peers with did:key identities.</li><li>Quick Match discovers the fullest open public lobby and creates one only if none answers; private lobby messages require a DID-bound invite HMAC.</li><li>A nonce-bound join remains rollback-safe until the requester acknowledges exact commit delivery, so a delayed commit cannot leave a ghost member after timeout.</li><li>The lobby creator may deploy after a second player joins, or keep waiting up to four. Optional capacity ranking chooses simulation authority separately; otherwise DID order is deterministic.</li><li>A proposal/ack/commit-receipt/go-receipt/final-launch barrier freezes membership before deployment.</li><li>The fireteam leaves the lobby for an isolated match room.</li><li>The authority advances the ship simulation and sends term-bound delta checkpoints; player poses and validated actions use direct WebRTC messages.</li><li>The standalone adapter offers native RTP/Opus voice; the current Peerd bridge hides voice because it does not expose media operations.</li></ul><pre>discover → join / accept / admission-ack → ready → proposal / receipts → final launch → match room
                                               ↘ direct state and actions</pre></article>
             <article id="docs-panel-dwapp" class="docs-panel" role="tabpanel" aria-labelledby="docs-tab-dwapp" data-doc-panel="dwapp" hidden><h2>peerd dwapp package</h2><p>The hub output contains a schema-1 <code>peerd.json</code> declaring <code>kind: "dwapp"</code>, one entry HTML document, one stylesheet, and one self-contained readable module bundle. Textures and audio remain byte-identical binary files resolved through <code>peerd.assets</code> in the opaque-origin sandbox.</p><h3>BRIDGE OPERATIONS USED</h3><p>The current bridge provides <code>hello</code>, <code>join</code>, <code>leave</code>, <code>presence</code>, <code>announce</code>, <code>subscribe</code>, <code>publish</code>, <code>retain</code>, <code>history</code>, and <code>dm-send</code>. Optional capacity and voice operations are used only when advertised by a future bridge.</p><pre>npm run build:dwapp
@@ -356,7 +356,7 @@ npm run build:dwapp</pre></article>
           </div>
         </div>
       </section>
-      <footer class="hub-footer"><span>CHARON NETWORK PROTOCOL v9</span><span>WEBGPU · WEBGL2 · WEBRTC · PEERD DWEB</span></footer>
+      <footer class="hub-footer"><span>SATURN DEVOURING NETWORK PROTOCOL v9</span><span>WEBGPU · WEBGL2 · WEBRTC · PEERD DWEB</span></footer>
     </main>
   </div>
   <canvas id="c"></canvas>
@@ -405,8 +405,8 @@ npm run build:dwapp</pre></article>
     <div id="introHint">any key or click — skip</div>
   </div>
   <div id="overlay">
-    <h1 id="ovTitle">HALO CHARON</h1>
-    <p id="ovText">You are a lone crew member aboard the UNSC Saturn Devouring, a Charon-class frigate. Something hit the hangar deck.
+    <h1 id="ovTitle">SATURN DEVOURING</h1>
+    <p id="ovText">You are a lone crew member aboard the UNSC Saturn Devouring, a light frigate. Something hit the hangar deck.
       The ship's marines, crew — and whatever came aboard — act entirely on their own. Survive.</p>
     <p class="keys">click to enter · WASD + SHIFT sprint + SPACE jump · hold LEFT CLICK — full auto MA5 (loud) · R reload · F melee · G frag · E scavenge ammo/flamethrower · Q or MOUSE WHEEL swap weapon · M tac map · 1 follow / 2 hold / 3 advance (fireteam) ·
       ladders/stairs: stand at one, press L — always takes you to the other end · your fireteam follows you · ESC frees the mouse ·

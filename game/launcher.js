@@ -80,12 +80,12 @@ let lobbyMaintenanceBusy = false;
 const lobbyRevisionKey = (id, host) => `${String(id)}\u0000${String(host)}`;
 
 function savedName() {
-  try { return localStorage.getItem('charon-player-name') || ''; }
+  try { return localStorage.getItem('saturn-devouring-player-name') || ''; }
   catch { return ''; }
 }
 
 function rememberName(name) {
-  try { localStorage.setItem('charon-player-name', name); }
+  try { localStorage.setItem('saturn-devouring-player-name', name); }
   catch { /* opaque-origin dwapps intentionally have no durable storage */ }
 }
 
@@ -1114,7 +1114,7 @@ async function joinLobby(mode) {
 }
 
 async function launchGame(config) {
-  globalThis.__charonLaunch = config;
+  globalThis.__saturnDevouringLaunch = config;
   document.body.classList.remove('launcher-active');
   launcher.hidden = true;
   byId('intro').style.display = '';
@@ -1126,7 +1126,7 @@ async function launchGame(config) {
     document.body.classList.add('launcher-active');
     showPage('menu');
     const notice = byId('menu-notice');
-    notice.textContent = `Could not start Charon: ${error.message}`;
+    notice.textContent = `Could not start Saturn Devouring: ${error.message}`;
     notice.hidden = false;
     throw error;
   }

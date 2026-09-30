@@ -276,3 +276,12 @@ body.launcher-active > :not(#launcher) { display: none !important; }
   #launcher::before { display: none; }
   .hub-button { transition: none; }
 }
+
+/* Keep the full game title legible on narrow screens. */
+.hub-brand { min-width: 0; }
+.hub-mark { flex-shrink: 0; }
+.hub-brand strong { line-height: 1.35; }
+@media (max-width: 760px) {
+  .hub-top { flex-wrap: wrap; }
+  .hub-nav { flex-wrap: wrap; }
+}

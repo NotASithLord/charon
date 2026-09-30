@@ -5,7 +5,7 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/codec/base58.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/codec/base58.js
 var ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 var BASE = 58;
 var LOOKUP = (() => {
@@ -59,7 +59,7 @@ var base58decode = (str) => {
   return out;
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/identity/did.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/identity/did.js
 var ED25519_PUB_PREFIX = Uint8Array.from([237, 1]);
 var DID_PREFIX = "did:key:z";
 var DID_KEY_LENGTH = 56;
@@ -83,7 +83,7 @@ var decodeDidKey = (did) => {
   return tagged.slice(2);
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/shared/bundle/bytes.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/shared/bundle/bytes.js
 var utf8 = (s) => new TextEncoder().encode(s);
 var toHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 var toBase64 = (b) => {
@@ -138,7 +138,7 @@ var concat = (...arrs) => {
   return out;
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/identity/keypair.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/identity/keypair.js
 var generateIdentity = async () => {
   const kp = (
     /** @type {CryptoKeyPair} */
@@ -193,7 +193,7 @@ var verifySignature = async (did, signature, bytes) => {
   );
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/channel.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/channel.js
 var createBufferedChannel = ({ send, close } = (
   /** @type {{ send: (msg: any) => void }} */
   {}
@@ -253,7 +253,7 @@ var createBufferedChannel = ({ send, close } = (
   return chan;
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/ice.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/ice.js
 var DirectPathUnavailableError = class extends Error {
   /** @param {{ local?: CandidateSummary, remote?: CandidateSummary }} [ends] */
   constructor({ local, remote } = {}) {
@@ -321,7 +321,7 @@ var connectionPath = async (pc) => {
   }
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/log.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/log.js
 var DWEB_LOG = true;
 var on = () => DWEB_LOG && typeof window !== "undefined" && /** @type {Record<string, unknown>} */
 globalThis.__DWEB_LOG__ !== false;
@@ -342,7 +342,7 @@ var dwarn = (tag, ...args) => {
   }
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/peer.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/peer.js
 var DEFAULT_ICE_SERVERS = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"] },
   { urls: "stun:stun.cloudflare.com:3478" },
@@ -501,7 +501,7 @@ var createPeer = ({
   return { pc, channelReady, setRemote, addRemoteCandidate };
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/transports/webrtc.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/transports/webrtc.js
 var requireSignaling = (signaling) => {
   if (typeof signaling?.send !== "function" || typeof signaling?.onRemote !== "function") {
     throw new Error("webrtc: a signaling channel is required ({ send, onRemote })");
@@ -606,7 +606,7 @@ var createWebrtcTransport = ({ RTCPeerConnection, iceServers = DEFAULT_ICE_SERVE
   };
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/signaling-client.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/signaling-client.js
 var DEFAULT_SIGNALING = ["wss://bootstrap.peerd.ai/rendezvous"];
 var openRendezvous = ({
   url = DEFAULT_SIGNALING[0],
@@ -715,7 +715,7 @@ var openRendezvous = ({
   })
 );
 
-// ../../../../private/tmp/peerd-charon-release/extension/shared/bundle/canonical.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/shared/bundle/canonical.js
 var canonicalize = (v) => {
   if (v === null) return "null";
   if (Array.isArray(v)) return `[${v.map(canonicalize).join(",")}]`;
@@ -745,7 +745,7 @@ var canonicalize = (v) => {
   throw new Error(`canonicalize: unsupported type ${t}`);
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/envelope.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/envelope.js
 var DOMAIN = "peerd/envelope/v1";
 var signingBytes = (env) => {
   const { sig, ...rest } = env;
@@ -785,7 +785,7 @@ var verifyEnvelope = async (env) => {
   }
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/shared/bundle/chunk.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/shared/bundle/chunk.js
 var CHUNK_SIZE = 262144;
 var sha256hex = async (bytes) => toHex(new Uint8Array(
   await crypto.subtle.digest(
@@ -795,7 +795,7 @@ var sha256hex = async (bytes) => toHex(new Uint8Array(
   )
 ));
 
-// ../../../../private/tmp/peerd-charon-release/extension/shared/bundle/manifest.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/shared/bundle/manifest.js
 var withoutSig = (manifest) => {
   const { sig, ...rest } = manifest;
   return rest;
@@ -803,12 +803,12 @@ var withoutSig = (manifest) => {
 var canonicalManifestBytes = (manifest) => utf8(canonicalize(withoutSig(manifest)));
 var manifestHash = async (manifest) => sha256hex(canonicalManifestBytes(manifest));
 
-// ../../../../private/tmp/peerd-charon-release/extension/shared/bundle/bundle.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/shared/bundle/bundle.js
 var DEFAULT_MAX_PACKED_BYTES = 64 * 1024 * 1024;
 var DEFAULT_MAX_DECODED_BYTES = 64 * 1024 * 1024;
 var MAX_NETWORK_BUNDLE_BYTES = 5e7;
 
-// ../../../../private/tmp/peerd-charon-release/extension/vendor/pako/pako.esm.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/vendor/pako/pako.esm.js
 var pako = (function() {
   return (function r(s, o, l) {
     function h(e, t2) {
@@ -1887,7 +1887,7 @@ if (typeof pako.Deflate !== "function" || typeof pako.Inflate !== "function") th
 var Deflate = pako.Deflate;
 var Inflate = pako.Inflate;
 
-// ../../../../private/tmp/peerd-charon-release/extension/shared/bundle/transport.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/shared/bundle/transport.js
 var BUNDLE_TRANSPORT_VERSION = 2;
 var BUNDLE_TRANSPORT_ENCODING = "gzip";
 var BUNDLE_TRANSPORT_CODEC = "pako@1.0.11:gzip:l6:w15:m8:s0:i262144:mtime0:os255";
@@ -1960,7 +1960,7 @@ var assertBundleTransportDescriptor = (candidate, limits = {}) => {
 var CODEC_OUTPUT_CHUNK_BYTES = 16 * 1024;
 var CODEC_INPUT_CHUNK_BYTES = 256 * 1024;
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/content/manifest.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/content/manifest.js
 var signingBytes2 = (manifest) => concat(
   utf8(manifest.v === 2 ? "peerd/manifest/v2" : "peerd/manifest/v1"),
   Uint8Array.from([0]),
@@ -2065,7 +2065,7 @@ var verifyManifest = async (manifest) => {
   return ok ? { ok: true, publisher } : { ok: false, reason: "bad_sig" };
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/content/uri.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/content/uri.js
 var SCHEME = "peerd://";
 var HASH_RE = /^[0-9a-f]{64}$/;
 var parsePeerdUri = (s) => {
@@ -2092,7 +2092,7 @@ var parsePeerdUri = (s) => {
   return { did, hash, path };
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/content/transfer.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/content/transfer.js
 var ALPHA = 3;
 var createContentResponder = ({ store }) => (msg, send) => {
   switch (msg && msg.t) {
@@ -2182,7 +2182,7 @@ var fetchBundle = async ({ uri, channel, onProgress, timeoutMs = 15e3 } = (
   return { manifest, payload };
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/mesh.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/mesh.js
 var CTRL = Object.freeze({
   PING: 2,
   PONG: 3,
@@ -2491,7 +2491,7 @@ var createRoomMesh = ({
   });
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/session.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/session.js
 var newId2 = () => crypto.randomUUID();
 var createSession = async ({ channel, identity, caps = ["content"], now = Date.now }) => {
   let resolveHello;
@@ -2523,7 +2523,7 @@ var createSession = async ({ channel, identity, caps = ["content"], now = Date.n
   return { remoteDid };
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/transport/rooms.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/transport/rooms.js
 var short = (did) => (did || "").slice(-8);
 var newId3 = () => globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 var ANSWER_TIMEOUT_MS = 15e3;
@@ -2819,7 +2819,7 @@ var joinRoom = async ({
   });
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/gossip/topic.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/gossip/topic.js
 var PUB = 0;
 var MAX_GOSSIP_ENVELOPE_BYTES = 32 * 1024;
 var createGossip = ({
@@ -2966,7 +2966,7 @@ var createGossip = ({
   });
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/gossip/sync.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/gossip/sync.js
 var SYNC = Object.freeze({ REQ: 2, RESP: 3 });
 var MAX_HAVES = 512;
 var MAX_RESP = 256;
@@ -3082,7 +3082,7 @@ var createTopicSync = ({
   });
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/gossip/presence.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/gossip/presence.js
 var PRESENCE_TOPIC = "~presence";
 var FORGET_SUPPRESS_MS = 3e3;
 var createPresence = ({
@@ -3188,7 +3188,7 @@ var createPresence = ({
   });
 };
 
-// ../../../../private/tmp/peerd-charon-release/extension/peerd-distributed/messaging/direct.js
+// ../../../../private/tmp/peerd-saturn-devouring-release/extension/peerd-distributed/messaging/direct.js
 var MSG = 0;
 var createDirect = ({ mesh }) => {
   const subs = /* @__PURE__ */ new Set();

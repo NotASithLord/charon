@@ -20,8 +20,8 @@
 // the same room at all instead of staring at frozen NPCs.
 export const PROTOCOL_VERSION = 11;
 export const MAX_PLAYERS = 4;
-export const QUICKPLAY_ROOM = `charon:quickplay:v${PROTOCOL_VERSION}`;
-const ROOM_PREFIX = `charon:v${PROTOCOL_VERSION}:`;
+export const QUICKPLAY_ROOM = `saturn-devouring:quickplay:v${PROTOCOL_VERSION}`;
+const ROOM_PREFIX = `saturn-devouring:v${PROTOCOL_VERSION}:`;
 const SAFE_CODE = /^[a-z0-9][a-z0-9-]{5,47}$/;
 const PUBLIC_LOBBY = /^lobby-[a-z0-9]{12,48}$/;
 const GAME_KINDS = new Set(['election', 'state', 'hit', 'explosion', 'shot', 'snapshot', 'medkit', 'armorpack']);
@@ -81,7 +81,7 @@ export async function privateRoom(code, cryptoApi = globalThis.crypto) {
   if (!cryptoApi?.subtle) throw new Error('secure invite rooms require WebCrypto');
   const secret = normalizeInviteCode(code);
   const digest = await cryptoApi.subtle.digest('SHA-256', new TextEncoder().encode(
-    `charon-private-v${PROTOCOL_VERSION}:${secret}`,
+    `saturn-devouring-private-v${PROTOCOL_VERSION}:${secret}`,
   ));
   // The room address reveals no reusable invite secret to overlay forwarders.
   // Lobby messages carry a separate DID-bound HMAC, so learning this hash is
@@ -96,7 +96,7 @@ export async function inviteProof(code, did, cryptoApi = globalThis.crypto) {
     'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
   const signature = await cryptoApi.subtle.sign(
-    'HMAC', key, new TextEncoder().encode(`charon-invite-v${PROTOCOL_VERSION}:${String(did)}`),
+    'HMAC', key, new TextEncoder().encode(`saturn-devouring-invite-v${PROTOCOL_VERSION}:${String(did)}`),
   );
   return bytesToHex(new Uint8Array(signature));
 }
@@ -109,7 +109,7 @@ export async function verifyInviteProof(code, did, proof, cryptoApi = globalThis
   );
   return cryptoApi.subtle.verify(
     'HMAC', key, hexToBytes(proof),
-    new TextEncoder().encode(`charon-invite-v${PROTOCOL_VERSION}:${String(did)}`),
+    new TextEncoder().encode(`saturn-devouring-invite-v${PROTOCOL_VERSION}:${String(did)}`),
   );
 }
 
@@ -135,7 +135,7 @@ export function matchScope(dids) {
 }
 
 export function seedForScope(scope) {
-  return `charon-multiplayer-v${PROTOCOL_VERSION}:${String(scope)}`;
+  return `saturn-devouring-multiplayer-v${PROTOCOL_VERSION}:${String(scope)}`;
 }
 
 export function matchRoom(scope) {
