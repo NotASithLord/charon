@@ -1,0 +1,67 @@
+name: Verify Saturn Devouring rename
+on:
+  push:
+    branches: ['rename/saturn-devouring']
+    paths:
+      - 'scripts/rename-game.py'
+      - '.github/workflows/rename-game.yml'
+permissions:
+  contents: write
+concurrency:
+  group: saturn-devouring-rename
+  cancel-in-progress: false
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Rename source and package identifiers
+        run: python3 scripts/rename-game.py
+      - name: Install locked build dependencies
+        run: npm ci
+      - name: Check JavaScript syntax
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          for name in files:
+              path = pathlib.Path(name)
+              if path.is_file() and path.suffix in {'.js', '.mjs'}:
+                  subprocess.run(['node', '--check', name], check=True)
+          print('JavaScript syntax checks passed')
+          PY
+      - name: Rebuild distributable apps
+        run: |
+          npm run build:dwapp
+          for target in sim fused; do
+            rm -rf "dwapp/$target"
+            cp -R "dist/dwapp/$target" "dwapp/$target"
+          done
+      - name: Run regression checks
+        run: npm run check
+      - name: Build deployed website
+        run: npm run build:site
+      - name: Verify branding and packaged integrity
+        run: python3 scripts/rename-game.py --check
+      - name: Save tested changes to the rename branch
+        run: |
+          rm scripts/rename-game.py
+          git add -A
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Rename game and ship branding to Saturn Devouring; regenerate packaged apps'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Retain tested website and app
+        uses: actions/upload-artifact@v4
+        with:
+          name: saturn-devouring-build
+          retention-days: 7
+          path: |
+            dist/site/
+            dwapp/saturn-devouring-app.peerd
