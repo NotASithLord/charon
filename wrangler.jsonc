@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "charon",
+  "name": "saturn-devouring",
   "compatibility_date": "2026-08-11",
   // Serve the BUILT site, not the repo. Pointing this at "." shipped ~60 raw ES
   // modules with every comment and blank line in them; `npm run build:site`

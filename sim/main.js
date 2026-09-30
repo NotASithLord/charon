@@ -65,7 +65,7 @@ function applyDials() {
 }
 
 function restart() {
-  sim = new Sim(document.getElementById('seed').value.trim() || 'charon-1', swarmOverrides());
+  sim = new Sim(document.getElementById('seed').value.trim() || 'saturn-devouring-1', swarmOverrides());
   applyDials();
   viz.setSim(sim);
   acc = 0;

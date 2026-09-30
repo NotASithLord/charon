@@ -1306,7 +1306,7 @@ export class Sim {
       // reaches it has to drop the flag. The one below (steer declined it)
       // was covered; these early exits were not, and a combat form SHOT DOWN
       // mid-leap kept a.leaping set for the rest of the run — measured 16,328
-      // consecutive ticks on charon-2 — which locked it out of fire avoidance
+      // consecutive ticks on saturn-devouring-2 — which locked it out of fire avoidance
       // and left a stale committed arc to resume from if it was ever raised.
       if (a.leaping && (a.dead || a.faction === FACTION.CORPSE || a.downed || a.hp <= 0
         || a.isPlayer || a.closeFollow || a.held === this.tickCount)) {
@@ -1961,13 +1961,13 @@ export class Sim {
       // 2 metres AND the hive happened to hand this pod a grab order". Gating
       // the pounce on TASK.GRAB made it fire exactly as often as the hive
       // issued grabs, which is a seed lottery: over 20-minute headless runs
-      // charon-2/charon-3 issue 34/39 grabs and pounce 27/20 times, while
-      // charon-1 and charon-4 issue ZERO and never pounced once. The pod's
+      // saturn-devouring-2/saturn-devouring-3 issue 34/39 grabs and pounce 27/20 times, while
+      // saturn-devouring-1 and saturn-devouring-4 issue ZERO and never pounced once. The pod's
       // spatial engagement now matches the combat form's above, which has
       // always been task-independent for the same reason — a form that
       // physically shares a space with prey engages it. Measured with a live
       // target walking the ship: pods passed inside 2 m of it on a MOVE or
-      // SCOUT errand and skittered straight by, 30 ticks on charon-1 alone.
+      // SCOUT errand and skittered straight by, 30 ticks on saturn-devouring-1 alone.
       // A form already burrowing into a body is COMMITTED and never
       // re-targeted (the same exclusion floodExec's point-blank lunge makes).
       if (!t && a.task?.kind !== TASK.CONVERT && a.task?.kind !== TASK.REANIMATE) {
@@ -2067,7 +2067,7 @@ export class Sim {
       //                     with leaping=true forever, frozen out of crowd
       //                     separation, fire avoidance and the grab latch
       //                     (measured: 16,328 consecutive airborne ticks on
-      //                     charon-2, and every seed with a doorway grab).
+      //                     saturn-devouring-2, and every seed with a doorway grab).
       //   budget spent    : belt and braces, so no reachable state anywhere
       //                     leaves a body in the air indefinitely.
       if (rem <= a.leapLand || rem >= a.leapRem - 1e-4 || a.leapTicks <= 0) {

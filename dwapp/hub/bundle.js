@@ -68262,7 +68262,7 @@ async function privateRoom(code3, cryptoApi = globalThis.crypto) {
   if (!cryptoApi?.subtle) throw new Error("secure invite rooms require WebCrypto");
   const secret = normalizeInviteCode(code3);
   const digest = await cryptoApi.subtle.digest("SHA-256", new TextEncoder().encode(
-    `charon-private-v${PROTOCOL_VERSION}:${secret}`
+    `saturn-devouring-private-v${PROTOCOL_VERSION}:${secret}`
   ));
   return `${ROOM_PREFIX}private:${bytesToHex(new Uint8Array(digest)).slice(0, 32)}`;
 }
@@ -68279,7 +68279,7 @@ async function inviteProof(code3, did, cryptoApi = globalThis.crypto) {
   const signature = await cryptoApi.subtle.sign(
     "HMAC",
     key,
-    new TextEncoder().encode(`charon-invite-v${PROTOCOL_VERSION}:${String(did)}`)
+    new TextEncoder().encode(`saturn-devouring-invite-v${PROTOCOL_VERSION}:${String(did)}`)
   );
   return bytesToHex(new Uint8Array(signature));
 }
@@ -68297,7 +68297,7 @@ async function verifyInviteProof(code3, did, proof, cryptoApi = globalThis.crypt
     "HMAC",
     key,
     hexToBytes(proof),
-    new TextEncoder().encode(`charon-invite-v${PROTOCOL_VERSION}:${String(did)}`)
+    new TextEncoder().encode(`saturn-devouring-invite-v${PROTOCOL_VERSION}:${String(did)}`)
   );
 }
 function quickplayRoom(now = Date.now()) {
@@ -68306,7 +68306,7 @@ function quickplayRoom(now = Date.now()) {
   return QUICKPLAY_ROOM;
 }
 function seedForScope(scope) {
-  return `charon-multiplayer-v${PROTOCOL_VERSION}:${String(scope)}`;
+  return `saturn-devouring-multiplayer-v${PROTOCOL_VERSION}:${String(scope)}`;
 }
 function matchRoom(scope) {
   const value = String(scope ?? "");
@@ -68343,8 +68343,8 @@ var init_protocol = __esm({
   "multiplayer/protocol.js"() {
     PROTOCOL_VERSION = 11;
     MAX_PLAYERS = 4;
-    QUICKPLAY_ROOM = `charon:quickplay:v${PROTOCOL_VERSION}`;
-    ROOM_PREFIX = `charon:v${PROTOCOL_VERSION}:`;
+    QUICKPLAY_ROOM = `saturn-devouring:quickplay:v${PROTOCOL_VERSION}`;
+    ROOM_PREFIX = `saturn-devouring:v${PROTOCOL_VERSION}:`;
     SAFE_CODE = /^[a-z0-9][a-z0-9-]{5,47}$/;
     PUBLIC_LOBBY = /^lobby-[a-z0-9]{12,48}$/;
     GAME_KINDS = /* @__PURE__ */ new Set(["election", "state", "hit", "explosion", "shot", "snapshot", "medkit", "armorpack"]);
@@ -70671,7 +70671,7 @@ function assertDeckConnectivity(graph) {
   const decksSeen = /* @__PURE__ */ new Set();
   for (let i2 = 0; i2 < graph.n; i2++) if (ff.dist[i2] !== -1) decksSeen.add(graph.node(i2).deck);
   if (decksSeen.size < 5) {
-    console.warn(`[charon] deck connectivity broken: only decks {${[...decksSeen].sort().join(",")}} reachable from the bridge — check for a lockable cross-deck edge`);
+    console.warn(`[saturn-devouring] deck connectivity broken: only decks {${[...decksSeen].sort().join(",")}} reachable from the bridge — check for a lockable cross-deck edge`);
   }
 }
 var STATE, NEXT_ID;
@@ -82066,7 +82066,7 @@ var init_player = __esm({
         this._outSince = 0;
         if (!this._outLogged) {
           this._outLogged = true;
-          console.warn("[charon] player was outside the hull — pulled back inside");
+          console.warn("[saturn-devouring] player was outside the hull — pulled back inside");
         }
       }
       _cancelQueue() {
@@ -89282,7 +89282,7 @@ var init_BloomNode = __esm({
        * @param {number} [strength=1] - The strength of the bloom.
        * @param {number} [radius=0] - The radius of the bloom.
        * @param {number} [threshold=0] - The luminance threshold limits which bright areas contribute to the bloom effect.
-       * @param {number} [nMips=5] - Number of blur mips (charon patch: configurable so a 2-mip chain can match a lighter hand-rolled bloom).
+       * @param {number} [nMips=5] - Number of blur mips (saturn-devouring patch: configurable so a 2-mip chain can match a lighter hand-rolled bloom).
        */
       constructor(inputNode, strength = 1, radius = 0, threshold = 0, nMips = 5) {
         super("vec4");
@@ -89447,7 +89447,7 @@ var init_BloomNode = __esm({
        * when the effect is no longer required.
        */
       // (dispose()'s JSDoc block above belongs to dispose(), two methods down.)
-      // charon patch (perf pass 5): release the blur chain's GPU memory WITHOUT
+      // saturn-devouring patch (perf pass 5): release the blur chain's GPU memory WITHOUT
       // touching the compiled materials — dispose() would free the high-pass,
       // composite and blur materials, which is exactly what the quality
       // governor's prewarm pinning spent the intro protecting. Per-target
@@ -90566,12 +90566,12 @@ var init_game_sync = __esm({
 // game/main.js?v=1
 var main_exports = {};
 function reportFatal(what, err) {
-  console.error("[charon] " + what, err);
+  console.error("[saturn-devouring] " + what, err);
   if (_fatalShown >= 3) return;
   _fatalShown++;
   const div3 = document.createElement("div");
   div3.style.cssText = "position:fixed;left:10px;top:" + (40 + _fatalShown * 92) + "px;z-index:99;max-width:52em;background:rgba(60,10,10,0.94);color:#ffb0a0;font:11px monospace;padding:6px 8px;border:1px solid #a05040;white-space:pre-wrap;pointer-events:none";
-  div3.textContent = "CHARON " + what.toUpperCase() + ": " + String(err?.message ?? err).slice(0, 400) + "\n" + String(err?.stack ?? "").split("\n").slice(1, 5).join("\n").slice(0, 600);
+  div3.textContent = "SATURN DEVOURING " + what.toUpperCase() + ": " + String(err?.message ?? err).slice(0, 400) + "\n" + String(err?.stack ?? "").split("\n").slice(1, 5).join("\n").slice(0, 600);
   document.body.appendChild(div3);
 }
 function setTeamSpots(n2) {
@@ -90960,7 +90960,7 @@ function victoryScreen() {
     color: rank2.color,
     label: "FINAL TIME",
     secs,
-    share: `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${fmtTime(secs)} — ${rank2.name}. #HaloCharon`
+    share: `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${fmtTime(secs)} — ${rank2.name}. #HaloSaturnDevouring`
   });
 }
 function defeatScreen(title, text) {
@@ -90972,7 +90972,7 @@ function defeatScreen(title, text) {
     color: "#ff6a4d",
     label: "YOU SURVIVED",
     secs,
-    share: `The Flood took the UNSC Saturn Devouring — I survived ${fmtTime(secs)}. #HaloCharon`
+    share: `The Flood took the UNSC Saturn Devouring — I survived ${fmtTime(secs)}. #HaloSaturnDevouring`
   });
 }
 function resultCard({ headline, color: color3, label: label3, secs, share }) {
@@ -91012,7 +91012,7 @@ ${url}`);
     );
   });
   if (navigator.share) {
-    mkBtn("SHARE…", () => navigator.share({ title: "Halo Charon", text: share, url }).catch(() => {
+    mkBtn("SHARE…", () => navigator.share({ title: "Saturn Devouring", text: share, url }).catch(() => {
     }));
   }
 }
@@ -92524,7 +92524,7 @@ var init_main = __esm({
     init_game_sync();
     canvas = document.getElementById("c");
     QP = new URLSearchParams(location.search);
-    LAUNCH = globalThis.__charonLaunch ?? { mode: "solo", session: null };
+    LAUNCH = globalThis.__saturnDevouringLaunch ?? { mode: "solo", session: null };
     BASE_POD_COUNT = PARAMS.flood.initialInfectionForms;
     HD = QP.has("hd");
     QTIER = QP.get("q");
@@ -92560,7 +92560,7 @@ var init_main = __esm({
           div3.style.cssText = "position:fixed;left:10px;top:" + (40 + shown * 64) + "px;z-index:98;max-width:46em;background:rgba(60,10,10,0.92);color:#ffb0a0;font:11px monospace;padding:6px 8px;border:1px solid #a05040;white-space:pre-wrap;pointer-events:none";
           div3.textContent = "WEBGPU ERROR: " + String(e2.error?.message ?? e2.error).slice(0, 500);
           document.body.appendChild(div3);
-          console.error("[charon webgpu]", e2.error);
+          console.error("[saturn-devouring webgpu]", e2.error);
         });
       }
     }
@@ -92639,8 +92639,8 @@ var init_main = __esm({
     seedFromUrl = LAUNCH.seed || new URLSearchParams(location.search).get("seed");
     seed = seedFromUrl || "run-" + Math.random().toString(36).slice(2, 10);
     installDeviceLostReload(renderer, {
-      label: "charon",
-      storageKey: "charon-gl-lost",
+      label: "saturn-devouring",
+      storageKey: "saturn-devouring-gl-lost",
       params: { seed }
     });
     coopPlayers = LAUNCH.session ? Math.max(1, new Set(LAUNCH.members || []).size) : 1;
@@ -92664,7 +92664,7 @@ var init_main = __esm({
       physics = new PhysicsWorld({ staticBoxes: world.collisionBoxes() });
       physics.setDoorBoxes(world.doorBoxes());
       player.attachPhysics(physics);
-    }).catch((e2) => console.error("[charon] Rapier physics failed to initialise:", e2));
+    }).catch((e2) => console.error("[saturn-devouring] Rapier physics failed to initialise:", e2));
     agents.playerId = player.agent.id;
     fireteam = networkSquads.get(LAUNCH.session?.did) ?? sim.attachPlayerSquad(player.agent, 3);
     gameSync = createGameSync({
@@ -92874,7 +92874,7 @@ var init_main = __esm({
       rungs: RUNGS,
       pixelBudget: PIXEL_BUDGET,
       hd: HD,
-      label: "charon",
+      label: "saturn-devouring",
       apply: (R2, i2) => {
         rung = i2;
         torch.castShadow = R2.shadows;
@@ -93149,7 +93149,7 @@ var init_main = __esm({
       "Sol has been a war of attrition since the day the Covenant first",
       "appeared off Earth. Every week they probe the anchorages, every",
       "week we push them back, at a high and bleeding cost. There are",
-      "little less of us left to do the bleeding. This Charon class",
+      "little less of us left to do the bleeding. This Saturn Devouring class",
       "frigate has held the Mars sector through all of it.",
       "",
       "One transmission reached this station in the past week:",
@@ -93794,7 +93794,7 @@ var init_main = __esm({
   }
 });
 
-// charon-dwapp-hub.mjs
+// saturn-devouring-dwapp-hub.mjs
 init_three_webgpu_module();
 
 // multiplayer/dweb-client.js
@@ -94303,7 +94303,7 @@ function createRoomVoice({
 }
 
 // multiplayer/session.js
-var scopedTopic = (scope, topic) => `charon/${scope || "lobby"}/${topic}`;
+var scopedTopic = (scope, topic) => `saturn-devouring/${scope || "lobby"}/${topic}`;
 async function browserCapacity(room) {
   const samples = await Promise.all(room.peers().map(async (peer) => {
     try {
@@ -94352,7 +94352,7 @@ var SessionBase = class {
       try {
         callback(value);
       } catch (error2) {
-        console.error("[charon] session listener failed", event, error2);
+        console.error("[saturn-devouring] session listener failed", event, error2);
       }
     }
   }
@@ -95524,14 +95524,14 @@ var lobbyMaintenanceBusy = false;
 var lobbyRevisionKey = (id, host) => `${String(id)}\0${String(host)}`;
 function savedName() {
   try {
-    return localStorage.getItem("charon-player-name") || "";
+    return localStorage.getItem("saturn-devouring-player-name") || "";
   } catch {
     return "";
   }
 }
 function rememberName(name) {
   try {
-    localStorage.setItem("charon-player-name", name);
+    localStorage.setItem("saturn-devouring-player-name", name);
   } catch {
   }
 }
@@ -96503,7 +96503,7 @@ async function joinLobby(mode) {
   }
 }
 async function launchGame(config) {
-  globalThis.__charonLaunch = config;
+  globalThis.__saturnDevouringLaunch = config;
   document.body.classList.remove("launcher-active");
   launcher.hidden = true;
   byId("intro").style.display = "";
@@ -96515,7 +96515,7 @@ async function launchGame(config) {
     document.body.classList.add("launcher-active");
     showPage("menu");
     const notice = byId("menu-notice");
-    notice.textContent = `Could not start Charon: ${error2.message}`;
+    notice.textContent = `Could not start Saturn Devouring: ${error2.message}`;
     notice.hidden = false;
     throw error2;
   }
@@ -96713,6 +96713,6 @@ globalThis.peerd?.agent?.expose({
   }
 });
 
-// charon-dwapp-hub.mjs
+// saturn-devouring-dwapp-hub.mjs
 var norm = (u2) => String(u2).replace(/^\.\//, "");
 DefaultLoadingManager.setURLModifier((u2) => globalThis.peerd?.assets?.url?.(norm(u2)) ?? u2);

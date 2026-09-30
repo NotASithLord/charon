@@ -1,4 +1,4 @@
-// HALO CHARON — 3D slice (docs/ROADMAP-3D.md): an ODST with a fireteam,
+// SATURN DEVOURING — 3D slice (docs/ROADMAP-3D.md): an ODST with a fireteam,
 // dropped into the ship while the FULL simulation plays out around them.
 // Mechanics layer ported from the first-strike vertical slice (MA5 loop,
 // armor-over-health, movement feel). The sim is untouched and authoritative.
@@ -37,7 +37,7 @@ const canvas = document.getElementById('c');
 // fragment bill drops ~2.6x. `?hd=1` opts back into full resolution;
 // `?q=low` / `?q=full` pin the quality ladder (see RUNGS below).
 const QP = new URLSearchParams(location.search);
-const LAUNCH = globalThis.__charonLaunch ?? { mode: 'solo', session: null };
+const LAUNCH = globalThis.__saturnDevouringLaunch ?? { mode: 'solo', session: null };
 const BASE_POD_COUNT = PARAMS.flood.initialInfectionForms;
 const HD = QP.has('hd');
 const QTIER = QP.get('q');
@@ -80,14 +80,14 @@ try {
 // the exception in the screenshot instead of "it froze".
 let _fatalShown = 0, _renderFails = 0, _renderStopped = false;
 function reportFatal(what, err) {
-  console.error('[charon] ' + what, err);
+  console.error('[saturn-devouring] ' + what, err);
   if (_fatalShown >= 3) return;
   _fatalShown++;
   const div = document.createElement('div');
   div.style.cssText = 'position:fixed;left:10px;top:' + (40 + _fatalShown * 92) + 'px;z-index:99;'
     + 'max-width:52em;background:rgba(60,10,10,0.94);color:#ffb0a0;font:11px monospace;'
     + 'padding:6px 8px;border:1px solid #a05040;white-space:pre-wrap;pointer-events:none';
-  div.textContent = 'CHARON ' + what.toUpperCase() + ': '
+  div.textContent = 'SATURN DEVOURING ' + what.toUpperCase() + ': '
     + String(err?.message ?? err).slice(0, 400)
     + '\n' + String(err?.stack ?? '').split('\n').slice(1, 5).join('\n').slice(0, 600);
   document.body.appendChild(div);
@@ -112,7 +112,7 @@ window.addEventListener('unhandledrejection', (e) => {
         + 'padding:6px 8px;border:1px solid #a05040;white-space:pre-wrap;pointer-events:none';
       div.textContent = 'WEBGPU ERROR: ' + String(e.error?.message ?? e.error).slice(0, 500);
       document.body.appendChild(div);
-      console.error('[charon webgpu]', e.error);
+      console.error('[saturn-devouring webgpu]', e.error);
     });
   }
 }
@@ -285,7 +285,7 @@ const seed = seedFromUrl || 'run-' + Math.random().toString(36).slice(2, 10);
 // fallback (WebGPU) or in place with a session cap (WebGL2), rebooting
 // into the same seed — same ship.
 installDeviceLostReload(renderer, {
-  label: 'charon', storageKey: 'charon-gl-lost', params: { seed },
+  label: 'saturn-devouring', storageKey: 'saturn-devouring-gl-lost', params: { seed },
 });
 // MORE GUNS, MORE FLOOD (user): every player added to a fireteam starts the
 // hive with 5 more infection forms. Solo is untouched at the tuned baseline;
@@ -329,7 +329,7 @@ initRapier().then(() => {
   // seal releases): one parked/placed fixed box per door, toggled below
   physics.setDoorBoxes(world.doorBoxes());
   player.attachPhysics(physics);
-}).catch((e) => console.error('[charon] Rapier physics failed to initialise:', e));
+}).catch((e) => console.error('[saturn-devouring] Rapier physics failed to initialise:', e));
 agents.playerId = player.agent.id;
 const fireteam = networkSquads.get(LAUNCH.session?.did) ?? sim.attachPlayerSquad(player.agent, 3);
 const gameSync = createGameSync({
@@ -761,7 +761,7 @@ let rung = 0;
 // the governor (engine/runtime.js) walks the ladder; the per-rung EFFECTS
 // stay here — they touch this game's torch, light pool, bloom and motes
 const governor = new QualityGovernor({
-  renderer, rungs: RUNGS, pixelBudget: PIXEL_BUDGET, hd: HD, label: 'charon',
+  renderer, rungs: RUNGS, pixelBudget: PIXEL_BUDGET, hd: HD, label: 'saturn-devouring',
   apply: (R, i) => {
     rung = i;
     // NOTHING HERE MAY DESTROY A SHADOW RESOURCE. Reported again on the Legion
@@ -1352,7 +1352,7 @@ const INTRO_BODY = [
   'Sol has been a war of attrition since the day the Covenant first',
   'appeared off Earth. Every week they probe the anchorages, every',
   'week we push them back, at a high and bleeding cost. There are',
-  'little less of us left to do the bleeding. This Charon class',
+  'little less of us left to do the bleeding. This Saturn Devouring class',
   'frigate has held the Mars sector through all of it.',
   '',
   'One transmission reached this station in the past week:',
@@ -1472,7 +1472,7 @@ function victoryScreen() {
   endScreen('OUTBREAK CONTAINED', rank.blurb);
   resultCard({
     headline: rank.name, color: rank.color, label: 'FINAL TIME', secs,
-    share: `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${fmtTime(secs)} — ${rank.name}. #HaloCharon`,
+    share: `I contained the Flood outbreak aboard the UNSC Saturn Devouring in ${fmtTime(secs)} — ${rank.name}. #HaloSaturnDevouring`,
   });
 }
 function defeatScreen(title, text) {
@@ -1481,7 +1481,7 @@ function defeatScreen(title, text) {
   endScreen(title, text);
   resultCard({
     headline: 'OVERRUN', color: '#ff6a4d', label: 'YOU SURVIVED', secs,
-    share: `The Flood took the UNSC Saturn Devouring — I survived ${fmtTime(secs)}. #HaloCharon`,
+    share: `The Flood took the UNSC Saturn Devouring — I survived ${fmtTime(secs)}. #HaloSaturnDevouring`,
   });
 }
 function resultCard({ headline, color, label, secs, share }) {
@@ -1527,7 +1527,7 @@ function resultCard({ headline, color, label, secs, share }) {
   });
   // phones and Safari get the real share sheet; everything else has the two above
   if (navigator.share) {
-    mkBtn('SHARE…', () => navigator.share({ title: 'Halo Charon', text: share, url }).catch(() => {}));
+    mkBtn('SHARE…', () => navigator.share({ title: 'Saturn Devouring', text: share, url }).catch(() => {}));
   }
 }
 

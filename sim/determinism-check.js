@@ -5,7 +5,7 @@
 
 import { Sim } from './sim.js';
 
-const seeds = ['charon-1', 'charon-2', 'high-charity'];
+const seeds = ['saturn-devouring-1', 'saturn-devouring-2', 'high-charity'];
 const checkTicks = [50, 500, 2000, 6000];
 
 function run(seed) {

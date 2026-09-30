@@ -1,9 +1,9 @@
 {
-  "name": "halo-charon-poc",
+  "name": "saturn-devouring",
   "version": "0.1.1",
   "private": true,
   "type": "module",
-  "description": "Halo Charon POC \u2014 simulation core + VAT rendering validation harness",
+  "description": "Saturn Devouring POC \u2014 simulation core + VAT rendering validation harness",
   "scripts": {
     "serve": "python3 -m http.server 8000",
     "headless": "node sim/headless.js",

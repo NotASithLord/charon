@@ -29,7 +29,7 @@ combat forms sprinting and leaping, carriers swelling and rupturing —
 - Generate room volumes from the meter plan (floor rects × 2.6 m clear
   height per deck), door frames at the computed door points, ladder/lift
   trunks, maintenance shafts and vent runs as crawlable tubes.
-- Author-pass the result toward the Charon-class silhouette (hull taper,
+- Author-pass the result toward the reference frigate silhouette (hull taper,
   hangar doors, MAC spine) so interiors sit believably inside the
   489.7 m exterior model.
 - Bake a navmesh from the same plan. **The graph stays authoritative**

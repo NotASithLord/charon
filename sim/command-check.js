@@ -36,7 +36,7 @@ function scriptedRun(seed) {
 }
 
 let ok = true;
-for (const seed of ['charon-1', 'charon-4']) {
+for (const seed of ['saturn-devouring-1', 'saturn-devouring-4']) {
   const a = scriptedRun(seed);
   const b = scriptedRun(seed);
   const det = a.hash === b.hash && a.arrivedTick === b.arrivedTick && a.cmdIssued === b.cmdIssued;
